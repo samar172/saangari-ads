@@ -30,13 +30,20 @@ export default function Reports() {
       <h1 className="text-2xl font-bold text-slate-800 mb-1">Reports & Analytics</h1>
       <p className="text-sm text-slate-500 mb-5">Company performance overview</p>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-4">
         <StatTile label="Occupancy" value={`${overview.occupancy}%`} accent="text-brand" sub={`${overview.siteStatus.BOOKED || 0}/${overview.siteCount} booked`} />
-        <StatTile label="Total Revenue" value={<Money value={overview.totalRevenue} />} accent="text-emerald-600" />
+        <StatTile label="Booked Value" value={<Money value={overview.bookedValue} />} accent="text-emerald-600" />
         <StatTile label="Collected" value={<Money value={overview.paidRevenue} />} accent="text-emerald-600" />
         <StatTile label="Outstanding" value={<Money value={overview.outstanding} />} accent="text-red-600" />
-        <StatTile label="Total Bookings" value={overview.totalBookings} />
+        <StatTile label="Orders" value={overview.totalOrders} sub={`${overview.totalBookings} site bookings`} />
         <StatTile label="Clients" value={overview.totalClients} sub={`${overview.repeatClients} repeat`} />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <StatTile label="Top Category" value={overview.topCategory || '—'} accent="text-brand" />
+        <StatTile label="GST Collected" value={<Money value={overview.gstCollected} />} />
+        <StatTile label="CGST + SGST" value={<Money value={overview.cgst + overview.sgst} />} sub="intra-state" />
+        <StatTile label="IGST" value={<Money value={overview.igst} />} sub="inter-state" />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-5 mb-5">
@@ -92,12 +99,12 @@ export default function Reports() {
         <div className="card p-5">
           <h2 className="font-semibold text-slate-700 mb-3">Top Clients by Revenue</h2>
           <table className="w-full text-sm">
-            <thead className="text-xs text-slate-500 uppercase"><tr><th className="text-left py-1">Client</th><th className="text-right">Bookings</th><th className="text-right">Revenue</th></tr></thead>
+            <thead className="text-xs text-slate-500 uppercase"><tr><th className="text-left py-1">Client</th><th className="text-right">Orders</th><th className="text-right">Revenue</th></tr></thead>
             <tbody>
               {topClients.map((c) => (
                 <tr key={c.id} className="border-t border-slate-100">
                   <td className="py-1.5 font-medium">{c.name}</td>
-                  <td className="py-1.5 text-right">{c.bookings}</td>
+                  <td className="py-1.5 text-right">{c.orders}</td>
                   <td className="py-1.5 text-right font-medium"><Money value={c.revenue} /></td>
                 </tr>
               ))}

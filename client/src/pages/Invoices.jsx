@@ -30,7 +30,7 @@ export default function Invoices() {
               <tr>
                 <th className="px-4 py-2 text-left">Invoice No</th>
                 <th className="px-4 py-2 text-left">Client</th>
-                <th className="px-4 py-2 text-left">Site</th>
+                <th className="px-4 py-2 text-left">Order / Sites</th>
                 <th className="px-4 py-2 text-left">Type</th>
                 <th className="px-4 py-2 text-right">Total</th>
                 <th className="px-4 py-2 text-left">Status</th>
@@ -42,8 +42,8 @@ export default function Invoices() {
                 <tr key={i.id} className="border-t border-slate-100 hover:bg-slate-50">
                   <td className="px-4 py-2 font-medium">{i.invoiceNo}</td>
                   <td className="px-4 py-2">{i.client.name}</td>
-                  <td className="px-4 py-2">{i.booking.site.code}</td>
-                  <td className="px-4 py-2">{i.taxCategory === 'GST' ? <Badge status="LIVE">GST</Badge> : <span className="text-slate-400">Non-GST</span>}</td>
+                  <td className="px-4 py-2">{i.order?.orderNo}<div className="text-xs text-slate-400">{(i.order?.items || []).map((it) => it.site.code).join(', ')}</div></td>
+                  <td className="px-4 py-2">{i.taxCategory === 'GST' ? <Badge status="LIVE">{i.interState ? 'IGST' : 'CGST+SGST'}</Badge> : <span className="text-slate-400">Non-GST</span>}</td>
                   <td className="px-4 py-2 text-right font-medium"><Money value={i.total} /></td>
                   <td className="px-4 py-2"><Badge status={i.status} /></td>
                   <td className="px-4 py-2 text-right space-x-2 whitespace-nowrap">
@@ -65,19 +65,19 @@ export default function Invoices() {
 }
 
 function GenerateModal({ onClose, onDone }) {
-  const [bookings, setBookings] = useState([]);
-  const [bookingId, setBookingId] = useState('');
+  const [orders, setOrders] = useState([]);
+  const [orderId, setOrderId] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    // Only bookings with a photo can be invoiced; surface confirmed/live ones
-    api.get('/bookings').then((r) => setBookings(r.data.filter((b) => ['CONFIRMED', 'LIVE'].includes(b.status) && b.invoices.length === 0)));
+    // Confirmed/live orders not yet invoiced
+    api.get('/orders').then((r) => setOrders(r.data.filter((o) => ['CONFIRMED', 'LIVE', 'COMPLETED'].includes(o.status) && o.invoices.length === 0)));
   }, []);
 
   async function submit() {
     setBusy(true); setErr('');
-    try { await api.post('/invoices', { bookingId: Number(bookingId) }); onDone(); }
+    try { await api.post('/invoices', { orderId: Number(orderId) }); onDone(); }
     catch (e) { setErr(e.response?.data?.error || 'Failed'); }
     finally { setBusy(false); }
   }
@@ -85,15 +85,16 @@ function GenerateModal({ onClose, onDone }) {
   return (
     <Modal open onClose={onClose} title="Generate Invoice">
       {err && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
-      <label className="label">Booking (confirmed/live, not yet invoiced)</label>
-      <select className="input" value={bookingId} onChange={(e) => setBookingId(e.target.value)}>
-        <option value="">Select booking…</option>
-        {bookings.map((b) => (
-          <option key={b.id} value={b.id}>{b.bookingNo} — {b.client.name} — {b.site.code} {b.photos.length === 0 ? '(no photo!)' : ''}</option>
-        ))}
+      <label className="label">Order (confirmed/live, not yet invoiced)</label>
+      <select className="input" value={orderId} onChange={(e) => setOrderId(e.target.value)}>
+        <option value="">Select order…</option>
+        {orders.map((o) => {
+          const photos = o.items.reduce((n, it) => n + it.photos.length, 0);
+          return <option key={o.id} value={o.id}>{o.orderNo} — {o.client.name} — {o.items.length} site(s) {photos === 0 ? '(no photo!)' : ''}</option>;
+        })}
       </select>
       <p className="text-xs text-slate-500 mt-2">Invoice generation is blocked until a monitoring photo is uploaded (proof-of-display).</p>
-      <button className="btn-primary w-full mt-4" disabled={busy || !bookingId} onClick={submit}>{busy ? 'Generating…' : 'Generate'}</button>
+      <button className="btn-primary w-full mt-4" disabled={busy || !orderId} onClick={submit}>{busy ? 'Generating…' : 'Generate'}</button>
     </Modal>
   );
 }

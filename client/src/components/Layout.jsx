@@ -1,11 +1,15 @@
+import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth, can } from '../auth';
+import api from '../api';
 
 const NAV = [
   { to: '/', label: 'Inventory', icon: '🗺️', show: () => true },
-  { to: '/bookings', label: 'Bookings', icon: '📋', show: () => true },
+  { to: '/orders', label: 'Orders', icon: '📋', show: () => true },
   { to: '/new-booking', label: 'New Booking', icon: '➕', show: (u) => can(u, 'createBooking') },
+  { to: '/reminders', label: 'Reminders', icon: '🔔', show: () => true, badge: true },
   { to: '/clients', label: 'Clients', icon: '👥', show: () => true },
+  { to: '/printing-partners', label: 'Printing Partners', icon: '🖨️', show: () => true },
   { to: '/invoices', label: 'Invoices', icon: '🧾', show: (u) => can(u, 'viewInvoices') },
   { to: '/reports', label: 'Reports', icon: '📊', show: (u) => can(u, 'viewReports') },
   { to: '/users', label: 'Users', icon: '⚙️', show: (u) => u.role === 'SUPER_ADMIN' },
@@ -19,6 +23,15 @@ const ROLE_LABEL = {
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [dueCount, setDueCount] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.get('/reminders/count').then((r) => alive && setDueCount(r.data.count)).catch(() => {});
+    load();
+    const t = setInterval(load, 60000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
 
   return (
     <div className="flex min-h-screen">
@@ -39,7 +52,11 @@ export default function Layout({ children }) {
                 }`
               }
             >
-              <span>{n.icon}</span> {n.label}
+              <span>{n.icon}</span>
+              <span className="flex-1">{n.label}</span>
+              {n.badge && dueCount > 0 && (
+                <span className="rounded-full bg-brand-accent text-brand text-[10px] font-bold px-1.5 py-0.5 min-w-[18px] text-center">{dueCount}</span>
+              )}
             </NavLink>
           ))}
         </nav>

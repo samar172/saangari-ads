@@ -44,6 +44,12 @@ router.post('/', requireRole('OPS'), upload.single('photo'), async (req, res) =>
     await prisma.site.update({ where: { id: booking.siteId }, data: { status: 'BOOKED' } });
   }
 
+  // Close the matching monitoring reminder for this order phase
+  await prisma.reminder.updateMany({
+    where: { orderId: booking.orderId, phase, done: false },
+    data: { done: true },
+  });
+
   res.status(201).json(photo);
 });
 

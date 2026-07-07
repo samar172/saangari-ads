@@ -48,7 +48,17 @@ async function main() {
     });
   }
 
-  console.log(`Seeded ${users.length} users and ${sites.length} sites.`);
+  const partners = [
+    { name: 'Bikaner Flex & Vinyl', contact: 'Rakesh', phone: '9414012345', ratePerSqft: 12, address: 'Rani Bazar, Bikaner' },
+    { name: 'Marudhar Digital Prints', contact: 'Sunil', phone: '9829067890', ratePerSqft: 14, address: 'Gangashahar Road, Bikaner' },
+    { name: 'Star Signage Works', contact: 'Imran', phone: '9660098765', ratePerSqft: 16, address: 'KEM Road, Bikaner' },
+  ];
+  for (const p of partners) {
+    const exists = await prisma.printingPartner.findFirst({ where: { name: p.name } });
+    if (!exists) await prisma.printingPartner.create({ data: p });
+  }
+
+  console.log(`Seeded ${users.length} users, ${sites.length} sites, ${partners.length} printing partners.`);
 }
 
 main()

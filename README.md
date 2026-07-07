@@ -1,9 +1,25 @@
 # Saangri Advertising — Billboard CRM
 
 Outdoor-media inventory & booking management for Saangri Advertising (Bikaner).
-Manages unipoles, gantries, kiosks and hoardings: availability grid, bookings
-(regular + loose/waitlist), Ops monitoring photos, GST/Non-GST invoicing,
-client ledger, PPTX/Excel/PDF exports, and role-based analytics.
+Manages unipoles, gantries, kiosks and hoardings: availability grid with hover
+detail cards, multi-site **orders/quotations** for one client (rental + printing
++ mounting + add-ons), regular + loose/waitlist bookings, Ops monitoring photos
+with in-app Start/Mid/End reminders, proper GST (CGST+SGST / IGST) invoicing,
+printing-partner directory, payments/ledger, PPTX/Excel/PDF exports, and
+role-based analytics.
+
+## Key concepts
+- **Order (quotation):** one client, many site line-items, plus order-level
+  printing (partner · no. of prints · rate), mounting (30-day), add-ons,
+  description and booking date. Save as a **Quotation** (downloadable PDF) or
+  **Confirm** directly. One tax invoice per order.
+- **GST:** intra-state orders split tax into CGST 9% + SGST 9%; inter-state use
+  IGST 18%. Reports break down tax collected.
+- **Monitoring reminders:** ticking Monitoring → Start / Mid / End creates in-app
+  reminders on each phase's date (bell badge + Reminders page). Uploading the
+  Ops photo for a phase auto-closes its reminder.
+- **Payments:** record part-payments per order (Payments tab); balance due and
+  client ledger update automatically.
 
 ## Stack
 - **Backend:** Node.js + Express + Prisma + PostgreSQL

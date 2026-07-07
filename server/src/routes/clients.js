@@ -16,7 +16,7 @@ router.get('/', async (req, res) => {
   const clients = await prisma.client.findMany({
     where,
     orderBy: { createdAt: 'desc' },
-    include: { _count: { select: { bookings: true } } },
+    include: { _count: { select: { orders: true } } },
   });
   res.json(clients);
 });
@@ -25,7 +25,10 @@ router.get('/:id', async (req, res) => {
   const client = await prisma.client.findUnique({
     where: { id: Number(req.params.id) },
     include: {
-      bookings: { orderBy: { createdAt: 'desc' }, include: { site: true, invoices: true } },
+      orders: {
+        orderBy: { createdAt: 'desc' },
+        include: { items: { include: { site: { select: { code: true, location: true, type: true } } } }, invoices: true, payments: true },
+      },
       ledger: { orderBy: { date: 'desc' }, include: { invoice: { select: { invoiceNo: true } } } },
     },
   });

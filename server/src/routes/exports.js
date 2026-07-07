@@ -15,7 +15,11 @@ router.get('/inventory/excel', requireRole('MANAGER', 'FINANCE'), async (req, re
     where: { active: true, ...(type ? { type } : {}) },
     orderBy: { srNo: 'asc' },
     include: {
-      bookings: { where: { status: { in: ['CONFIRMED', 'LIVE'] } }, include: { client: true }, orderBy: { startDate: 'desc' }, take: 1 },
+      bookings: {
+        where: { status: { in: ['CONFIRMED', 'LIVE'] } },
+        include: { order: { include: { client: true } } },
+        orderBy: { startDate: 'desc' }, take: 1,
+      },
     },
   });
 
@@ -32,14 +36,13 @@ router.get('/inventory/excel', requireRole('MANAGER', 'FINANCE'), async (req, re
     { header: 'Status', key: 'status', width: 12 },
     { header: 'Current Client', key: 'client', width: 22 },
   ];
-  ws.getRow(1).font = { bold: true };
   ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
   ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
   for (const s of sites) {
     ws.addRow({
       code: s.code, zone: s.zone, city: s.city, location: s.location, type: s.type,
       size: `${s.width}x${s.height}`, rate: s.monthlyRate, status: s.status,
-      client: s.bookings[0]?.client?.name || '',
+      client: s.bookings[0]?.order?.client?.name || '',
     });
   }
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -48,15 +51,17 @@ router.get('/inventory/excel', requireRole('MANAGER', 'FINANCE'), async (req, re
   res.end();
 });
 
-// PPTX client deck: one slide per booking with site photos + details
+// PPTX client deck: one slide per booked site with photos + details
 router.get('/client/:clientId/pptx', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   const client = await prisma.client.findUnique({
     where: { id: Number(req.params.clientId) },
     include: {
-      bookings: { include: { site: true, photos: true }, orderBy: { createdAt: 'desc' } },
+      orders: { include: { items: { include: { site: true, photos: true } } }, orderBy: { createdAt: 'desc' } },
     },
   });
   if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const lines = client.orders.flatMap((o) => o.items.map((it) => ({ ...it, order: o })));
 
   const pptx = new PptxGenJS();
   pptx.defineLayout({ name: 'WIDE', width: 13.33, height: 7.5 });
@@ -66,10 +71,10 @@ router.get('/client/:clientId/pptx', requireRole('MANAGER', 'FINANCE'), async (r
   cover.background = { color: '1E3A8A' };
   cover.addText('SAANGRI ADVERTISING', { x: 0.5, y: 2.4, w: 12.3, h: 1, fontSize: 40, bold: true, color: 'FFFFFF', align: 'center' });
   cover.addText(`Campaign Proposal — ${client.name}`, { x: 0.5, y: 3.5, w: 12.3, h: 0.7, fontSize: 22, color: 'F59E0B', align: 'center' });
-  cover.addText(`${client.bookings.length} site(s) · Bikaner`, { x: 0.5, y: 4.3, w: 12.3, h: 0.5, fontSize: 14, color: 'FFFFFF', align: 'center' });
+  cover.addText(`${lines.length} site(s) · Bikaner`, { x: 0.5, y: 4.3, w: 12.3, h: 0.5, fontSize: 14, color: 'FFFFFF', align: 'center' });
 
-  for (const bk of client.bookings) {
-    const s = bk.site;
+  for (const it of lines) {
+    const s = it.site;
     const slide = pptx.addSlide();
     slide.addText(`${s.code} — ${s.type}`, { x: 0.4, y: 0.3, w: 12.5, h: 0.6, fontSize: 24, bold: true, color: '1E3A8A' });
     slide.addText(s.location, { x: 0.4, y: 0.95, w: 12.5, h: 0.5, fontSize: 13, color: '555555' });
@@ -77,8 +82,9 @@ router.get('/client/:clientId/pptx', requireRole('MANAGER', 'FINANCE'), async (r
     const details = [
       ['Zone', s.zone], ['Size', `${s.width} x ${s.height} ft (${s.sqft} sq.ft)`],
       ['Monthly Rate', `Rs ${s.monthlyRate.toLocaleString('en-IN')}`],
-      ['Period', `${new Date(bk.startDate).toLocaleDateString('en-IN')} - ${new Date(bk.endDate).toLocaleDateString('en-IN')}`],
-      ['Days', String(bk.days)], ['Total', `Rs ${bk.totalAmount.toLocaleString('en-IN')}`],
+      ['Period', `${new Date(it.startDate).toLocaleDateString('en-IN')} - ${new Date(it.endDate).toLocaleDateString('en-IN')}`],
+      ['Days', String(it.days)], ['Line Total', `Rs ${it.subtotal.toLocaleString('en-IN')}`],
+      ['Order', it.order.orderNo],
       ['Coordinates', s.latitude ? `${s.latitude}, ${s.longitude}` : 'N/A'],
     ];
     slide.addTable(
@@ -86,15 +92,14 @@ router.get('/client/:clientId/pptx', requireRole('MANAGER', 'FINANCE'), async (r
         { text: k, options: { bold: true, fill: 'EEF2FF', color: '1E3A8A' } },
         { text: v, options: {} },
       ]),
-      { x: 0.4, y: 1.6, w: 5.5, colW: [2, 3.5], fontSize: 12, border: { pt: 0.5, color: 'DDDDDD' }, rowH: 0.45 }
+      { x: 0.4, y: 1.6, w: 5.5, colW: [2, 3.5], fontSize: 12, border: { pt: 0.5, color: 'DDDDDD' }, rowH: 0.42 }
     );
 
-    // Attach up to 2 monitoring photos if the files exist
-    const photos = bk.photos.slice(0, 2);
+    const photos = it.photos.slice(0, 2);
     photos.forEach((p, i) => {
       const abs = path.join(uploadDir, path.basename(p.filePath));
       if (fs.existsSync(abs)) {
-        slide.addImage({ path: abs, x: 6.2 + (i % 1) * 0, y: 1.6 + i * 2.7, w: 6.5, h: 2.5 });
+        slide.addImage({ path: abs, x: 6.2, y: 1.6 + i * 2.7, w: 6.5, h: 2.5 });
         slide.addText(`${p.phase} · ${new Date(p.takenAt).toLocaleDateString('en-IN')}`, { x: 6.2, y: 1.6 + i * 2.7 + 2.5, w: 6.5, h: 0.3, fontSize: 9, color: '888888' });
       } else {
         slide.addText('[ Site photo pending ]', { x: 6.2, y: 1.6 + i * 2.7, w: 6.5, h: 2.5, fill: 'F3F4F6', align: 'center', valign: 'middle', color: 'AAAAAA' });

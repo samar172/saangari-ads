@@ -34,6 +34,7 @@ enum BookingType {
   LOOSE
 }
 
+// Per-site line status inside an order
 enum BookingStatus {
   TENTATIVE
   CONFIRMED
@@ -41,6 +42,15 @@ enum BookingStatus {
   COMPLETED
   CANCELLED
   WAITLIST
+}
+
+// Order / quotation lifecycle
+enum OrderStatus {
+  QUOTATION
+  CONFIRMED
+  LIVE
+  COMPLETED
+  CANCELLED
 }
 
 enum TaxCategory {
@@ -66,6 +76,14 @@ enum LedgerType {
   CREDIT
 }
 
+enum PaymentMode {
+  CASH
+  UPI
+  BANK
+  CHEQUE
+  CARD
+}
+
 model User {
   id        Int      @id @default(autoincrement())
   name      String
@@ -76,9 +94,10 @@ model User {
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  bookings  Booking[]         @relation("BookedBy")
-  photos    MonitoringPhoto[] @relation("UploadedBy")
-  invoices  Invoice[]         @relation("GeneratedBy")
+  orders   Order[]           @relation("OrderBy")
+  photos   MonitoringPhoto[] @relation("UploadedBy")
+  invoices Invoice[]         @relation("GeneratedBy")
+  payments Payment[]         @relation("PaymentBy")
 }
 
 model Client {
@@ -89,12 +108,14 @@ model Client {
   company     String?
   gstNumber   String?
   taxCategory TaxCategory @default(NON_GST)
+  state       String?     @default("Rajasthan")
   address     String?
   createdAt   DateTime    @default(now())
 
-  bookings Booking[]
+  orders   Order[]
   invoices Invoice[]
   ledger   LedgerEntry[]
+  payments Payment[]
 }
 
 model Site {
@@ -110,6 +131,7 @@ model Site {
   qty          Int        @default(1)
   sqft         Float      @default(0)
   type         SiteType
+  imageUrl     String?
   printingCost Float      @default(0)
   mountingCost Float      @default(0)
   monthlyRate  Float      @default(0)
@@ -123,34 +145,107 @@ model Site {
   bookings Booking[]
 }
 
-model Booking {
-  id              Int           @id @default(autoincrement())
-  bookingNo       String        @unique
-  site            Site          @relation(fields: [siteId], references: [id])
-  siteId          Int
-  client          Client        @relation(fields: [clientId], references: [id])
-  clientId        Int
-  createdBy       User          @relation("BookedBy", fields: [createdById], references: [id])
-  createdById     Int
-  type            BookingType   @default(REGULAR)
-  status          BookingStatus @default(TENTATIVE)
-  startDate       DateTime
-  endDate         DateTime
-  days            Int
-  dayRate         Float
-  subtotal        Float
-  discountPct     Float         @default(0)
-  discountRemarks String?
-  gstApplicable   Boolean       @default(false)
-  gstAmount       Float         @default(0)
-  totalAmount     Float
-  notes           String?
-  holdExpiresAt   DateTime?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+model PrintingPartner {
+  id        Int      @id @default(autoincrement())
+  name      String
+  contact   String?
+  phone     String?
+  email     String?
+  address   String?
+  ratePerSqft Float  @default(0)
+  active    Boolean  @default(true)
+  notes     String?
+  createdAt DateTime @default(now())
 
-  photos   MonitoringPhoto[]
-  invoices Invoice[]
+  orders Order[]
+}
+
+// Order = quotation / booking order header for a single client.
+// Holds commercial terms shared across many site line-items.
+model Order {
+  id          Int         @id @default(autoincrement())
+  orderNo     String      @unique
+  client      Client      @relation(fields: [clientId], references: [id])
+  clientId    Int
+  createdBy   User        @relation("OrderBy", fields: [createdById], references: [id])
+  createdById Int
+  status      OrderStatus @default(QUOTATION)
+
+  bookingDate DateTime    @default(now())
+  description String?
+
+  // Printing
+  printingPartner   PrintingPartner? @relation(fields: [printingPartnerId], references: [id])
+  printingPartnerId Int?
+  noOfPrints        Int              @default(0)
+  printRate         Float            @default(0)
+  printingTotal     Float            @default(0)
+
+  // Mounting (30-day mounting cycle)
+  mountingCost Float @default(0)
+
+  // Monitoring plan → drives reminders
+  monitoring   Boolean @default(false)
+  monitorStart Boolean @default(false)
+  monitorMid   Boolean @default(false)
+  monitorEnd   Boolean @default(false)
+
+  // Tax
+  taxCategory   TaxCategory @default(NON_GST)
+  interState    Boolean     @default(false)
+  placeOfSupply String?     @default("Rajasthan")
+
+  // Commercials (computed + stored)
+  discountPct     Float  @default(0)
+  discountRemarks String?
+  rentalSubtotal  Float  @default(0)
+  addOnTotal      Float  @default(0)
+  discountAmount  Float  @default(0)
+  taxableAmount   Float  @default(0)
+  cgst            Float  @default(0)
+  sgst            Float  @default(0)
+  igst            Float  @default(0)
+  gstAmount       Float  @default(0)
+  grandTotal      Float  @default(0)
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items     Booking[]
+  addOns    OrderAddOn[]
+  payments  Payment[]
+  reminders Reminder[]
+  invoices  Invoice[]
+}
+
+model OrderAddOn {
+  id      Int    @id @default(autoincrement())
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId Int
+  label   String
+  amount  Float  @default(0)
+}
+
+// A single site line inside an order
+model Booking {
+  id        Int           @id @default(autoincrement())
+  bookingNo String        @unique
+  order     Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId   Int
+  site      Site          @relation(fields: [siteId], references: [id])
+  siteId    Int
+  type      BookingType   @default(REGULAR)
+  status    BookingStatus @default(TENTATIVE)
+  startDate DateTime
+  endDate   DateTime
+  days      Int
+  dayRate   Float
+  subtotal  Float
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  photos MonitoringPhoto[]
 }
 
 model MonitoringPhoto {
@@ -167,16 +262,46 @@ model MonitoringPhoto {
   remarks      String?
 }
 
+// In-app monitoring reminder for an order phase (START / MID / END)
+model Reminder {
+  id        Int        @id @default(autoincrement())
+  order     Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId   Int
+  phase     PhotoPhase
+  dueDate   DateTime
+  done      Boolean    @default(false)
+  createdAt DateTime   @default(now())
+}
+
+model Payment {
+  id           Int         @id @default(autoincrement())
+  order        Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId      Int
+  client       Client      @relation(fields: [clientId], references: [id])
+  clientId     Int
+  amount       Float
+  mode         PaymentMode @default(CASH)
+  reference    String?
+  notes        String?
+  receivedAt   DateTime    @default(now())
+  recordedBy   User        @relation("PaymentBy", fields: [recordedById], references: [id])
+  recordedById Int
+}
+
 model Invoice {
   id            Int           @id @default(autoincrement())
   invoiceNo     String        @unique
-  booking       Booking       @relation(fields: [bookingId], references: [id])
-  bookingId     Int
+  order         Order         @relation(fields: [orderId], references: [id])
+  orderId       Int
   client        Client        @relation(fields: [clientId], references: [id])
   clientId      Int
   taxCategory   TaxCategory
+  interState    Boolean       @default(false)
   amount        Float
   gstRate       Float         @default(18)
+  cgst          Float         @default(0)
+  sgst          Float         @default(0)
+  igst          Float         @default(0)
   gstAmount     Float         @default(0)
   total         Float
   status        InvoiceStatus @default(DRAFT)

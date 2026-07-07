@@ -1,6 +1,38 @@
 const router = require('express').Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
+
+const uploadDir = path.join(__dirname, '..', '..', 'uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.jpg';
+    cb(null, `site-${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`);
+  },
+});
+const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
+
+// Whitelist + type-coerce editable site fields (prevents bad writes / string->Float errors)
+const NUM = ['srNo', 'qty'];
+const FLOAT = ['width', 'height', 'sqft', 'printingCost', 'mountingCost', 'monthlyRate', 'latitude', 'longitude'];
+const STR = ['zone', 'city', 'location', 'light', 'type', 'status', 'code', 'imageUrl'];
+const BOOL = ['gstOnRate', 'active'];
+function cleanSiteData(body = {}) {
+  const data = {};
+  for (const k of NUM) if (body[k] !== undefined && body[k] !== '') data[k] = parseInt(body[k], 10);
+  for (const k of FLOAT) if (body[k] !== undefined && body[k] !== '') data[k] = Number(body[k]);
+  for (const k of STR) if (body[k] !== undefined) data[k] = body[k];
+  for (const k of BOOL) if (body[k] !== undefined) data[k] = !!body[k];
+  // keep sqft in sync when width/height provided but sqft omitted
+  if ((body.width !== undefined || body.height !== undefined) && body.sqft === undefined && data.width != null && data.height != null) {
+    data.sqft = Math.round(data.width * data.height);
+  }
+  return data;
+}
 
 // Inventory dashboard: all sites with current/upcoming booking info
 router.get('/', async (req, res) => {
@@ -17,7 +49,7 @@ router.get('/', async (req, res) => {
       bookings: {
         where: { status: { in: ['TENTATIVE', 'CONFIRMED', 'LIVE', 'WAITLIST'] } },
         orderBy: { startDate: 'asc' },
-        include: { client: { select: { id: true, name: true, phone: true } } },
+        include: { order: { select: { id: true, orderNo: true, client: { select: { id: true, name: true, phone: true } } } } },
       },
     },
   });
@@ -47,7 +79,7 @@ router.get('/:id', async (req, res) => {
       bookings: {
         orderBy: { startDate: 'desc' },
         include: {
-          client: { select: { id: true, name: true, phone: true } },
+          order: { select: { id: true, orderNo: true, status: true, client: { select: { id: true, name: true, phone: true } } } },
           photos: true,
         },
       },
@@ -57,13 +89,34 @@ router.get('/:id', async (req, res) => {
   res.json(site);
 });
 
-router.post('/', requireRole(), async (req, res) => {
-  const site = await prisma.site.create({ data: req.body });
-  res.status(201).json(site);
+// Create a new site (Manager / Super Admin)
+router.post('/', requireRole('MANAGER'), async (req, res) => {
+  const data = cleanSiteData(req.body);
+  if (!data.code || !data.zone || !data.city || !data.location || !data.type)
+    return res.status(400).json({ error: 'code, zone, city, location and type are required' });
+  try {
+    const site = await prisma.site.create({ data });
+    res.status(201).json(site);
+  } catch (e) {
+    if (e.code === 'P2002') return res.status(409).json({ error: 'A site with this code already exists' });
+    throw e;
+  }
 });
 
+// Edit site data (Manager / Super Admin)
 router.patch('/:id', requireRole('MANAGER'), async (req, res) => {
-  const site = await prisma.site.update({ where: { id: Number(req.params.id) }, data: req.body });
+  const data = cleanSiteData(req.body);
+  const site = await prisma.site.update({ where: { id: Number(req.params.id) }, data });
+  res.json(site);
+});
+
+// Upload / replace the site's display image (Manager / Super Admin)
+router.post('/:id/image', requireRole('MANAGER'), upload.single('image'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Image file is required' });
+  const site = await prisma.site.update({
+    where: { id: Number(req.params.id) },
+    data: { imageUrl: `/uploads/${req.file.filename}` },
+  });
   res.json(site);
 });
 

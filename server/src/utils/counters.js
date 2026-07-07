@@ -1,6 +1,6 @@
 const prisma = require('../db');
 
-// Atomic per-key sequence, used for booking and invoice numbering.
+// Atomic per-key sequence, used for order/booking/invoice numbering.
 async function nextNumber(key) {
   const row = await prisma.counter.upsert({
     where: { key },
@@ -8,6 +8,11 @@ async function nextNumber(key) {
     create: { key, value: 1 },
   });
   return row.value;
+}
+
+async function nextOrderNo() {
+  const n = await nextNumber('ORDER');
+  return `SO-${String(n).padStart(5, '0')}`;
 }
 
 async function nextBookingNo() {
@@ -29,4 +34,4 @@ async function nextInvoiceNo(taxCategory) {
   return `${prefix}/${fy}/${String(n).padStart(4, '0')}`;
 }
 
-module.exports = { nextBookingNo, nextInvoiceNo, financialYear };
+module.exports = { nextOrderNo, nextBookingNo, nextInvoiceNo, financialYear };

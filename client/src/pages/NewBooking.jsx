@@ -1,36 +1,57 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import api from '../api';
 import { Money } from '../components/ui';
+
+const emptyClient = { name: '', phone: '', email: '', company: '', taxCategory: 'NON_GST', gstNumber: '', state: 'Rajasthan' };
 
 export default function NewBooking() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const [sites, setSites] = useState([]);
   const [clients, setClients] = useState([]);
+  const [partners, setPartners] = useState([]);
   const [quote, setQuote] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [newClient, setNewClient] = useState(false);
 
+  const defStart = dayjs().format('YYYY-MM-DD');
+  const defEnd = dayjs().add(29, 'day').format('YYYY-MM-DD'); // 30-day mounting cycle
+
   const [form, setForm] = useState({
     bookingType: 'REGULAR',
-    siteId: params.get('siteId') || '',
     clientId: '',
-    startDate: dayjs().format('YYYY-MM-DD'),
-    endDate: dayjs().add(29, 'day').format('YYYY-MM-DD'),
+    bookingDate: dayjs().format('YYYY-MM-DD'),
+    description: '',
+    defaultStart: defStart,
+    defaultEnd: defEnd,
+    printingPartnerId: '',
+    noOfPrints: 0,
+    printRate: 0,
+    mountingCost: 0,
+    monitoring: true,
+    monitorStart: true,
+    monitorMid: true,
+    monitorEnd: true,
+    taxCategory: 'NON_GST',
+    interState: false,
+    placeOfSupply: 'Rajasthan',
     discountPct: 0,
     discountRemarks: '',
-    gstApplicable: false,
-    dayRateOverride: '',
     notes: '',
   });
-  const [clientForm, setClientForm] = useState({ name: '', phone: '', email: '', company: '', taxCategory: 'NON_GST', gstNumber: '' });
+  const [lines, setLines] = useState([]); // { siteId, startDate, endDate, dayRateOverride }
+  const [addOns, setAddOns] = useState([]); // { label, amount }
+  const [clientForm, setClientForm] = useState(emptyClient);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  useEffect(() => { api.get('/clients').then((r) => setClients(r.data)); }, []);
+  useEffect(() => {
+    api.get('/clients').then((r) => setClients(r.data));
+    api.get('/printing-partners').then((r) => setPartners(r.data.filter((p) => p.active)));
+  }, []);
 
   // Regular = only available sites; Loose = all sites (waitlist/override)
   useEffect(() => {
@@ -38,23 +59,51 @@ export default function NewBooking() {
     api.get('/sites', { params: p }).then((r) => setSites(r.data));
   }, [form.bookingType]);
 
-  const selectedSite = useMemo(() => sites.find((s) => s.id === Number(form.siteId)), [sites, form.siteId]);
-
-  // Live quote whenever pricing inputs change
+  // Seed a first line from ?siteId=
   useEffect(() => {
-    if (!form.siteId || !form.startDate || !form.endDate) { setQuote(null); return; }
+    const sid = params.get('siteId');
+    if (sid) setLines([{ siteId: Number(sid), startDate: defStart, endDate: defEnd, dayRateOverride: '' }]);
+  }, []); // eslint-disable-line
+
+  // When a client is chosen, default their tax category
+  useEffect(() => {
+    const c = clients.find((x) => x.id === Number(form.clientId));
+    if (c) setForm((f) => ({ ...f, taxCategory: c.taxCategory, interState: (c.state && c.state !== 'Rajasthan') || false }));
+  }, [form.clientId]); // eslint-disable-line
+
+  const siteById = useMemo(() => Object.fromEntries(sites.map((s) => [s.id, s])), [sites]);
+  const available = sites.filter((s) => !lines.some((l) => l.siteId === s.id));
+
+  function addSite(id) {
+    if (!id) return;
+    setLines((ls) => [...ls, { siteId: Number(id), startDate: form.defaultStart, endDate: form.defaultEnd, dayRateOverride: '' }]);
+  }
+  const updateLine = (i, k, v) => setLines((ls) => ls.map((l, idx) => (idx === i ? { ...l, [k]: v } : l)));
+  const removeLine = (i) => setLines((ls) => ls.filter((_, idx) => idx !== i));
+
+  const updateAddOn = (i, k, v) => setAddOns((a) => a.map((x, idx) => (idx === i ? { ...x, [k]: v } : x)));
+
+  // Live order quote
+  useEffect(() => {
+    const items = lines.filter((l) => l.siteId && l.startDate && l.endDate)
+      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, dayRateOverride: l.dayRateOverride || undefined }));
+    if (items.length === 0) { setQuote(null); return; }
     const t = setTimeout(() => {
-      api.post('/bookings/quote', {
-        siteId: Number(form.siteId), startDate: form.startDate, endDate: form.endDate,
-        discountPct: Number(form.discountPct) || 0, gstApplicable: form.gstApplicable,
-        dayRateOverride: form.dayRateOverride ? Number(form.dayRateOverride) : undefined,
+      api.post('/orders/quote', {
+        items,
+        addOns: addOns.filter((a) => a.label),
+        noOfPrints: Number(form.noOfPrints) || 0,
+        printRate: Number(form.printRate) || 0,
+        mountingCost: Number(form.mountingCost) || 0,
+        discountPct: Number(form.discountPct) || 0,
+        taxCategory: form.taxCategory,
+        interState: form.interState,
       }).then((r) => setQuote(r.data)).catch(() => setQuote(null));
     }, 250);
     return () => clearTimeout(t);
-  }, [form.siteId, form.startDate, form.endDate, form.discountPct, form.gstApplicable, form.dayRateOverride]);
+  }, [lines, addOns, form.noOfPrints, form.printRate, form.mountingCost, form.discountPct, form.taxCategory, form.interState]);
 
-  async function submit(e) {
-    e.preventDefault();
+  async function submit(status) {
     setError(''); setBusy(true);
     try {
       let clientId = form.clientId;
@@ -63,17 +112,34 @@ export default function NewBooking() {
         clientId = data.id;
       }
       if (!clientId) throw { response: { data: { error: 'Select or create a client' } } };
-      const { data } = await api.post('/bookings', {
-        siteId: Number(form.siteId), clientId: Number(clientId), type: form.bookingType,
-        startDate: form.startDate, endDate: form.endDate,
-        discountPct: Number(form.discountPct) || 0, discountRemarks: form.discountRemarks,
-        gstApplicable: form.gstApplicable,
-        dayRateOverride: form.dayRateOverride ? Number(form.dayRateOverride) : undefined,
+      if (lines.length === 0) throw { response: { data: { error: 'Add at least one site' } } };
+
+      const { data } = await api.post('/orders', {
+        clientId: Number(clientId),
+        type: form.bookingType,
+        status,
+        bookingDate: form.bookingDate,
+        description: form.description,
+        printingPartnerId: form.printingPartnerId ? Number(form.printingPartnerId) : undefined,
+        noOfPrints: Number(form.noOfPrints) || 0,
+        printRate: Number(form.printRate) || 0,
+        mountingCost: Number(form.mountingCost) || 0,
+        monitoring: form.monitoring,
+        monitorStart: form.monitoring && form.monitorStart,
+        monitorMid: form.monitoring && form.monitorMid,
+        monitorEnd: form.monitoring && form.monitorEnd,
+        taxCategory: form.taxCategory,
+        interState: form.interState,
+        placeOfSupply: form.placeOfSupply,
+        discountPct: Number(form.discountPct) || 0,
+        discountRemarks: form.discountRemarks,
+        addOns: addOns.filter((a) => a.label),
         notes: form.notes,
+        items: lines.map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, dayRateOverride: l.dayRateOverride || undefined })),
       });
-      navigate(`/bookings?highlight=${data.id}`);
+      navigate(`/orders?highlight=${data.id}`);
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to create booking');
+      setError(err.response?.data?.error || 'Failed to save order');
     } finally {
       setBusy(false);
     }
@@ -81,18 +147,19 @@ export default function NewBooking() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-slate-800 mb-1">New Booking</h1>
-      <p className="text-sm text-slate-500 mb-5">Price auto-calculates as you fill the form</p>
+      <h1 className="text-2xl font-bold text-slate-800 mb-1">New Booking / Quotation</h1>
+      <p className="text-sm text-slate-500 mb-5">Add multiple sites for one client — price updates live</p>
 
       {error && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</div>}
 
-      <form onSubmit={submit} className="grid lg:grid-cols-3 gap-5">
+      <div className="grid lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-4">
+          {/* Order basics */}
           <div className="card p-5 space-y-4">
             <div>
               <label className="label">Booking Type</label>
               <div className="flex gap-2">
-                {[['REGULAR', 'Regular', 'Available sites only'], ['LOOSE', 'Loose', 'All sites — waitlist/override']].map(([v, l, d]) => (
+                {[['REGULAR', 'Regular', 'Available sites only'], ['LOOSE', 'Loose', 'Any site — waitlist/override (1–2 day displays)']].map(([v, l, d]) => (
                   <button type="button" key={v} onClick={() => set('bookingType', v)}
                     className={`flex-1 rounded-lg border p-3 text-left transition ${form.bookingType === v ? 'border-brand bg-brand/5' : 'border-slate-200'}`}>
                     <div className="font-medium text-sm">{l}</div>
@@ -101,46 +168,158 @@ export default function NewBooking() {
                 ))}
               </div>
             </div>
-
+            <div className="grid sm:grid-cols-3 gap-4">
+              <div>
+                <label className="label">Booking Date</label>
+                <input type="date" className="input" value={form.bookingDate} onChange={(e) => set('bookingDate', e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Default Start</label>
+                <input type="date" className="input" value={form.defaultStart} onChange={(e) => set('defaultStart', e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Default End <span className="text-slate-400">(30d)</span></label>
+                <input type="date" className="input" value={form.defaultEnd} onChange={(e) => set('defaultEnd', e.target.value)} />
+              </div>
+            </div>
             <div>
-              <label className="label">Site</label>
-              <select className="input" value={form.siteId} onChange={(e) => set('siteId', e.target.value)} required>
-                <option value="">Select site…</option>
-                {sites.map((s) => (
-                  <option key={s.id} value={s.id}>{s.code} — {s.location} ({s.status})</option>
+              <label className="label">Description</label>
+              <input className="input" placeholder="e.g. Summer campaign — Diwali promo" value={form.description} onChange={(e) => set('description', e.target.value)} />
+            </div>
+          </div>
+
+          {/* Sites */}
+          <div className="card p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="label mb-0">Sites ({lines.length})</label>
+              <AddSitePicker sites={available} onPick={addSite} />
+            </div>
+            {lines.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-400">Add one or more sites to this order</div>
+            ) : (
+              <div className="space-y-2">
+                {lines.map((l, i) => {
+                  const s = siteById[l.siteId];
+                  const days = dayjs(l.endDate).diff(dayjs(l.startDate), 'day') + 1;
+                  return (
+                    <div key={i} className="rounded-lg border border-slate-200 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-sm text-slate-800">{s?.code} <span className="font-normal text-slate-400">· {s?.type}</span></div>
+                          <div className="text-xs text-slate-500 truncate">{s?.location}</div>
+                        </div>
+                        <button type="button" onClick={() => removeLine(i)} className="text-slate-400 hover:text-red-600 text-lg leading-none">&times;</button>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+                        <div><div className="text-[10px] text-slate-400 mb-0.5">Start</div><input type="date" className="input py-1 text-xs" value={l.startDate} onChange={(e) => updateLine(i, 'startDate', e.target.value)} /></div>
+                        <div><div className="text-[10px] text-slate-400 mb-0.5">End</div><input type="date" className="input py-1 text-xs" value={l.endDate} onChange={(e) => updateLine(i, 'endDate', e.target.value)} /></div>
+                        <div><div className="text-[10px] text-slate-400 mb-0.5">Day Rate</div><input type="number" className="input py-1 text-xs" placeholder={s ? String(Math.round(s.monthlyRate / 30)) : ''} value={l.dayRateOverride} onChange={(e) => updateLine(i, 'dayRateOverride', e.target.value)} /></div>
+                        <div><div className="text-[10px] text-slate-400 mb-0.5">Days</div><div className="input py-1 text-xs bg-slate-50">{days > 0 ? days : '—'}</div></div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Printing + mounting */}
+          <div className="card p-5 space-y-4">
+            <div className="text-sm font-semibold text-slate-700">Printing &amp; Mounting</div>
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div>
+                <label className="label">Printing Partner</label>
+                <select className="input" value={form.printingPartnerId} onChange={(e) => set('printingPartnerId', e.target.value)}>
+                  <option value="">None</option>
+                  {partners.map((p) => <option key={p.id} value={p.id}>{p.name}{p.ratePerSqft ? ` (₹${p.ratePerSqft}/sqft)` : ''}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">Mounting Cost (30 days)</label>
+                <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
+              </div>
+              <div>
+                <label className="label">No. of Prints</label>
+                <input type="number" min="0" className="input" value={form.noOfPrints} onChange={(e) => set('noOfPrints', e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Rate per Print</label>
+                <input type="number" min="0" className="input" value={form.printRate} onChange={(e) => set('printRate', e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          {/* Add-ons */}
+          <div className="card p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold text-slate-700">Add-ons (extra)</div>
+              <button type="button" className="text-xs text-brand-light font-medium" onClick={() => setAddOns((a) => [...a, { label: '', amount: '' }])}>+ Add-on</button>
+            </div>
+            {addOns.length === 0 ? <div className="text-xs text-slate-400">No add-ons. e.g. illumination, permits, transport.</div> : (
+              <div className="space-y-2">
+                {addOns.map((a, i) => (
+                  <div key={i} className="flex gap-2">
+                    <input className="input" placeholder="Label" value={a.label} onChange={(e) => updateAddOn(i, 'label', e.target.value)} />
+                    <input type="number" className="input w-36" placeholder="Amount" value={a.amount} onChange={(e) => updateAddOn(i, 'amount', e.target.value)} />
+                    <button type="button" onClick={() => setAddOns((x) => x.filter((_, idx) => idx !== i))} className="text-slate-400 hover:text-red-600 px-1">&times;</button>
+                  </div>
                 ))}
-              </select>
-            </div>
+              </div>
+            )}
+          </div>
 
+          {/* Monitoring */}
+          <div className="card p-5 space-y-3">
+            <div className="text-sm font-semibold text-slate-700">Monitoring</div>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => set('monitoring', true)}
+                className={`flex-1 rounded-lg border p-2.5 text-sm font-medium transition ${form.monitoring ? 'border-brand bg-brand/5 text-brand' : 'border-slate-200 text-slate-600'}`}>✓ Monitoring</button>
+              <button type="button" onClick={() => set('monitoring', false)}
+                className={`flex-1 rounded-lg border p-2.5 text-sm font-medium transition ${!form.monitoring ? 'border-brand bg-brand/5 text-brand' : 'border-slate-200 text-slate-600'}`}>Non-monitoring</button>
+            </div>
+            {form.monitoring && (
+              <div>
+                <div className="text-xs text-slate-500 mb-2">Reminders will appear on each selected phase's date.</div>
+                <div className="flex flex-wrap gap-4">
+                  {[['monitorStart', 'Start'], ['monitorMid', 'Mid'], ['monitorEnd', 'End']].map(([k, l]) => (
+                    <label key={k} className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={form[k]} onChange={(e) => set(k, e.target.checked)} /> {l} date
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Tax */}
+          <div className="card p-5 space-y-4">
+            <div className="text-sm font-semibold text-slate-700">Tax &amp; Discount</div>
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
-                <label className="label">Start Date</label>
-                <input type="date" className="input" value={form.startDate} onChange={(e) => set('startDate', e.target.value)} required />
+                <label className="label">Tax Category</label>
+                <select className="input" value={form.taxCategory} onChange={(e) => set('taxCategory', e.target.value)}>
+                  <option value="NON_GST">Non-GST</option>
+                  <option value="GST">GST (18%)</option>
+                </select>
               </div>
-              <div>
-                <label className="label">End Date</label>
-                <input type="date" className="input" value={form.endDate} onChange={(e) => set('endDate', e.target.value)} required />
-              </div>
-            </div>
-
-            <div className="grid sm:grid-cols-2 gap-4">
+              {form.taxCategory === 'GST' && (
+                <div>
+                  <label className="label">Supply Type</label>
+                  <select className="input" value={form.interState ? 'inter' : 'intra'} onChange={(e) => set('interState', e.target.value === 'inter')}>
+                    <option value="intra">Intra-state (CGST + SGST)</option>
+                    <option value="inter">Inter-state (IGST)</option>
+                  </select>
+                </div>
+              )}
               <div>
                 <label className="label">Discount %</label>
                 <input type="number" min="0" max="100" className="input" value={form.discountPct} onChange={(e) => set('discountPct', e.target.value)} />
               </div>
               <div>
-                <label className="label">Day Rate Override (optional)</label>
-                <input type="number" className="input" placeholder={selectedSite ? `default ${Math.round(selectedSite.monthlyRate / 30)}` : ''} value={form.dayRateOverride} onChange={(e) => set('dayRateOverride', e.target.value)} />
+                <label className="label">Discount Remarks</label>
+                <input className="input" value={form.discountRemarks} onChange={(e) => set('discountRemarks', e.target.value)} />
               </div>
             </div>
-            <div>
-              <label className="label">Discount Remarks</label>
-              <input className="input" value={form.discountRemarks} onChange={(e) => set('discountRemarks', e.target.value)} />
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={form.gstApplicable} onChange={(e) => set('gstApplicable', e.target.checked)} />
-              Apply GST (18%) — sets GST invoice sequence
-            </label>
           </div>
 
           {/* Client */}
@@ -175,32 +354,95 @@ export default function NewBooking() {
         {/* Price summary */}
         <div className="lg:col-span-1">
           <div className="card p-5 sticky top-6">
-            <div className="text-sm font-semibold text-slate-700 mb-3">Price Summary</div>
+            <div className="text-sm font-semibold text-slate-700 mb-3">Order Summary</div>
             {!quote ? (
-              <div className="text-sm text-slate-400 py-6 text-center">Select a site and dates</div>
+              <div className="text-sm text-slate-400 py-6 text-center">Add a site and dates</div>
             ) : (
               <dl className="space-y-2 text-sm">
-                <Line k={`Day Rate`} v={<Money value={quote.dayRate} />} />
-                <Line k="No. of Days" v={quote.days} />
-                <Line k="Subtotal" v={<Money value={quote.subtotal} />} />
-                {quote.discount > 0 && <Line k={`Discount (${form.discountPct}%)`} v={<span className="text-red-600">−<Money value={quote.discount} /></span>} />}
-                {quote.gstAmount > 0 && <Line k="GST 18%" v={<Money value={quote.gstAmount} />} />}
+                <Line k={`Rental (${lines.length} site${lines.length !== 1 ? 's' : ''})`} v={<Money value={quote.rentalSubtotal} />} />
+                {quote.printingTotal > 0 && <Line k={`Printing (${form.noOfPrints})`} v={<Money value={quote.printingTotal} />} />}
+                {quote.mountingTotal > 0 && <Line k="Mounting" v={<Money value={quote.mountingTotal} />} />}
+                {quote.addOnTotal > 0 && <Line k="Add-ons" v={<Money value={quote.addOnTotal} />} />}
+                {quote.discountAmount > 0 && <Line k={`Discount (${form.discountPct}%)`} v={<span className="text-red-600">−<Money value={quote.discountAmount} /></span>} />}
+                <div className="flex justify-between border-t border-slate-200 pt-2"><dt className="text-slate-600 font-medium">Taxable</dt><dd className="font-semibold"><Money value={quote.taxableAmount} /></dd></div>
+                {quote.cgst > 0 && <Line k="CGST 9%" v={<Money value={quote.cgst} />} />}
+                {quote.sgst > 0 && <Line k="SGST 9%" v={<Money value={quote.sgst} />} />}
+                {quote.igst > 0 && <Line k="IGST 18%" v={<Money value={quote.igst} />} />}
                 <div className="flex justify-between border-t border-slate-200 pt-2 mt-2 text-base font-bold text-brand">
-                  <span>Final Quote</span><span><Money value={quote.totalAmount} /></span>
+                  <span>Grand Total</span><span><Money value={quote.grandTotal} /></span>
                 </div>
               </dl>
             )}
-            <button className="btn-primary w-full mt-4" disabled={busy || !quote}>
+            <button className="btn-primary w-full mt-4" disabled={busy || !quote} onClick={() => submit('CONFIRMED')}>
               {busy ? 'Saving…' : '✓ Confirm Booking'}
+            </button>
+            <button className="btn-accent w-full mt-2" disabled={busy || !quote} onClick={() => submit('QUOTATION')}>
+              💾 Save as Quotation
             </button>
             <button type="button" className="btn-ghost w-full mt-2" onClick={() => navigate(-1)}>Cancel</button>
           </div>
         </div>
-      </form>
+      </div>
     </div>
   );
 }
 
 function Line({ k, v }) {
   return <div className="flex justify-between"><dt className="text-slate-500">{k}</dt><dd className="font-medium text-slate-800">{v}</dd></div>;
+}
+
+const DOT = { AVAILABLE: 'bg-emerald-500', BOOKED: 'bg-red-500', TENTATIVE: 'bg-amber-500', MAINTENANCE: 'bg-slate-400' };
+
+// Compact searchable dropdown for adding sites to the order
+function AddSitePicker({ sites, onPick }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onEsc = (e) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onEsc);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onEsc); };
+  }, [open]);
+
+  const needle = q.trim().toLowerCase();
+  const matches = sites.filter((s) => !needle || `${s.code} ${s.location} ${s.zone}`.toLowerCase().includes(needle));
+  const shown = matches.slice(0, 60);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button type="button" onClick={() => setOpen((o) => !o)} className="btn-accent text-sm py-1.5 px-3">
+        ＋ Add site <span className="opacity-70 ml-0.5">▾</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 z-30 mt-1 w-80 rounded-xl border border-slate-200 bg-white shadow-xl overflow-hidden">
+          <div className="p-2 border-b border-slate-100">
+            <input autoFocus className="input py-1.5 text-sm" placeholder="Search code, location or zone…"
+              value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
+          <div className="max-h-72 overflow-y-auto py-1">
+            {shown.length === 0 ? (
+              <div className="px-3 py-6 text-center text-sm text-slate-400">{sites.length === 0 ? 'All sites added' : 'No matching sites'}</div>
+            ) : shown.map((s) => (
+              <button type="button" key={s.id}
+                onClick={() => { onPick(s.id); setQ(''); setOpen(false); }}
+                className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2">
+                <span className={`h-2 w-2 rounded-full shrink-0 ${DOT[s.status] || 'bg-slate-400'}`} />
+                <span className="font-semibold text-sm text-slate-800 shrink-0 w-12">{s.code}</span>
+                <span className="text-xs text-slate-500 truncate flex-1">{s.location}</span>
+              </button>
+            ))}
+          </div>
+          {matches.length > shown.length && (
+            <div className="px-3 py-1.5 text-[11px] text-slate-400 border-t border-slate-100">
+              Showing {shown.length} of {matches.length} — keep typing to narrow
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }

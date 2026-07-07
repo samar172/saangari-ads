@@ -30,7 +30,7 @@ export default function Clients() {
                 <th className="px-4 py-2 text-left">Phone</th>
                 <th className="px-4 py-2 text-left">Company</th>
                 <th className="px-4 py-2 text-left">Tax</th>
-                <th className="px-4 py-2 text-right">Bookings</th>
+                <th className="px-4 py-2 text-right">Orders</th>
               </tr>
             </thead>
             <tbody>
@@ -40,7 +40,7 @@ export default function Clients() {
                   <td className="px-4 py-2">{c.phone}</td>
                   <td className="px-4 py-2 text-slate-500">{c.company || '—'}</td>
                   <td className="px-4 py-2">{c.taxCategory === 'GST' ? <Badge status="LIVE">GST</Badge> : <span className="text-slate-400">Non-GST</span>}</td>
-                  <td className="px-4 py-2 text-right">{c._count?.bookings ?? 0}</td>
+                  <td className="px-4 py-2 text-right">{c._count?.orders ?? 0}</td>
                 </tr>
               ))}
               {clients.length === 0 && <tr><td colSpan="5" className="px-4 py-10 text-center text-slate-400">No clients</td></tr>}
@@ -85,21 +85,22 @@ function ClientDetail({ id, onClose }) {
           )}
 
           <div>
-            <div className="text-xs font-semibold uppercase text-slate-500 mb-2">Bookings ({c.bookings.length})</div>
+            <div className="text-xs font-semibold uppercase text-slate-500 mb-2">Orders ({c.orders.length})</div>
             <div className="card overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
-                  <tr><th className="px-3 py-2 text-left">No</th><th className="px-3 py-2 text-left">Site</th><th className="px-3 py-2 text-left">Status</th><th className="px-3 py-2 text-right">Total</th></tr>
+                  <tr><th className="px-3 py-2 text-left">No</th><th className="px-3 py-2 text-left">Sites</th><th className="px-3 py-2 text-left">Status</th><th className="px-3 py-2 text-right">Total</th></tr>
                 </thead>
                 <tbody>
-                  {c.bookings.map((b) => (
-                    <tr key={b.id} className="border-t border-slate-100">
-                      <td className="px-3 py-1.5">{b.bookingNo}</td>
-                      <td className="px-3 py-1.5">{b.site.code}</td>
-                      <td className="px-3 py-1.5"><Badge status={b.status} /></td>
-                      <td className="px-3 py-1.5 text-right"><Money value={b.totalAmount} /></td>
+                  {c.orders.map((o) => (
+                    <tr key={o.id} className="border-t border-slate-100">
+                      <td className="px-3 py-1.5">{o.orderNo}</td>
+                      <td className="px-3 py-1.5 text-xs">{o.items.map((it) => it.site.code).join(', ')}</td>
+                      <td className="px-3 py-1.5"><Badge status={o.status} /></td>
+                      <td className="px-3 py-1.5 text-right"><Money value={o.grandTotal} /></td>
                     </tr>
                   ))}
+                  {c.orders.length === 0 && <tr><td colSpan="4" className="px-3 py-6 text-center text-slate-400">No orders</td></tr>}
                 </tbody>
               </table>
             </div>
