@@ -200,7 +200,11 @@ export default function NewBooking() {
               <div className="space-y-2">
                 {lines.map((l, i) => {
                   const s = siteById[l.siteId];
-                  const days = dayjs(l.endDate).diff(dayjs(l.startDate), 'day') + 1;
+                  const start = dayjs(l.startDate).startOf('day');
+                  const end = dayjs(l.endDate).startOf('day');
+                  const months = end.isBefore(start) ? 0 : end.diff(start, 'month');
+                  const remainingDays = end.isBefore(start) ? 0 : end.diff(start.add(months, 'month'), 'day');
+                  const days = end.isBefore(start) ? 0 : Math.max(1, (months * 30) + remainingDays);
                   return (
                     <div key={i} className="rounded-lg border border-slate-200 p-3">
                       <div className="flex items-start justify-between gap-2">

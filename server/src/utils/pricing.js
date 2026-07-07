@@ -11,8 +11,11 @@ function dayRateOf(monthlyRate) {
 function computeLine({ monthlyRate, startDate, endDate, dayRateOverride }) {
   const start = dayjs(startDate).startOf('day');
   const end = dayjs(endDate).startOf('day');
-  const days = end.diff(start, 'day') + 1;
-  if (days < 1) throw new Error('End date must be on or after start date');
+  if (end.isBefore(start)) throw new Error('End date must be on or after start date');
+  
+  const months = end.diff(start, 'month');
+  const remainingDays = end.diff(start.add(months, 'month'), 'day');
+  const days = Math.max(1, (months * 30) + remainingDays);
   const dayRate = dayRateOverride != null && dayRateOverride !== '' ? Number(dayRateOverride) : dayRateOf(monthlyRate);
   const subtotal = Math.round(dayRate * days);
   return { days, dayRate, subtotal };

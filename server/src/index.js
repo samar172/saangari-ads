@@ -44,5 +44,13 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
+// Serve frontend in production
+const clientDistPath = path.join(__dirname, '..', '..', 'client', 'dist');
+app.use(express.static(clientDistPath));
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(clientDistPath, 'index.html'));
+});
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`Saangri API listening on http://localhost:${PORT}`));
