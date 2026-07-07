@@ -1,0 +1,205 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SALES
+  MANAGER
+  OPS
+  FINANCE
+  SUPER_ADMIN
+}
+
+enum SiteType {
+  UNIPOLE
+  GANTRY
+  KIOSK
+  HOARDING
+}
+
+enum SiteStatus {
+  AVAILABLE
+  TENTATIVE
+  BOOKED
+  MAINTENANCE
+}
+
+enum BookingType {
+  REGULAR
+  LOOSE
+}
+
+enum BookingStatus {
+  TENTATIVE
+  CONFIRMED
+  LIVE
+  COMPLETED
+  CANCELLED
+  WAITLIST
+}
+
+enum TaxCategory {
+  GST
+  NON_GST
+}
+
+enum PhotoPhase {
+  START
+  MID
+  END
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  CANCELLED
+}
+
+enum LedgerType {
+  DEBIT
+  CREDIT
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  phone     String?
+  password  String
+  role      Role     @default(SALES)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  bookings  Booking[]         @relation("BookedBy")
+  photos    MonitoringPhoto[] @relation("UploadedBy")
+  invoices  Invoice[]         @relation("GeneratedBy")
+}
+
+model Client {
+  id          Int         @id @default(autoincrement())
+  name        String
+  phone       String      @unique
+  email       String?
+  company     String?
+  gstNumber   String?
+  taxCategory TaxCategory @default(NON_GST)
+  address     String?
+  createdAt   DateTime    @default(now())
+
+  bookings Booking[]
+  invoices Invoice[]
+  ledger   LedgerEntry[]
+}
+
+model Site {
+  id           Int        @id @default(autoincrement())
+  code         String     @unique
+  srNo         Int?
+  zone         String
+  city         String
+  location     String
+  light        String     @default("NL")
+  width        Float      @default(0)
+  height       Float      @default(0)
+  qty          Int        @default(1)
+  sqft         Float      @default(0)
+  type         SiteType
+  printingCost Float      @default(0)
+  mountingCost Float      @default(0)
+  monthlyRate  Float      @default(0)
+  gstOnRate    Boolean    @default(true)
+  latitude     Float?
+  longitude    Float?
+  status       SiteStatus @default(AVAILABLE)
+  active       Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+
+  bookings Booking[]
+}
+
+model Booking {
+  id              Int           @id @default(autoincrement())
+  bookingNo       String        @unique
+  site            Site          @relation(fields: [siteId], references: [id])
+  siteId          Int
+  client          Client        @relation(fields: [clientId], references: [id])
+  clientId        Int
+  createdBy       User          @relation("BookedBy", fields: [createdById], references: [id])
+  createdById     Int
+  type            BookingType   @default(REGULAR)
+  status          BookingStatus @default(TENTATIVE)
+  startDate       DateTime
+  endDate         DateTime
+  days            Int
+  dayRate         Float
+  subtotal        Float
+  discountPct     Float         @default(0)
+  discountRemarks String?
+  gstApplicable   Boolean       @default(false)
+  gstAmount       Float         @default(0)
+  totalAmount     Float
+  notes           String?
+  holdExpiresAt   DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  photos   MonitoringPhoto[]
+  invoices Invoice[]
+}
+
+model MonitoringPhoto {
+  id           Int        @id @default(autoincrement())
+  booking      Booking    @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  bookingId    Int
+  phase        PhotoPhase
+  filePath     String
+  latitude     Float?
+  longitude    Float?
+  takenAt      DateTime   @default(now())
+  uploadedBy   User       @relation("UploadedBy", fields: [uploadedById], references: [id])
+  uploadedById Int
+  remarks      String?
+}
+
+model Invoice {
+  id            Int           @id @default(autoincrement())
+  invoiceNo     String        @unique
+  booking       Booking       @relation(fields: [bookingId], references: [id])
+  bookingId     Int
+  client        Client        @relation(fields: [clientId], references: [id])
+  clientId      Int
+  taxCategory   TaxCategory
+  amount        Float
+  gstRate       Float         @default(18)
+  gstAmount     Float         @default(0)
+  total         Float
+  status        InvoiceStatus @default(DRAFT)
+  issuedAt      DateTime      @default(now())
+  generatedBy   User          @relation("GeneratedBy", fields: [generatedById], references: [id])
+  generatedById Int
+
+  ledgerEntries LedgerEntry[]
+}
+
+model LedgerEntry {
+  id        Int        @id @default(autoincrement())
+  client    Client     @relation(fields: [clientId], references: [id])
+  clientId  Int
+  invoice   Invoice?   @relation(fields: [invoiceId], references: [id])
+  invoiceId Int?
+  type      LedgerType
+  amount    Float
+  narration String
+  date      DateTime   @default(now())
+}
+
+model Counter {
+  key   String @id
+  value Int    @default(0)
+}

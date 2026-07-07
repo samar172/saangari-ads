@@ -1,0 +1,9 @@
+{
+  "name": "saangri",
+  "private": true,
+  "description": "Saangri Advertising Billboard CRM",
+  "scripts": {
+    "server": "cd server && npm run dev",
+    "client": "cd client && npm run dev"
+  }
+}
