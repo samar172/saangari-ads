@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../api';
+import { Plus, Phone, Mail, MapPin } from 'lucide-react';
 import { useAuth, can } from '../auth';
 import { Modal, Spinner } from '../components/ui';
 
@@ -44,7 +45,7 @@ export default function PrintingPartners() {
           <h1 className="text-2xl font-bold text-slate-800">Printing Partners</h1>
           <p className="text-sm text-slate-500">Vendors used for flex printing &amp; mounting</p>
         </div>
-        {can(user, 'managePartners') && <button className="btn-accent" onClick={openNew}>➕ Add Partner</button>}
+        {can(user, 'managePartners') && <button className="btn-accent flex items-center gap-1.5" onClick={openNew}><Plus size={16} /> Add Partner</button>}
       </div>
 
       {loading ? <Spinner /> : (

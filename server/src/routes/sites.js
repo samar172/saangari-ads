@@ -5,15 +5,7 @@ const fs = require('fs');
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
 
-const uploadDir = path.join(__dirname, '..', '..', 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.jpg';
-    cb(null, `site-${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`);
-  },
-});
+const storage = multer.memoryStorage();
 const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
 
 // Whitelist + type-coerce editable site fields (prevents bad writes / string->Float errors)
@@ -21,6 +13,7 @@ const NUM = ['srNo', 'qty'];
 const FLOAT = ['width', 'height', 'sqft', 'printingCost', 'mountingCost', 'monthlyRate', 'latitude', 'longitude'];
 const STR = ['zone', 'city', 'location', 'light', 'type', 'status', 'code', 'imageUrl'];
 const BOOL = ['gstOnRate', 'active'];
+const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/cloudinary');
 function cleanSiteData(body = {}) {
   const data = {};
   for (const k of NUM) if (body[k] !== undefined && body[k] !== '') data[k] = parseInt(body[k], 10);
@@ -113,11 +106,25 @@ router.patch('/:id', requireRole('MANAGER'), async (req, res) => {
 // Upload / replace the site's display image (Manager / Super Admin)
 router.post('/:id/image', requireRole('MANAGER'), upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Image file is required' });
-  const site = await prisma.site.update({
+  
+  let secureUrl;
+  try {
+    secureUrl = await uploadToCloudinary(req.file.buffer, 'saangri');
+  } catch (err) {
+    console.error('Cloudinary upload error:', err);
+    return res.status(500).json({ error: 'Failed to upload image to Cloudinary' });
+  }
+
+  const site = await prisma.site.findUnique({ where: { id: Number(req.params.id) } });
+  if (site && site.imageUrl && site.imageUrl.startsWith('http')) {
+    await deleteFromCloudinary(site.imageUrl).catch(() => {});
+  }
+
+  const updatedSite = await prisma.site.update({
     where: { id: Number(req.params.id) },
-    data: { imageUrl: `/uploads/${req.file.filename}` },
+    data: { imageUrl: secureUrl },
   });
-  res.json(site);
+  res.json(updatedSite);
 });
 
 module.exports = router;

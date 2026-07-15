@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
+import { Save, CheckCircle, Plus, Check } from 'lucide-react';
 import api from '../api';
+import { useCompany } from '../CompanyContext';
 import { Money } from '../components/ui';
 
 const emptyClient = { name: '', phone: '', email: '', company: '', taxCategory: 'NON_GST', gstNumber: '', state: 'Rajasthan' };
@@ -9,6 +11,7 @@ const emptyClient = { name: '', phone: '', email: '', company: '', taxCategory: 
 export default function NewBooking() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const { activeCompany } = useCompany();
   const quotationMode = params.get('mode') === 'quotation';
   const [sites, setSites] = useState([]);
   const [clients, setClients] = useState([]);
@@ -78,9 +81,12 @@ export default function NewBooking() {
   const available = sites.filter((s) =>
     !lines.some((l) => l.siteId === s.id) && (form.bookingType === 'LOOSE' || s.status === 'AVAILABLE'));
 
-  function addSite(id) {
-    if (!id) return;
-    setLines((ls) => [...ls, { siteId: Number(id), startDate: form.defaultStart, endDate: form.defaultEnd, dayRateOverride: '', displayNotes: '' }]);
+  function addSites(ids) {
+    if (!ids || ids.length === 0) return;
+    setLines((ls) => [
+      ...ls,
+      ...ids.map(id => ({ siteId: Number(id), startDate: form.defaultStart, endDate: form.defaultEnd, dayRateOverride: '', displayNotes: '' }))
+    ]);
   }
   const updateLine = (i, k, v) => setLines((ls) => ls.map((l, idx) => (idx === i ? { ...l, [k]: v } : l)));
   const removeLine = (i) => setLines((ls) => ls.filter((_, idx) => idx !== i));
@@ -98,7 +104,7 @@ export default function NewBooking() {
         addOns: addOns.filter((a) => a.label),
         noOfPrints: Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
-        mountingCost: Number(form.mountingCost) || 0,
+        mountingCost: (Number(form.mountingCost) || 0) * lines.length,
         discountPct: Number(form.discountPct) || 0,
         taxCategory: form.taxCategory,
         interState: form.interState,
@@ -117,9 +123,16 @@ export default function NewBooking() {
       }
       if (!clientId) throw { response: { data: { error: 'Select or create a client' } } };
       if (lines.length === 0) throw { response: { data: { error: 'Add at least one site' } } };
+      if (!activeCompany) throw { response: { data: { error: 'No company selected' } } };
+
+      // Determine taxCategory based on company GST rules
+      let effectiveTaxCategory = form.taxCategory;
+      if (activeCompany.gstHidden) effectiveTaxCategory = 'NON_GST';
+      if (activeCompany.gstMandatory) effectiveTaxCategory = 'GST';
 
       const { data } = await api.post('/orders', {
         clientId: Number(clientId),
+        companyId: activeCompany.id,
         categoryId: form.categoryId ? Number(form.categoryId) : undefined,
         type: form.bookingType,
         status,
@@ -128,12 +141,12 @@ export default function NewBooking() {
         printingPartnerId: form.printingPartnerId ? Number(form.printingPartnerId) : undefined,
         noOfPrints: Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
-        mountingCost: Number(form.mountingCost) || 0,
+        mountingCost: (Number(form.mountingCost) || 0) * lines.length,
         monitoring: form.monitoring,
         monitorStart: form.monitoring && form.monitorStart,
         monitorMid: form.monitoring && form.monitorMid,
         monitorEnd: form.monitoring && form.monitorEnd,
-        taxCategory: form.taxCategory,
+        taxCategory: effectiveTaxCategory,
         interState: form.interState,
         placeOfSupply: form.placeOfSupply,
         discountPct: Number(form.discountPct) || 0,
@@ -181,7 +194,7 @@ export default function NewBooking() {
                 ))}
               </div>
             </div>
-            <div className="grid sm:grid-cols-3 gap-4">
+            <div className="grid sm:grid-cols-4 gap-4">
               <div>
                 <label className="label">Booking Date</label>
                 <input type="date" className="input" value={form.bookingDate} onChange={(e) => set('bookingDate', e.target.value)} />
@@ -191,7 +204,30 @@ export default function NewBooking() {
                 <input type="date" className="input" value={form.defaultStart} onChange={(e) => set('defaultStart', e.target.value)} />
               </div>
               <div>
-                <label className="label">Default End <span className="text-slate-400">(30d)</span></label>
+                <label className="label">Duration</label>
+                <select className="input" onChange={(e) => {
+                  const val = e.target.value;
+                  if (val) {
+                    let end;
+                    if (val.endsWith('M')) {
+                      end = dayjs(form.defaultStart).add(Number(val.replace('M', '')), 'month').format('YYYY-MM-DD');
+                    } else {
+                      end = dayjs(form.defaultStart).add(Number(val.replace('D', '')) - 1, 'day').format('YYYY-MM-DD');
+                    }
+                    set('defaultEnd', end);
+                  }
+                }}>
+                  <option value="">Custom...</option>
+                  <option value="7D">1 Week</option>
+                  <option value="15D">15 Days</option>
+                  <option value="1M">1 Month</option>
+                  <option value="3M">3 Months</option>
+                  <option value="6M">6 Months</option>
+                  <option value="12M">12 Months</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Default End</label>
                 <input type="date" className="input" value={form.defaultEnd} onChange={(e) => set('defaultEnd', e.target.value)} />
               </div>
             </div>
@@ -214,7 +250,7 @@ export default function NewBooking() {
           <div className="card p-5 space-y-3">
             <div className="flex items-center justify-between">
               <label className="label mb-0">Sites ({lines.length})</label>
-              <AddSitePicker sites={available} onPick={addSite} />
+              <AddSitePicker sites={available} onPickMultiple={addSites} />
             </div>
             {lines.length === 0 ? (
               <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-400">Add one or more sites to this order</div>
@@ -226,7 +262,7 @@ export default function NewBooking() {
                   const end = dayjs(l.endDate).startOf('day');
                   const months = end.isBefore(start) ? 0 : end.diff(start, 'month');
                   const remainingDays = end.isBefore(start) ? 0 : end.diff(start.add(months, 'month'), 'day');
-                  const days = end.isBefore(start) ? 0 : Math.max(1, (months * 30) + remainingDays);
+                  const days = end.isBefore(start) ? 0 : (months === 0 ? remainingDays + 1 : (months * 30) + remainingDays);
                   return (
                     <div key={i} className="rounded-lg border border-slate-200 p-3">
                       <div className="flex items-start justify-between gap-2">
@@ -236,8 +272,31 @@ export default function NewBooking() {
                         </div>
                         <button type="button" onClick={() => removeLine(i)} className="text-slate-400 hover:text-red-600 text-lg leading-none">&times;</button>
                       </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-2">
                         <div><div className="text-[10px] text-slate-400 mb-0.5">Start</div><input type="date" className="input py-1 text-xs" value={l.startDate} onChange={(e) => updateLine(i, 'startDate', e.target.value)} /></div>
+                        <div>
+                          <div className="text-[10px] text-slate-400 mb-0.5">Duration</div>
+                          <select className="input py-1 text-xs" onChange={(e) => {
+                            const val = e.target.value;
+                            if (val) {
+                              let end;
+                              if (val.endsWith('M')) {
+                                end = dayjs(l.startDate).add(Number(val.replace('M', '')), 'month').format('YYYY-MM-DD');
+                              } else {
+                                end = dayjs(l.startDate).add(Number(val.replace('D', '')) - 1, 'day').format('YYYY-MM-DD');
+                              }
+                              updateLine(i, 'endDate', end);
+                            }
+                          }}>
+                            <option value="">Custom...</option>
+                            <option value="7D">1 Week</option>
+                            <option value="15D">15 Days</option>
+                            <option value="1M">1 Month</option>
+                            <option value="3M">3 Months</option>
+                            <option value="6M">6 Months</option>
+                            <option value="12M">12 Months</option>
+                          </select>
+                        </div>
                         <div><div className="text-[10px] text-slate-400 mb-0.5">End</div><input type="date" className="input py-1 text-xs" value={l.endDate} onChange={(e) => updateLine(i, 'endDate', e.target.value)} /></div>
                         <div><div className="text-[10px] text-slate-400 mb-0.5">Day Rate</div><input type="number" className="input py-1 text-xs" placeholder={s ? String(Math.round(s.monthlyRate / 30)) : ''} value={l.dayRateOverride} onChange={(e) => updateLine(i, 'dayRateOverride', e.target.value)} /></div>
                         <div><div className="text-[10px] text-slate-400 mb-0.5">Days</div><div className="input py-1 text-xs bg-slate-50">{days > 0 ? days : '—'}</div></div>
@@ -266,7 +325,7 @@ export default function NewBooking() {
                 </select>
               </div>
               <div>
-                <label className="label">Mounting Cost (30 days)</label>
+                <label className="label">Mounting Cost (per site)</label>
                 <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
               </div>
               <div>
@@ -304,7 +363,7 @@ export default function NewBooking() {
             <div className="text-sm font-semibold text-slate-700">Monitoring</div>
             <div className="flex gap-2">
               <button type="button" onClick={() => set('monitoring', true)}
-                className={`flex-1 rounded-lg border p-2.5 text-sm font-medium transition ${form.monitoring ? 'border-brand bg-brand/5 text-brand' : 'border-slate-200 text-slate-600'}`}>✓ Monitoring</button>
+                className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg border p-2.5 text-sm font-medium transition ${form.monitoring ? 'border-brand bg-brand/5 text-brand' : 'border-slate-200 text-slate-600'}`}><Check size={16} /> Monitoring</button>
               <button type="button" onClick={() => set('monitoring', false)}
                 className={`flex-1 rounded-lg border p-2.5 text-sm font-medium transition ${!form.monitoring ? 'border-brand bg-brand/5 text-brand' : 'border-slate-200 text-slate-600'}`}>Non-monitoring</button>
             </div>
@@ -322,18 +381,30 @@ export default function NewBooking() {
             )}
           </div>
 
-          {/* Tax */}
+          {/* Tax — hidden/forced based on company */}
           <div className="card p-5 space-y-4">
             <div className="text-sm font-semibold text-slate-700">Tax &amp; Discount</div>
-            <div className="grid sm:grid-cols-2 gap-4">
-              <div>
-                <label className="label">Tax Category</label>
-                <select className="input" value={form.taxCategory} onChange={(e) => set('taxCategory', e.target.value)}>
-                  <option value="NON_GST">Non-GST</option>
-                  <option value="GST">GST (18%)</option>
-                </select>
+            {activeCompany?.gstHidden && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
+                {activeCompany.name}: GST is not applicable. All orders are Non-GST.
               </div>
-              {form.taxCategory === 'GST' && (
+            )}
+            {activeCompany?.gstMandatory && (
+              <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700">
+                {activeCompany.name}: GST (18%) is mandatory on all orders.
+              </div>
+            )}
+            <div className="grid sm:grid-cols-2 gap-4">
+              {!activeCompany?.gstHidden && !activeCompany?.gstMandatory && (
+                <div>
+                  <label className="label">Tax Category</label>
+                  <select className="input" value={form.taxCategory} onChange={(e) => set('taxCategory', e.target.value)}>
+                    <option value="NON_GST">Non-GST</option>
+                    <option value="GST">GST (18%)</option>
+                  </select>
+                </div>
+              )}
+              {(form.taxCategory === 'GST' || activeCompany?.gstMandatory) && !activeCompany?.gstHidden && (
                 <div>
                   <label className="label">Supply Type</label>
                   <select className="input" value={form.interState ? 'inter' : 'intra'} onChange={(e) => set('interState', e.target.value === 'inter')}>
@@ -406,20 +477,20 @@ export default function NewBooking() {
             )}
             {quotationMode ? (
               <>
-                <button className="btn-primary w-full mt-4" disabled={busy || !quote} onClick={() => submit('QUOTATION')}>
-                  {busy ? 'Saving…' : '💾 Save as Quotation'}
+                <button className="btn-primary w-full mt-4 flex justify-center items-center gap-1.5" disabled={busy || !quote} onClick={() => submit('QUOTATION')}>
+                  {busy ? 'Saving…' : <><Save size={16} /> Save as Quotation</>}
                 </button>
-                <button className="btn-accent w-full mt-2" disabled={busy || !quote} onClick={() => submit('CONFIRMED')}>
-                  ✓ Confirm Booking instead
+                <button className="btn-accent w-full mt-2 flex justify-center items-center gap-1.5" disabled={busy || !quote} onClick={() => submit('CONFIRMED')}>
+                  <CheckCircle size={16} /> Confirm Booking instead
                 </button>
               </>
             ) : (
               <>
-                <button className="btn-primary w-full mt-4" disabled={busy || !quote} onClick={() => submit('CONFIRMED')}>
-                  {busy ? 'Saving…' : '✓ Confirm Booking'}
+                <button className="btn-primary w-full mt-4 flex justify-center items-center gap-1.5" disabled={busy || !quote} onClick={() => submit('CONFIRMED')}>
+                  {busy ? 'Saving…' : <><CheckCircle size={16} /> Confirm Booking</>}
                 </button>
-                <button className="btn-accent w-full mt-2" disabled={busy || !quote} onClick={() => submit('QUOTATION')}>
-                  💾 Save as Quotation
+                <button className="btn-accent w-full mt-2 flex justify-center items-center gap-1.5" disabled={busy || !quote} onClick={() => submit('QUOTATION')}>
+                  <Save size={16} /> Save as Quotation
                 </button>
               </>
             )}
@@ -438,10 +509,15 @@ function Line({ k, v }) {
 const DOT = { AVAILABLE: 'bg-emerald-500', BOOKED: 'bg-red-500', TENTATIVE: 'bg-amber-500', MAINTENANCE: 'bg-slate-400' };
 
 // Compact searchable dropdown for adding sites to the order
-function AddSitePicker({ sites, onPick }) {
+function AddSitePicker({ sites, onPickMultiple }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
+  const [picked, setPicked] = useState(new Set());
   const ref = useRef(null);
+
+  useEffect(() => {
+    if (open) { setPicked(new Set()); setQ(''); }
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -456,14 +532,27 @@ function AddSitePicker({ sites, onPick }) {
   const matches = sites.filter((s) => !needle || `${s.code} ${s.location} ${s.zone}`.toLowerCase().includes(needle));
   const shown = matches.slice(0, 60);
 
+  const toggle = (id) => {
+    setPicked((p) => {
+      const next = new Set(p);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const confirm = () => {
+    if (picked.size > 0) onPickMultiple(Array.from(picked));
+    setOpen(false);
+  };
+
   return (
     <div className="relative" ref={ref}>
-      <button type="button" onClick={() => setOpen((o) => !o)} className="btn-accent text-sm py-1.5 px-3">
-        ＋ Add site <span className="opacity-70 ml-0.5">▾</span>
+      <button type="button" onClick={() => setOpen((o) => !o)} className="btn-accent text-sm py-1.5 px-3 flex items-center gap-1">
+        <Plus size={16} /> Add sites <span className="opacity-70 ml-0.5">▾</span>
       </button>
       {open && (
-        <div className="absolute right-0 z-30 mt-1 w-80 rounded-xl border border-slate-200 bg-white shadow-xl overflow-hidden">
-          <div className="p-2 border-b border-slate-100">
+        <div className="absolute right-0 z-30 mt-1 w-80 rounded-xl border border-slate-200 bg-white shadow-xl overflow-hidden flex flex-col">
+          <div className="p-2 border-b border-slate-100 shrink-0">
             <input autoFocus className="input py-1.5 text-sm" placeholder="Search code, location or zone…"
               value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
@@ -471,20 +560,25 @@ function AddSitePicker({ sites, onPick }) {
             {shown.length === 0 ? (
               <div className="px-3 py-6 text-center text-sm text-slate-400">{sites.length === 0 ? 'All sites added' : 'No matching sites'}</div>
             ) : shown.map((s) => (
-              <button type="button" key={s.id}
-                onClick={() => { onPick(s.id); setQ(''); setOpen(false); }}
-                className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2">
+              <label key={s.id} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={picked.has(s.id)} onChange={() => toggle(s.id)} className="shrink-0" />
                 <span className={`h-2 w-2 rounded-full shrink-0 ${DOT[s.status] || 'bg-slate-400'}`} />
                 <span className="font-semibold text-sm text-slate-800 shrink-0 w-12">{s.code}</span>
                 <span className="text-xs text-slate-500 truncate flex-1">{s.location}</span>
-              </button>
+              </label>
             ))}
           </div>
           {matches.length > shown.length && (
-            <div className="px-3 py-1.5 text-[11px] text-slate-400 border-t border-slate-100">
+            <div className="px-3 py-1.5 text-[11px] text-slate-400 border-t border-slate-100 shrink-0">
               Showing {shown.length} of {matches.length} — keep typing to narrow
             </div>
           )}
+          <div className="p-2 border-t border-slate-100 bg-slate-50 shrink-0 flex justify-end gap-2">
+            <button type="button" className="btn-ghost text-xs py-1" onClick={() => setOpen(false)}>Cancel</button>
+            <button type="button" className="btn-primary text-xs py-1" disabled={picked.size === 0} onClick={confirm}>
+              Add {picked.size} site{picked.size !== 1 ? 's' : ''}
+            </button>
+          </div>
         </div>
       )}
     </div>

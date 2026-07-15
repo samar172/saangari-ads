@@ -39,7 +39,9 @@ app.use('/api/photos', require('./routes/photos'));
 app.use('/api/invoices', require('./routes/invoices'));
 app.use('/api/exports', require('./routes/exports'));
 app.use('/api/reports', require('./routes/reports'));
-
+app.use('/api/companies', require('./routes/companies'));
+app.use('/api/payments', require('./routes/payments'));
+app.use('/api/notes', require('./routes/notes'));
 // Central error handler
 app.use((err, req, res, next) => {
   console.error(err);

@@ -3,20 +3,118 @@ const PDFDocument = require('pdfkit');
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
 const { nextInvoiceNo } = require('../utils/counters');
-const { GST_RATE } = require('../utils/pricing');
+const { GST_RATE, recomputeOrderTotals } = require('../utils/pricing');
 const { writeLineNotes } = require('../utils/pdf');
 
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
 
 router.get('/', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+  const { companyId } = req.query;
+  const where = {};
+  if (companyId) where.companyId = Number(companyId);
+
   const invoices = await prisma.invoice.findMany({
+    where,
     orderBy: { issuedAt: 'desc' },
     include: {
       client: { select: { name: true, phone: true } },
+      company: { select: { id: true, name: true, code: true } },
       order: { select: { orderNo: true, items: { select: { site: { select: { code: true } } } } } },
     },
   });
   res.json(invoices);
+});
+
+router.get('/:id', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: Number(req.params.id) },
+    include: {
+      client: true,
+      company: true,
+      order: {
+        include: {
+          items: { include: { site: true } },
+          addOns: true
+        }
+      },
+    },
+  });
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+  res.json(invoice);
+});
+
+router.patch('/:id/commercials', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+  const { id } = req.params;
+  const { discountPct, discountRemarks, printingTotal, mountingCost, addOns } = req.body;
+
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: Number(id) },
+    include: { order: { include: { items: true } } }
+  });
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+
+  const order = invoice.order;
+
+  // 1. Update Order's add-ons
+  await prisma.orderAddOn.deleteMany({ where: { orderId: order.id } });
+  if (addOns && addOns.length > 0) {
+    await prisma.orderAddOn.createMany({
+      data: addOns.map(a => ({ orderId: order.id, label: a.label, amount: Number(a.amount) || 0 }))
+    });
+  }
+
+  const addOnTotal = (addOns || []).reduce((s, a) => s + (Number(a.amount) || 0), 0);
+
+  // 2. Recompute Order Totals
+  const testOrder = {
+    ...order,
+    addOnTotal,
+    printingTotal: Number(printingTotal) || 0,
+    mountingCost: Number(mountingCost) || 0,
+    discountPct: Number(discountPct) || 0
+  };
+
+  const newTotals = recomputeOrderTotals(testOrder, order.items);
+
+  // 3. Update Order
+  await prisma.order.update({
+    where: { id: order.id },
+    data: {
+      printingTotal: testOrder.printingTotal,
+      mountingCost: testOrder.mountingCost,
+      discountPct: testOrder.discountPct,
+      discountRemarks: discountRemarks || order.discountRemarks,
+      addOnTotal,
+      ...newTotals
+    }
+  });
+
+  // 4. Update Invoice
+  const updatedInvoice = await prisma.invoice.update({
+    where: { id: invoice.id },
+    data: {
+      amount: newTotals.taxableAmount,
+      cgst: newTotals.cgst,
+      sgst: newTotals.sgst,
+      igst: newTotals.igst,
+      gstAmount: newTotals.gstAmount,
+      total: newTotals.grandTotal
+    }
+  });
+
+  // 5. Update Ledger Entry
+  const ledger = await prisma.ledgerEntry.findFirst({
+    where: { invoiceId: invoice.id, type: 'DEBIT' }
+  });
+
+  if (ledger) {
+    await prisma.ledgerEntry.update({
+      where: { id: ledger.id },
+      data: { amount: newTotals.grandTotal }
+    });
+  }
+
+  res.json(updatedInvoice);
 });
 
 // Generate a tax invoice for an order. Blocked until at least one monitoring
@@ -42,7 +140,7 @@ router.post('/', requireRole('FINANCE'), async (req, res) => {
 
   const invoice = await prisma.invoice.create({
     data: {
-      invoiceNo, orderId: order.id, clientId: order.clientId, taxCategory,
+      invoiceNo, orderId: order.id, clientId: order.clientId, companyId: order.companyId, taxCategory,
       interState: order.interState, amount,
       gstRate: taxCategory === 'GST' ? GST_RATE : 0,
       cgst: order.cgst, sgst: order.sgst, igst: order.igst, gstAmount,
@@ -51,16 +149,16 @@ router.post('/', requireRole('FINANCE'), async (req, res) => {
   });
 
   await prisma.ledgerEntry.create({
-    data: { clientId: order.clientId, invoiceId: invoice.id, type: 'DEBIT', amount: order.grandTotal, narration: `Invoice ${invoiceNo}` },
+    data: { clientId: order.clientId, companyId: order.companyId, invoiceId: invoice.id, type: 'DEBIT', amount: order.grandTotal, narration: `Invoice ${invoiceNo}` },
   });
 
   res.status(201).json(invoice);
 });
 
 router.post('/:id/mark-paid', requireRole('FINANCE'), async (req, res) => {
-  const invoice = await prisma.invoice.update({ where: { id: Number(req.params.id) }, data: { status: 'PAID' } });
+  const invoice = await prisma.invoice.update({ where: { id: Number(req.params.id) }, data: { status: 'PAID' }, include: { order: true } });
   await prisma.ledgerEntry.create({
-    data: { clientId: invoice.clientId, invoiceId: invoice.id, type: 'CREDIT', amount: invoice.total, narration: `Payment for ${invoice.invoiceNo}` },
+    data: { clientId: invoice.clientId, companyId: invoice.companyId, invoiceId: invoice.id, type: 'CREDIT', amount: invoice.total, narration: `Payment for ${invoice.invoiceNo}` },
   });
   res.json(invoice);
 });
@@ -69,7 +167,7 @@ router.post('/:id/mark-paid', requireRole('FINANCE'), async (req, res) => {
 router.get('/:id/pdf', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
   const invoice = await prisma.invoice.findUnique({
     where: { id: Number(req.params.id) },
-    include: { client: true, order: { include: { items: { include: { site: true } } } } },
+    include: { client: true, company: true, order: { include: { items: { include: { site: true } } } } },
   });
   if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
   const order = invoice.order;
@@ -79,8 +177,16 @@ router.get('/:id/pdf', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoiceNo.replace(/\//g, '-')}.pdf"`);
   doc.pipe(res);
 
-  doc.fontSize(20).fillColor('#1e3a8a').text('SAANGRI ADVERTISING', 45, 45);
-  doc.fontSize(9).fillColor('#555').text('Outdoor Media — Bikaner, Rajasthan');
+  const companyName = invoice.company?.legalName || invoice.company?.name || 'SAANGRI ADVERTISING';
+  const logoPath = require('path').join(__dirname, '../assets/logo.png');
+  try {
+    doc.image(logoPath, 45, 45, { height: 35 });
+    doc.fontSize(9).fillColor('#555').text('Outdoor Media — Bikaner, Rajasthan', 45, 85);
+  } catch (e) {
+    doc.fontSize(20).fillColor('#ef4444').text(companyName.toUpperCase(), 45, 45);
+    doc.fontSize(9).fillColor('#555').text('Outdoor Media — Bikaner, Rajasthan');
+  }
+  if (invoice.company?.gstin) doc.fontSize(8).fillColor('#555').text(`GSTIN: ${invoice.company.gstin}`, 45, doc.y);
   doc.fontSize(16).fillColor('#000').text('TAX INVOICE', 0, 48, { align: 'right' });
   doc.fontSize(10).fillColor('#333')
     .text(`Invoice No: ${invoice.invoiceNo}`, { align: 'right' })
@@ -98,7 +204,7 @@ router.get('/:id/pdf', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
   doc.moveDown();
   const x = { code: 45, loc: 110, period: 300, days: 420, amt: 470 };
   let y = doc.y + 4;
-  doc.rect(45, y - 2, 505, 18).fill('#1e3a8a');
+  doc.rect(45, y - 2, 505, 18).fill('#ef4444');
   doc.fillColor('#fff').fontSize(9)
     .text('Site', x.code, y).text('Location', x.loc, y).text('Period', x.period, y)
     .text('Days', x.days, y).text('Amount', x.amt, y, { width: 80, align: 'right' });

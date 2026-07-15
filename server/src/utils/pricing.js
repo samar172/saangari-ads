@@ -15,7 +15,7 @@ function computeLine({ monthlyRate, startDate, endDate, dayRateOverride }) {
   
   const months = end.diff(start, 'month');
   const remainingDays = end.diff(start.add(months, 'month'), 'day');
-  const days = Math.max(1, (months * 30) + remainingDays);
+  const days = months === 0 ? remainingDays + 1 : (months * 30) + remainingDays;
   const dayRate = dayRateOverride != null && dayRateOverride !== '' ? Number(dayRateOverride) : dayRateOf(monthlyRate);
   const subtotal = Math.round(dayRate * days);
   return { days, dayRate, subtotal };

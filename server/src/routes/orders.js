@@ -60,6 +60,7 @@ class BookingConflict extends Error {
 const orderInclude = {
   client: true,
   category: true,
+  company: true,
   createdBy: { select: { id: true, name: true } },
   printingPartner: true,
   addOns: true,
@@ -111,10 +112,11 @@ function withDerived(order) {
 
 // List orders (Sales sees only their own)
 router.get('/', async (req, res) => {
-  const { status, clientId, mine } = req.query;
+  const { status, clientId, mine, companyId } = req.query;
   const where = {};
   if (status) where.status = status;
   if (clientId) where.clientId = Number(clientId);
+  if (companyId) where.companyId = Number(companyId);
   if (mine === 'true' || req.user.role === 'SALES') where.createdById = req.user.id;
 
   const orders = await prisma.order.findMany({
@@ -123,6 +125,7 @@ router.get('/', async (req, res) => {
     include: {
       client: { select: { id: true, name: true, phone: true, taxCategory: true } },
       category: { select: { id: true, name: true } },
+      company: { select: { id: true, name: true, code: true } },
       createdBy: { select: { id: true, name: true } },
       items: { select: { id: true, siteId: true, status: true, site: { select: { code: true } }, photos: { select: { id: true } } } },
       payments: { select: { amount: true } },
@@ -177,12 +180,23 @@ async function priceFromBody(body) {
 router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const body = req.body || {};
   const {
-    clientId, categoryId, items = [], type = 'REGULAR', bookingDate, description,
+    clientId, categoryId, companyId, items = [], type = 'REGULAR', bookingDate, description,
     printingPartnerId, noOfPrints = 0, printRate = 0, mountingCost = 0,
     monitoring = false, monitorStart = false, monitorMid = false, monitorEnd = false,
-    taxCategory = 'NON_GST', interState = false, placeOfSupply,
+    taxCategory: rawTaxCategory = 'NON_GST', interState = false, placeOfSupply,
     discountPct = 0, discountRemarks, addOns = [], notes, status = 'QUOTATION',
   } = body;
+
+  // Look up the company and enforce GST rules
+  if (!companyId) return res.status(400).json({ error: 'Company is required' });
+  const company = await prisma.company.findUnique({ where: { id: Number(companyId) } });
+  if (!company) return res.status(400).json({ error: 'Invalid company' });
+
+  // Saangari Ads: gstHidden=true  → force NON_GST
+  // Saangari Company: gstMandatory=true → force GST
+  let taxCategory = rawTaxCategory;
+  if (company.gstHidden) taxCategory = 'NON_GST';
+  if (company.gstMandatory) taxCategory = 'GST';
 
   if (!clientId) return res.status(400).json({ error: 'Client is required' });
   if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'Add at least one site' });
@@ -243,6 +257,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
     const created = await tx.order.create({
       data: {
         orderNo, clientId: Number(clientId), createdById: req.user.id,
+        companyId: Number(companyId),
         categoryId: categoryId ? Number(categoryId) : null,
         status: status === 'CONFIRMED' ? 'CONFIRMED' : 'QUOTATION',
         bookingDate: bookingDate ? new Date(bookingDate) : new Date(),
@@ -339,7 +354,7 @@ router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (
   await prisma.$transaction(async (tx) => {
     await tx.payment.create({
       data: {
-        orderId: id, clientId: order.clientId, amount: gross, mode,
+        orderId: id, clientId: order.clientId, companyId: order.companyId, amount: gross, mode,
         tdsApplicable: !!tdsApplicable && pct > 0, tdsPct: pct, tdsAmount, netReceived,
         reference, notes, recordedById: req.user.id,
       },
@@ -347,7 +362,7 @@ router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (
     const tdsNote = tdsAmount ? ` · TDS ${pct}% ₹${tdsAmount.toLocaleString('en-IN')} deducted` : '';
     await tx.ledgerEntry.create({
       data: {
-        clientId: order.clientId, type: 'CREDIT', amount: gross,
+        clientId: order.clientId, companyId: order.companyId, type: 'CREDIT', amount: gross,
         narration: `Payment received · ${order.orderNo}${reference ? ' · ' + reference : ''}${tdsNote}`,
       },
     });
@@ -468,8 +483,16 @@ router.get('/:id/quotation.pdf', async (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename="Quotation-${order.orderNo}.pdf"`);
   doc.pipe(res);
 
-  doc.fontSize(20).fillColor('#1e3a8a').text('SAANGRI ADVERTISING', 45, 45);
-  doc.fontSize(9).fillColor('#555').text('Outdoor Media — Bikaner, Rajasthan');
+  const companyName = order.company?.legalName || order.company?.name || 'SAANGRI ADVERTISING';
+  const logoPath = require('path').join(__dirname, '../assets/logo.png');
+  try {
+    doc.image(logoPath, 45, 45, { height: 35 });
+    doc.fontSize(9).fillColor('#555').text('Outdoor Media — Bikaner, Rajasthan', 45, 85);
+  } catch (e) {
+    doc.fontSize(20).fillColor('#ef4444').text(companyName.toUpperCase(), 45, 45);
+    doc.fontSize(9).fillColor('#555').text('Outdoor Media — Bikaner, Rajasthan');
+  }
+  if (order.company?.gstin) doc.fontSize(8).fillColor('#555').text(`GSTIN: ${order.company.gstin}`, 45, doc.y);
   doc.fontSize(16).fillColor('#000').text('QUOTATION', 0, 48, { align: 'right' });
   doc.fontSize(10).fillColor('#333')
     .text(`Quote No: ${order.orderNo}`, { align: 'right' })
@@ -489,7 +512,7 @@ router.get('/:id/quotation.pdf', async (req, res) => {
   const x = { code: 45, loc: 110, period: 300, days: 420, amt: 470 };
   let y = doc.y + 4;
   doc.fontSize(9).fillColor('#fff');
-  doc.rect(45, y - 2, 505, 18).fill('#1e3a8a');
+  doc.rect(45, y - 2, 505, 18).fill('#ef4444');
   doc.fillColor('#fff')
     .text('Site', x.code, y).text('Location', x.loc, y).text('Period', x.period, y)
     .text('Days', x.days, y).text('Amount', x.amt, y, { width: 80, align: 'right' });
@@ -525,6 +548,17 @@ router.get('/:id/quotation.pdf', async (req, res) => {
   if (order.interState && order.igst) totalRow('IGST 18%', order.igst);
   if (!order.interState && order.gstAmount) { totalRow('CGST 9%', order.cgst); totalRow('SGST 9%', order.sgst); }
   totalRow('Grand Total', order.grandTotal, true);
+
+  if (order.company?.termsAndConditions) {
+    // PDFKit automatically wraps and page-breaks long text
+    doc.moveDown(3);
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('#000').text('Terms & Conditions:');
+    doc.moveDown(0.5);
+    doc.font('Helvetica').fontSize(9).fillColor('#333').text(order.company.termsAndConditions, {
+      align: 'left',
+      width: 505
+    });
+  }
 
   doc.font('Helvetica').fontSize(8).fillColor('#888').text('This quotation is valid for 15 days. Prices exclusive of printing/mounting unless stated.', 45, 780, { align: 'center', width: 505 });
   doc.end();

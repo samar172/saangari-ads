@@ -33,13 +33,27 @@ export default function Login() {
 
   return (
     <div className="min-h-screen grid md:grid-cols-2">
-      <div className="hidden md:flex flex-col justify-center bg-brand text-white p-12">
-        <div className="text-4xl font-bold">SAANGRI</div>
-        <div className="text-brand-accent uppercase tracking-widest text-sm mt-1">Advertising CRM</div>
-        <p className="mt-6 text-white/80 max-w-sm">
-          Outdoor media inventory & booking management for Bikaner — unipoles, gantries, kiosks.
-          Track availability, capture monitoring photos, generate invoices and proposals.
-        </p>
+      <div 
+        className="hidden md:flex flex-col justify-center p-12 relative overflow-hidden"
+        style={{
+          backgroundImage: "url('/logo.png')",
+          backgroundSize: "cover",
+          backgroundRepeat: "no-repeat",
+          backgroundPosition: "center",
+        }}
+      >
+        {/* White overlay with minimal blur for frosted glass effect */}
+        <div className="absolute inset-0 bg-white/70 backdrop-blur-[2px] z-0"></div>
+        
+        {/* Content on top of the blur */}
+        <div className="relative z-10">
+          <div className="text-5xl font-bold tracking-tight text-slate-900">SAANGRI</div>
+          <div className="text-brand font-bold uppercase tracking-widest text-sm mt-2 mb-8">Advertising CRM</div>
+          <p className="text-slate-800 font-medium max-w-sm text-lg leading-relaxed">
+            Outdoor media inventory & booking management for Bikaner — unipoles, gantries, kiosks.
+            Track availability, capture monitoring photos, generate invoices and proposals.
+          </p>
+        </div>
       </div>
       <div className="flex items-center justify-center p-8">
         <form onSubmit={submit} className="card w-full max-w-sm p-6">

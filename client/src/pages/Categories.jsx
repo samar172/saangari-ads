@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Plus, Pencil } from 'lucide-react';
 import api from '../api';
 import { useAuth, can } from '../auth';
 import { Spinner } from '../components/ui';
@@ -68,7 +69,7 @@ export default function Categories() {
       {editable && (
         <form onSubmit={add} className="card p-4 mb-5 flex flex-wrap gap-2">
           <input className="input flex-1 min-w-[220px]" placeholder="New category — e.g. Hospitality" value={name} onChange={(e) => setName(e.target.value)} />
-          <button className="btn-primary" disabled={busy || !name.trim()}>{busy ? 'Adding…' : '＋ Add category'}</button>
+          <button className="btn-primary flex items-center gap-1.5" disabled={busy || !name.trim()}>{busy ? 'Adding…' : <><Plus size={16} /> Add category</>}</button>
         </form>
       )}
 
@@ -84,7 +85,7 @@ export default function Categories() {
               </div>
               {editable && (
                 <div className="flex gap-1">
-                  <button className="btn-ghost text-xs" onClick={() => rename(c)}>✏️ Rename</button>
+                  <button className="btn-ghost text-xs flex items-center gap-1.5" onClick={() => rename(c)}><Pencil size={12} /> Rename</button>
                   <button className="btn-ghost text-xs" onClick={() => toggle(c)}>{c.active ? 'Deactivate' : 'Reactivate'}</button>
                   <button className="btn-ghost text-xs text-red-600" onClick={() => remove(c)}>Delete</button>
                 </div>

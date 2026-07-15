@@ -107,6 +107,30 @@ model User {
   invoices Invoice[]         @relation("GeneratedBy")
   payments Payment[]         @relation("PaymentBy")
   shifts   SiteShift[]       @relation("ShiftedBy")
+  notes    Note[]            @relation("UserNotes")
+}
+
+// Operating entity — Saangari Ads (Non-GST only) vs Saangari Company (GST mandatory)
+model Company {
+  id            Int      @id @default(autoincrement())
+  code          String   @unique          // "SAANGARI_ADS" | "SAANGARI_COMPANY"
+  name          String                     // Display name
+  legalName     String?                    // For invoice / quotation header
+  gstin         String?
+  pan           String?
+  address       String?
+  phone         String?
+  email         String?
+  gstMandatory  Boolean  @default(false)  // true → booking must be GST
+  gstHidden     Boolean  @default(false)  // true → GST option hidden on booking form
+  termsAndConditions String?              // T&Cs appended to quotation PDFs
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  orders   Order[]
+  invoices Invoice[]
+  payments Payment[]
+  ledger   LedgerEntry[]
 }
 
 // Client-managed booking categories (institute, hospital, coaching, events…)
@@ -191,6 +215,8 @@ model Order {
   clientId    Int
   createdBy   User        @relation("OrderBy", fields: [createdById], references: [id])
   createdById Int
+  company     Company     @relation(fields: [companyId], references: [id])
+  companyId   Int         @default(1)
   status      OrderStatus @default(QUOTATION)
 
   category   Category? @relation(fields: [categoryId], references: [id])
@@ -331,6 +357,8 @@ model Payment {
   orderId  Int
   client   Client      @relation(fields: [clientId], references: [id])
   clientId Int
+  company  Company     @relation(fields: [companyId], references: [id])
+  companyId Int        @default(1)
   // Gross amount settled against the order. TDS is remitted to the government
   // on the client's behalf, so the order is credited with `amount`, while
   // `netReceived` is what actually landed in the bank.
@@ -356,6 +384,8 @@ model Invoice {
   orderId       Int
   client        Client        @relation(fields: [clientId], references: [id])
   clientId      Int
+  company       Company       @relation(fields: [companyId], references: [id])
+  companyId     Int           @default(1)
   taxCategory   TaxCategory
   interState    Boolean       @default(false)
   amount        Float
@@ -377,6 +407,8 @@ model LedgerEntry {
   id        Int        @id @default(autoincrement())
   client    Client     @relation(fields: [clientId], references: [id])
   clientId  Int
+  company   Company    @relation(fields: [companyId], references: [id])
+  companyId Int        @default(1)
   invoice   Invoice?   @relation(fields: [invoiceId], references: [id])
   invoiceId Int?
   type      LedgerType
@@ -388,4 +420,14 @@ model LedgerEntry {
 model Counter {
   key   String @id
   value Int    @default(0)
+}
+
+model Note {
+  id        Int      @id @default(autoincrement())
+  content   String
+  isDone    Boolean  @default(false)
+  user      User     @relation("UserNotes", fields: [userId], references: [id], onDelete: Cascade)
+  userId    Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

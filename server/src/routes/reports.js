@@ -6,12 +6,21 @@ const NON_CANCELLED = { notIn: ['CANCELLED'] };
 
 // Super Admin analytics: occupancy, revenue, category profitability, GST, repeat clients
 router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const { companyId } = req.query;
+  const orderWhere = { status: NON_CANCELLED };
+  const bookingWhere = { status: NON_CANCELLED };
+  const paymentWhere = {};
+  if (companyId) {
+    orderWhere.companyId = Number(companyId);
+    paymentWhere.companyId = Number(companyId);
+  }
+
   const [siteCount, byStatus, byType, orders, lines, payments, clients] = await Promise.all([
     prisma.site.count({ where: { active: true } }),
     prisma.site.groupBy({ by: ['status'], where: { active: true }, _count: { _all: true } }),
     prisma.site.groupBy({ by: ['type'], where: { active: true }, _count: { _all: true } }),
     prisma.order.findMany({
-      where: { status: NON_CANCELLED },
+      where: orderWhere,
       select: {
         id: true, clientId: true, grandTotal: true, taxableAmount: true,
         cgst: true, sgst: true, igst: true, gstAmount: true, status: true,
@@ -19,10 +28,10 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
       },
     }),
     prisma.booking.findMany({
-      where: { status: NON_CANCELLED },
+      where: { ...bookingWhere, ...(companyId ? { order: { companyId: Number(companyId) } } : {}) },
       select: { subtotal: true, site: { select: { type: true, zone: true } } },
     }),
-    prisma.payment.aggregate({ _sum: { amount: true, tdsAmount: true, netReceived: true } }),
+    prisma.payment.aggregate({ where: paymentWhere, _sum: { amount: true, tdsAmount: true, netReceived: true } }),
     prisma.client.count(),
   ]);
 
@@ -75,9 +84,13 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
 
 // Time-series booked value & orders, grouped by week/month/year (by booking date)
 router.get('/timeseries', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
-  const period = req.query.period || 'month';
+  const { period: periodParam, companyId } = req.query;
+  const period = periodParam || 'month';
+  const where = { status: NON_CANCELLED };
+  if (companyId) where.companyId = Number(companyId);
+
   const orders = await prisma.order.findMany({
-    where: { status: NON_CANCELLED },
+    where,
     select: { bookingDate: true, grandTotal: true },
   });
 
@@ -104,8 +117,12 @@ router.get('/timeseries', requireRole('MANAGER', 'FINANCE'), async (req, res) =>
 
 // Top clients by booked value
 router.get('/top-clients', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const { companyId } = req.query;
+  const where = { status: NON_CANCELLED };
+  if (companyId) where.companyId = Number(companyId);
+
   const orders = await prisma.order.findMany({
-    where: { status: NON_CANCELLED },
+    where,
     select: { grandTotal: true, client: { select: { id: true, name: true } } },
   });
   const map = {};

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
+import { Download, Plus } from 'lucide-react';
 import { Money, Modal, Spinner, Badge } from '../components/ui';
 
 export default function Clients() {
@@ -79,8 +80,8 @@ function ClientDetail({ id, onClose }) {
           </div>
 
           {can(user, 'exportInventory') && (
-            <button className="btn-accent" onClick={() => downloadFile(`/exports/client/${id}/pptx`, `${c.name}_proposal.pptx`)}>
-              📥 Download PPTX Proposal
+            <button className="btn-accent flex items-center gap-1.5 w-fit" onClick={() => downloadFile(`/exports/client/${id}/pptx`, `${c.name}_proposal.pptx`)}>
+              <Download size={16} /> Download PPTX Proposal
             </button>
           )}
 
@@ -112,7 +113,7 @@ function ClientDetail({ id, onClose }) {
               {can(user, 'manageLedger') && (
                 <div className="flex gap-2">
                   <input className="input w-32 py-1" placeholder="Amount" value={pay} onChange={(e) => setPay(e.target.value)} />
-                  <button className="btn-ghost py-1" onClick={addPayment}>+ Record payment</button>
+                  <button className="btn-ghost py-1 flex items-center gap-1" onClick={addPayment}><Plus size={14} /> Record payment</button>
                 </div>
               )}
             </div>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../api';
+import { useCompany } from '../CompanyContext';
 import { Money, Spinner, StatTile } from '../components/ui';
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
@@ -9,16 +10,29 @@ import {
 const COLORS = ['#1e3a8a', '#f59e0b', '#059669', '#7c3aed', '#dc2626'];
 
 export default function Reports() {
+  const { companies, activeCompany } = useCompany();
+  // Default to the globally active company, or 'ALL' if none
+  const [localCid, setLocalCid] = useState(activeCompany?.id || 'ALL');
   const [overview, setOverview] = useState(null);
   const [period, setPeriod] = useState('month');
   const [series, setSeries] = useState([]);
   const [topClients, setTopClients] = useState([]);
 
+  // If localCid is 'ALL', we don't send companyId to the API
+  const cid = localCid === 'ALL' ? undefined : localCid;
+
+  // Sync if activeCompany changes and we haven't explicitly set to 'ALL'
   useEffect(() => {
-    api.get('/reports/overview').then((r) => setOverview(r.data));
-    api.get('/reports/top-clients').then((r) => setTopClients(r.data));
-  }, []);
-  useEffect(() => { api.get('/reports/timeseries', { params: { period } }).then((r) => setSeries(r.data)); }, [period]);
+    if (activeCompany && localCid !== 'ALL' && localCid !== activeCompany.id) {
+      setLocalCid(activeCompany.id);
+    }
+  }, [activeCompany]);
+
+  useEffect(() => {
+    api.get('/reports/overview', { params: { companyId: cid } }).then((r) => setOverview(r.data));
+    api.get('/reports/top-clients', { params: { companyId: cid } }).then((r) => setTopClients(r.data));
+  }, [cid]);
+  useEffect(() => { api.get('/reports/timeseries', { params: { period, companyId: cid } }).then((r) => setSeries(r.data)); }, [period, cid]);
 
   if (!overview) return <Spinner />;
 
@@ -27,8 +41,20 @@ export default function Reports() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-slate-800 mb-1">Reports & Analytics</h1>
-      <p className="text-sm text-slate-500 mb-5">Company performance overview</p>
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800 mb-1">Reports & Analytics</h1>
+          <p className="text-sm text-slate-500">{localCid === 'ALL' ? 'Combined performance across all companies' : `${companies.find(c => c.id === Number(localCid))?.name} — Company performance overview`}</p>
+        </div>
+        <select 
+          className="input w-auto py-1.5" 
+          value={localCid} 
+          onChange={(e) => setLocalCid(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value))}
+        >
+          <option value="ALL">All Companies (Combined)</option>
+          {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-4">
         <StatTile label="Occupancy" value={`${overview.occupancy}%`} accent="text-brand" sub={`${overview.siteStatus.BOOKED || 0}/${overview.siteCount} booked`} />

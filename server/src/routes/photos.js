@@ -5,16 +5,7 @@ const fs = require('fs');
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
 
-const uploadDir = path.join(__dirname, '..', '..', 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.jpg';
-    cb(null, `photo-${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`);
-  },
-});
+const storage = multer.memoryStorage();
 const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
 
 const PHASES = ['START', 'MID', 'END'];
@@ -23,9 +14,17 @@ const KINDS = ['GPS', 'NORMAL', 'NEWSPAPER'];
 // and a stopped line's remaining phases are moot.
 const MONITORED = ['TENTATIVE', 'CONFIRMED', 'LIVE', 'COMPLETED'];
 
-function removeFile(filePath) {
-  const abs = path.join(uploadDir, path.basename(filePath));
-  if (fs.existsSync(abs)) fs.unlinkSync(abs);
+const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/cloudinary');
+
+async function removeFile(filePath) {
+  if (!filePath) return;
+  if (filePath.startsWith('http')) {
+    await deleteFromCloudinary(filePath).catch(() => {});
+  } else {
+    const uploadDir = path.join(__dirname, '..', '..', 'uploads');
+    const abs = path.join(uploadDir, path.basename(filePath));
+    if (fs.existsSync(abs)) fs.unlinkSync(abs);
+  }
 }
 
 // A phase is only complete once every monitored line of the order carries all
@@ -50,7 +49,6 @@ router.post('/', requireRole('OPS'), upload.single('photo'), async (req, res) =>
 
   const booking = await prisma.booking.findUnique({ where: { id: Number(bookingId) } });
   if (!booking) {
-    removeFile(`/uploads/${req.file.filename}`);
     return res.status(404).json({ error: 'Booking not found' });
   }
 
@@ -58,9 +56,17 @@ router.post('/', requireRole('OPS'), upload.single('photo'), async (req, res) =>
     where: { bookingId_phase_kind: { bookingId: booking.id, phase, kind } },
   });
 
+  let secureUrl;
+  try {
+    secureUrl = await uploadToCloudinary(req.file.buffer, 'saangri');
+  } catch (err) {
+    console.error('Cloudinary upload error:', err);
+    return res.status(500).json({ error: 'Failed to upload photo to Cloudinary' });
+  }
+
   const data = {
     bookingId: booking.id, phase, kind,
-    filePath: `/uploads/${req.file.filename}`,
+    filePath: secureUrl,
     latitude: latitude ? Number(latitude) : null,
     longitude: longitude ? Number(longitude) : null,
     remarks,
@@ -71,7 +77,7 @@ router.post('/', requireRole('OPS'), upload.single('photo'), async (req, res) =>
   let photo;
   if (existing) {
     photo = await prisma.monitoringPhoto.update({ where: { id: existing.id }, data });
-    removeFile(existing.filePath); // drop the superseded file once the row points elsewhere
+    await removeFile(existing.filePath); // drop the superseded file once the row points elsewhere
   } else {
     photo = await prisma.monitoringPhoto.create({ data });
   }
@@ -96,7 +102,7 @@ router.post('/', requireRole('OPS'), upload.single('photo'), async (req, res) =>
 router.delete('/:id', requireRole('OPS'), async (req, res) => {
   const photo = await prisma.monitoringPhoto.findUnique({ where: { id: Number(req.params.id) } });
   if (photo) {
-    removeFile(photo.filePath);
+    await removeFile(photo.filePath);
     await prisma.monitoringPhoto.delete({ where: { id: photo.id } });
   }
   res.json({ ok: true });

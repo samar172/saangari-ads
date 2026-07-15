@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { Plus } from 'lucide-react';
 import api from '../api';
+import { useAuth, can } from '../auth';
 import { Modal, Spinner, Badge } from '../components/ui';
 
 const ROLES = ['SALES', 'MANAGER', 'OPS', 'FINANCE', 'SUPER_ADMIN'];
@@ -8,6 +10,7 @@ export default function Users() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const { user } = useAuth();
 
   function load() { setLoading(true); api.get('/users').then((r) => setUsers(r.data)).finally(() => setLoading(false)); }
   useEffect(load, []);
@@ -18,7 +21,7 @@ export default function Users() {
     <div>
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-2xl font-bold text-slate-800">Users</h1>
-        <button className="btn-accent" onClick={() => setOpen(true)}>＋ Add User</button>
+        {can(user, 'manageUsers') && <button className="btn-accent flex items-center gap-1.5" onClick={() => setOpen(true)}><Plus size={16} /> Add User</button>}
       </div>
       {loading ? <Spinner /> : (
         <div className="card overflow-hidden">

@@ -9,6 +9,7 @@
   "dependencies": {
     "@prisma/client": "^5.22.0",
     "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.10.0",
     "cors": "^2.8.5",
     "dayjs": "^1.11.13",
     "exceljs": "^4.4.0",

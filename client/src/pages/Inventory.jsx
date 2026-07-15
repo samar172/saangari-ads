@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
+import { X, CheckSquare, Plus, FileText, Download, MapPin, RefreshCw, Camera, Pencil, Check } from 'lucide-react';
 import { Badge, Money, Modal, Spinner } from '../components/ui';
 
 const TYPE_LABELS = { UNIPOLE: 'Unipole', GANTRY: 'Gantry', KIOSK: 'Kiosk', HOARDING: 'Hoarding' };
@@ -92,15 +93,18 @@ export default function Inventory() {
         <div className="flex flex-wrap gap-2">
           {can(user, 'createBooking') && (
             <>
-              <button className={selectMode ? 'btn-primary' : 'btn-ghost'} onClick={startSelecting}>
-                {selectMode ? '✕ Done selecting' : '☑ Select sites'}
+              <button className={`flex items-center gap-1.5 ${selectMode ? 'btn-primary' : 'btn-ghost'}`} onClick={startSelecting}>
+                {selectMode ? <><X size={16} /> Done selecting</> : <><CheckSquare size={16} /> Select sites</>}
               </button>
-              <button className="btn-accent" onClick={() => navigate('/new-booking')}>➕ New Booking</button>
-              <button className="btn-ghost" onClick={() => navigate('/new-booking?mode=quotation')}>📄 Quotation</button>
+              <button className="btn-accent flex items-center gap-1.5" onClick={() => navigate('/new-booking')}><Plus size={16} /> New Booking</button>
+              <button className="btn-ghost flex items-center gap-1.5" onClick={() => navigate('/new-booking?mode=quotation')}><FileText size={16} /> Quotation</button>
             </>
           )}
           {can(user, 'exportInventory') && (
-            <button className="btn-ghost" onClick={() => downloadFile(`/exports/inventory/excel?type=${type}`, 'inventory.xlsx')}>⬇ Export Excel</button>
+            <>
+              <button className="btn-ghost flex items-center gap-1.5" onClick={() => downloadFile(`/exports/availability/pdf?type=${type}`, 'Site-Availability.pdf')}><Download size={16} /> Availability PDF</button>
+              <button className="btn-ghost flex items-center gap-1.5" onClick={() => downloadFile(`/exports/inventory/excel?type=${type}`, 'inventory.xlsx')}><Download size={16} /> Export Excel</button>
+            </>
           )}
         </div>
       </div>
@@ -171,8 +175,8 @@ export default function Inventory() {
             <span className="text-xs text-slate-400 truncate max-w-md">{picked.map((p) => p.code).join(', ')}</span>
             <div className="flex-1" />
             <button className="btn-ghost text-sm" onClick={() => setPicked([])}>Clear</button>
-            <button className="btn-ghost text-sm" onClick={() => goBook('quotation')}>📄 Quotation</button>
-            <button className="btn-primary text-sm" onClick={() => goBook()}>➕ Book {picked.length} site{picked.length !== 1 ? 's' : ''}</button>
+            <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => goBook('quotation')}><FileText size={14} /> Quotation</button>
+            <button className="btn-primary text-sm flex items-center gap-1.5" onClick={() => goBook()}><Plus size={14} /> Book {picked.length} site{picked.length !== 1 ? 's' : ''}</button>
           </div>
         </div>
       )}
@@ -206,8 +210,8 @@ function HoverCard({ hover, detail }) {
           <img src={img} className="w-full h-full object-cover" alt={site.code} />
         ) : (
           <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-brand to-brand-light text-white">
-            <div className="text-center">
-              <div className="text-3xl">📍</div>
+            <div className="text-center flex flex-col items-center">
+              <MapPin size={32} className="mb-1" />
               <div className="text-xs opacity-80">No photo yet</div>
             </div>
           </div>
@@ -231,7 +235,7 @@ function HoverCard({ hover, detail }) {
             <div className="text-[11px] text-slate-500">{active.order?.orderNo} · {new Date(active.startDate).toLocaleDateString('en-IN')}–{new Date(active.endDate).toLocaleDateString('en-IN')}</div>
           </div>
         ) : (
-          <div className="mt-2 text-[11px] text-emerald-600 font-medium">✓ Available for booking</div>
+          <div className="mt-2 text-[11px] text-emerald-600 font-medium flex items-center gap-1"><Check size={12} /> Available for booking</div>
         )}
       </div>
     </div>
@@ -298,12 +302,15 @@ function SiteDetail({ site, onClose, onChanged }) {
               <img src={full.imageUrl} alt={full.code} className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-brand to-brand-light text-white">
-                <div className="text-center"><div className="text-4xl">📍</div><div className="text-xs opacity-80">No site photo</div></div>
+                <div className="text-center flex flex-col items-center">
+                  <MapPin size={36} className="mb-1" />
+                  <div className="text-xs opacity-80">No site photo</div>
+                </div>
               </div>
             )}
             {can(user, 'manageSites') && (
-              <label className="absolute bottom-2 right-2 btn-ghost text-xs cursor-pointer">
-                {full.imageUrl ? '🔄 Replace photo' : '📷 Add photo'}
+              <label className="absolute bottom-2 right-2 btn-ghost text-xs cursor-pointer flex items-center gap-1.5 bg-white/90 hover:bg-white text-slate-800 shadow-sm border border-slate-200">
+                {full.imageUrl ? <><RefreshCw size={14} /> Replace photo</> : <><Camera size={14} /> Add photo</>}
                 <input type="file" accept="image/*" className="hidden" onChange={(e) => uploadImage(e.target.files[0])} />
               </label>
             )}
@@ -331,7 +338,7 @@ function SiteDetail({ site, onClose, onChanged }) {
                 </select>
               </Field>
               <div className="sm:col-span-2 flex gap-2 mt-1">
-                <button className="btn-primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : '✓ Save changes'}</button>
+                <button className="btn-primary flex items-center gap-1.5" disabled={saving} onClick={save}>{saving ? 'Saving…' : <><Check size={16} /> Save changes</>}</button>
                 <button className="btn-ghost" onClick={() => setEditing(false)}>Cancel</button>
               </div>
             </div>
@@ -340,7 +347,7 @@ function SiteDetail({ site, onClose, onChanged }) {
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Site Details</div>
-                  {can(user, 'manageSites') && <button className="btn-ghost text-xs" onClick={startEdit}>✏️ Edit</button>}
+                  {can(user, 'manageSites') && <button className="btn-ghost text-xs flex items-center gap-1.5" onClick={startEdit}><Pencil size={12} /> Edit</button>}
                 </div>
                 <dl className="space-y-2 text-sm">
                   <Row k="Status"><Badge status={full.status} /></Row>
