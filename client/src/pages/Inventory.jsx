@@ -18,6 +18,7 @@ export default function Inventory() {
   const [summary, setSummary] = useState({});
   const [type, setType] = useState('UNIPOLE');
   const [zone, setZone] = useState('');
+  const [vacantOnly, setVacantOnly] = useState(false);
   const [sites, setSites] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -27,6 +28,11 @@ export default function Inventory() {
   const hoverTimer = useRef(null);
   const currentHoverId = useRef(null);
 
+  // Multi-select: tiles become checkboxes and the action bar takes them to a booking.
+  // Keep {id, code} so the basket still renders after switching type or zone.
+  const [selectMode, setSelectMode] = useState(false);
+  const [picked, setPicked] = useState([]);
+
   useEffect(() => { api.get('/sites/summary').then((r) => setSummary(r.data)); }, []);
 
   useEffect(() => {
@@ -35,6 +41,20 @@ export default function Inventory() {
       .then((r) => setSites(r.data))
       .finally(() => setLoading(false));
   }, [type, zone]);
+
+  function onTileClick(site) {
+    if (!selectMode) return setSelected(site);
+    setPicked((p) => (p.some((x) => x.id === site.id) ? p.filter((x) => x.id !== site.id) : [...p, { id: site.id, code: site.code }]));
+  }
+
+  function startSelecting() {
+    setSelectMode((on) => {
+      if (on) setPicked([]); // leaving select mode clears the basket
+      return !on;
+    });
+  }
+
+  const goBook = (mode) => navigate(`/new-booking?siteIds=${picked.map((p) => p.id).join(',')}${mode ? `&mode=${mode}` : ''}`);
 
   function onEnter(site, e) {
     clearTimeout(hoverTimer.current); // cancel any pending close so moving between tiles doesn't flicker
@@ -58,16 +78,27 @@ export default function Inventory() {
 
   const zones = [...new Set(sites.map((s) => s.zone))].sort();
   const counts = sites.reduce((a, s) => { a[s.status] = (a[s.status] || 0) + 1; return a; }, {});
+  const visible = vacantOnly ? sites.filter((s) => s.status === 'AVAILABLE') : sites;
 
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Inventory Dashboard</h1>
-          <p className="text-sm text-slate-500">Bikaner — {sites.length} sites in view · hover a tile for details</p>
+          <p className="text-sm text-slate-500">
+            Bikaner — {visible.length} sites in view · {selectMode ? 'click tiles to select them' : 'hover a tile for details'}
+          </p>
         </div>
-        <div className="flex gap-2">
-          {can(user, 'createBooking') && <button className="btn-accent" onClick={() => navigate('/new-booking')}>➕ New Booking</button>}
+        <div className="flex flex-wrap gap-2">
+          {can(user, 'createBooking') && (
+            <>
+              <button className={selectMode ? 'btn-primary' : 'btn-ghost'} onClick={startSelecting}>
+                {selectMode ? '✕ Done selecting' : '☑ Select sites'}
+              </button>
+              <button className="btn-accent" onClick={() => navigate('/new-booking')}>➕ New Booking</button>
+              <button className="btn-ghost" onClick={() => navigate('/new-booking?mode=quotation')}>📄 Quotation</button>
+            </>
+          )}
           {can(user, 'exportInventory') && (
             <button className="btn-ghost" onClick={() => downloadFile(`/exports/inventory/excel?type=${type}`, 'inventory.xlsx')}>⬇ Export Excel</button>
           )}
@@ -94,6 +125,10 @@ export default function Inventory() {
           <option value="">All zones</option>
           {zones.map((z) => <option key={z} value={z}>{z}</option>)}
         </select>
+        <label className="flex items-center gap-2 text-sm text-slate-600">
+          <input type="checkbox" checked={vacantOnly} onChange={(e) => setVacantOnly(e.target.checked)} />
+          Vacant only
+        </label>
         <div className="flex flex-wrap gap-3 text-xs text-slate-600">
           <Legend color="bg-emerald-500" label={`Available (${counts.AVAILABLE || 0})`} />
           <Legend color="bg-red-500" label={`Booked (${counts.BOOKED || 0})`} />
@@ -101,21 +136,46 @@ export default function Inventory() {
         </div>
       </div>
 
-      {loading ? <Spinner /> : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2">
-          {sites.map((s) => (
-            <button key={s.id} onClick={() => setSelected(s)}
-              onMouseEnter={(e) => onEnter(s, e)} onMouseLeave={onLeave}
-              className={`aspect-square rounded-lg text-white p-1.5 flex flex-col justify-between text-left transition ring-0 hover:ring-2 hover:ring-offset-1 ${TILE_COLORS[s.status]}`}>
-              <span className="font-bold text-xs">{s.code}</span>
-              <span className="text-[9px] leading-tight opacity-90 line-clamp-2">{s.location}</span>
-              <span className="text-[9px] font-semibold uppercase opacity-80">{s.status}</span>
-            </button>
-          ))}
+      {loading ? <Spinner /> : visible.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-slate-300 p-12 text-center text-slate-400">No sites match these filters</div>
+      ) : (
+        <div className={`grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2 ${picked.length ? 'pb-20' : ''}`}>
+          {visible.map((s) => {
+            const isPicked = picked.some((p) => p.id === s.id);
+            return (
+              <button key={s.id} onClick={() => onTileClick(s)}
+                onMouseEnter={(e) => onEnter(s, e)} onMouseLeave={onLeave}
+                className={`relative aspect-square rounded-lg text-white p-1.5 flex flex-col justify-between text-left transition hover:ring-2 hover:ring-offset-1 ${TILE_COLORS[s.status]} ${isPicked ? 'ring-2 ring-offset-2 ring-brand' : 'ring-0'}`}>
+                {selectMode && (
+                  <span className={`absolute top-1 right-1 h-4 w-4 rounded border flex items-center justify-center text-[10px] font-bold ${isPicked ? 'bg-white text-brand border-white' : 'border-white/70 bg-black/10'}`}>
+                    {isPicked ? '✓' : ''}
+                  </span>
+                )}
+                <span className="font-bold text-xs">{s.code}</span>
+                <span className="text-[9px] leading-tight opacity-90 line-clamp-2">{s.location}</span>
+                <span className="text-[9px] font-semibold uppercase opacity-80">{s.status}</span>
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {hover && <HoverCard hover={hover} detail={detail} />}
+      {hover && !selectMode && <HoverCard hover={hover} detail={detail} />}
+
+      {picked.length > 0 && (
+        <div className="fixed bottom-0 left-60 right-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur px-6 py-3 shadow-2xl">
+          <div className="mx-auto max-w-7xl flex flex-wrap items-center gap-3">
+            <span className="text-sm font-semibold text-slate-800">
+              {picked.length} site{picked.length !== 1 ? 's' : ''} selected
+            </span>
+            <span className="text-xs text-slate-400 truncate max-w-md">{picked.map((p) => p.code).join(', ')}</span>
+            <div className="flex-1" />
+            <button className="btn-ghost text-sm" onClick={() => setPicked([])}>Clear</button>
+            <button className="btn-ghost text-sm" onClick={() => goBook('quotation')}>📄 Quotation</button>
+            <button className="btn-primary text-sm" onClick={() => goBook()}>➕ Book {picked.length} site{picked.length !== 1 ? 's' : ''}</button>
+          </div>
+        </div>
+      )}
 
       <SiteDetail site={selected} onClose={() => setSelected(null)} onChanged={() => {
         api.get('/sites', { params: { type, zone: zone || undefined } }).then((r) => setSites(r.data));

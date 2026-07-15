@@ -58,7 +58,20 @@ async function main() {
     if (!exists) await prisma.printingPartner.create({ data: p });
   }
 
-  console.log(`Seeded ${users.length} users, ${sites.length} sites, ${partners.length} printing partners.`);
+  // Starter set — the client adds/renames their own from the Categories page
+  const categories = [
+    'Institute', 'Hospital', 'Coaching', 'Events', 'Retail',
+    'Real Estate', 'Automobile', 'FMCG', 'Government', 'Political', 'Other',
+  ];
+  for (const [i, name] of categories.entries()) {
+    await prisma.category.upsert({
+      where: { name },
+      update: {},
+      create: { name, sortOrder: i },
+    });
+  }
+
+  console.log(`Seeded ${users.length} users, ${sites.length} sites, ${partners.length} printing partners, ${categories.length} categories.`);
 }
 
 main()

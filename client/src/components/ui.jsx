@@ -11,6 +11,7 @@ const STATUS_COLORS = {
   COMPLETED: 'bg-slate-100 text-slate-700',
   CANCELLED: 'bg-red-100 text-red-800',
   WAITLIST: 'bg-purple-100 text-purple-800',
+  STOPPED: 'bg-orange-100 text-orange-800',
   DRAFT: 'bg-slate-100 text-slate-700',
   SENT: 'bg-blue-100 text-blue-800',
   PAID: 'bg-emerald-100 text-emerald-800',

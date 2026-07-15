@@ -10,6 +10,7 @@ import Invoices from './pages/Invoices';
 import Reports from './pages/Reports';
 import Reminders from './pages/Reminders';
 import PrintingPartners from './pages/PrintingPartners';
+import Categories from './pages/Categories';
 import Users from './pages/Users';
 
 function Protected({ children }) {
@@ -31,6 +32,7 @@ export default function App() {
           <Route path="/reminders" element={<Protected><Reminders /></Protected>} />
           <Route path="/clients" element={<Protected><Clients /></Protected>} />
           <Route path="/printing-partners" element={<Protected><PrintingPartners /></Protected>} />
+          <Route path="/categories" element={<Protected><Categories /></Protected>} />
           <Route path="/invoices" element={<Protected><Invoices /></Protected>} />
           <Route path="/reports" element={<Protected><Reports /></Protected>} />
           <Route path="/users" element={<Protected><Users /></Protected>} />

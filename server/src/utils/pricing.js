@@ -21,24 +21,11 @@ function computeLine({ monthlyRate, startDate, endDate, dayRateOverride }) {
   return { days, dayRate, subtotal };
 }
 
-// Price a whole order: rental (many sites) + add-ons + printing + mounting,
-// then discount, then GST split (CGST+SGST intra-state / IGST inter-state).
-function computeOrder({
-  items = [],            // [{ monthlyRate, startDate, endDate, dayRateOverride, siteId }]
-  addOns = [],           // [{ label, amount }]
-  noOfPrints = 0,
-  printRate = 0,
-  mountingCost = 0,
-  discountPct = 0,
-  taxCategory = 'NON_GST',
-  interState = false,
-}) {
-  const lines = items.map((it) => ({ ...computeLine(it), siteId: it.siteId }));
-  const rentalSubtotal = lines.reduce((s, l) => s + l.subtotal, 0);
-  const addOnTotal = (addOns || []).reduce((s, a) => s + (Number(a.amount) || 0), 0);
-  const printingTotal = Math.round((Number(noOfPrints) || 0) * (Number(printRate) || 0));
-  const mountingTotal = Math.round(Number(mountingCost) || 0);
-
+// Given a rental subtotal already in hand, layer on the order-level charges,
+// the discount and the GST split. Shared by computeOrder (which prices lines
+// from scratch) and recomputeOrderTotals (which re-prices a saved order from
+// its existing line subtotals, after a stop or a shift changed the dates).
+function applyOrderCharges({ rentalSubtotal, addOnTotal, printingTotal, mountingTotal, discountPct, taxCategory, interState }) {
   const preDiscount = rentalSubtotal + addOnTotal + printingTotal + mountingTotal;
   const discountAmount = Math.round(preDiscount * (Number(discountPct) || 0) / 100);
   const taxableAmount = preDiscount - discountAmount;
@@ -56,15 +43,58 @@ function computeOrder({
     }
   }
 
-  const grandTotal = taxableAmount + gstAmount;
-
   return {
-    lines,
     rentalSubtotal, addOnTotal, printingTotal, mountingTotal,
     discountAmount, taxableAmount,
-    cgst, sgst, igst, gstAmount, grandTotal,
+    cgst, sgst, igst, gstAmount,
+    grandTotal: taxableAmount + gstAmount,
     gstRate: gstApplicable ? GST_RATE : 0,
   };
 }
 
-module.exports = { computeOrder, computeLine, dayRateOf, GST_RATE };
+// Re-price a saved order from its surviving line subtotals. Cancelled and
+// waitlisted lines contribute nothing; a stopped line contributes only the
+// days it actually ran (its subtotal was already rewritten).
+function recomputeOrderTotals(order, lines) {
+  const BILLABLE = ['TENTATIVE', 'CONFIRMED', 'LIVE', 'COMPLETED', 'STOPPED'];
+  const rentalSubtotal = lines
+    .filter((l) => BILLABLE.includes(l.status))
+    .reduce((s, l) => s + l.subtotal, 0);
+
+  return applyOrderCharges({
+    rentalSubtotal,
+    addOnTotal: order.addOnTotal || 0,
+    printingTotal: order.printingTotal || 0,
+    mountingTotal: order.mountingCost || 0,
+    discountPct: order.discountPct || 0,
+    taxCategory: order.taxCategory,
+    interState: order.interState,
+  });
+}
+
+// Price a whole order: rental (many sites) + add-ons + printing + mounting,
+// then discount, then GST split (CGST+SGST intra-state / IGST inter-state).
+function computeOrder({
+  items = [],            // [{ monthlyRate, startDate, endDate, dayRateOverride, siteId }]
+  addOns = [],           // [{ label, amount }]
+  noOfPrints = 0,
+  printRate = 0,
+  mountingCost = 0,
+  discountPct = 0,
+  taxCategory = 'NON_GST',
+  interState = false,
+}) {
+  const lines = items.map((it) => ({ ...computeLine(it), siteId: it.siteId }));
+
+  const totals = applyOrderCharges({
+    rentalSubtotal: lines.reduce((s, l) => s + l.subtotal, 0),
+    addOnTotal: (addOns || []).reduce((s, a) => s + (Number(a.amount) || 0), 0),
+    printingTotal: Math.round((Number(noOfPrints) || 0) * (Number(printRate) || 0)),
+    mountingTotal: Math.round(Number(mountingCost) || 0),
+    discountPct, taxCategory, interState,
+  });
+
+  return { lines, ...totals };
+}
+
+module.exports = { computeOrder, computeLine, recomputeOrderTotals, dayRateOf, GST_RATE };

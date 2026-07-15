@@ -42,6 +42,7 @@ enum BookingStatus {
   COMPLETED
   CANCELLED
   WAITLIST
+  STOPPED
 }
 
 // Order / quotation lifecycle
@@ -62,6 +63,13 @@ enum PhotoPhase {
   START
   MID
   END
+}
+
+// Each monitoring day needs three kinds of proof
+enum PhotoKind {
+  GPS
+  NORMAL
+  NEWSPAPER
 }
 
 enum InvoiceStatus {
@@ -98,6 +106,18 @@ model User {
   photos   MonitoringPhoto[] @relation("UploadedBy")
   invoices Invoice[]         @relation("GeneratedBy")
   payments Payment[]         @relation("PaymentBy")
+  shifts   SiteShift[]       @relation("ShiftedBy")
+}
+
+// Client-managed booking categories (institute, hospital, coaching, events…)
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  orders Order[]
 }
 
 model Client {
@@ -142,7 +162,9 @@ model Site {
   active       Boolean    @default(true)
   createdAt    DateTime   @default(now())
 
-  bookings Booking[]
+  bookings    Booking[]
+  shiftsFrom  SiteShift[] @relation("ShiftFrom")
+  shiftsTo    SiteShift[] @relation("ShiftTo")
 }
 
 model PrintingPartner {
@@ -171,7 +193,10 @@ model Order {
   createdById Int
   status      OrderStatus @default(QUOTATION)
 
-  bookingDate DateTime    @default(now())
+  category   Category? @relation(fields: [categoryId], references: [id])
+  categoryId Int?
+
+  bookingDate DateTime @default(now())
   description String?
 
   // Printing
@@ -242,10 +267,33 @@ model Booking {
   days      Int
   dayRate   Float
   subtotal  Float
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+
+  // Free-text note that prints on the billing plan (quotation + invoice)
+  displayNotes String?
+  // Set when the display is stopped early
+  stoppedAt  DateTime?
+  stopReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   photos MonitoringPhoto[]
+  shifts SiteShift[]
+}
+
+// Audit trail: a booking line moved from one site to another mid-campaign
+model SiteShift {
+  id        Int      @id @default(autoincrement())
+  booking   Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  bookingId Int
+  fromSite  Site     @relation("ShiftFrom", fields: [fromSiteId], references: [id])
+  fromSiteId Int
+  toSite    Site     @relation("ShiftTo", fields: [toSiteId], references: [id])
+  toSiteId  Int
+  reason    String?
+  shiftedAt DateTime @default(now())
+  by        User     @relation("ShiftedBy", fields: [byId], references: [id])
+  byId      Int
 }
 
 model MonitoringPhoto {
@@ -253,6 +301,7 @@ model MonitoringPhoto {
   booking      Booking    @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   bookingId    Int
   phase        PhotoPhase
+  kind         PhotoKind  @default(NORMAL)
   filePath     String
   latitude     Float?
   longitude    Float?
@@ -260,6 +309,9 @@ model MonitoringPhoto {
   uploadedBy   User       @relation("UploadedBy", fields: [uploadedById], references: [id])
   uploadedById Int
   remarks      String?
+
+  // One photo per (line, phase, kind) — re-uploading replaces it
+  @@unique([bookingId, phase, kind])
 }
 
 // In-app monitoring reminder for an order phase (START / MID / END)
@@ -274,17 +326,26 @@ model Reminder {
 }
 
 model Payment {
-  id           Int         @id @default(autoincrement())
-  order        Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  orderId      Int
-  client       Client      @relation(fields: [clientId], references: [id])
-  clientId     Int
-  amount       Float
-  mode         PaymentMode @default(CASH)
+  id       Int         @id @default(autoincrement())
+  order    Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId  Int
+  client   Client      @relation(fields: [clientId], references: [id])
+  clientId Int
+  // Gross amount settled against the order. TDS is remitted to the government
+  // on the client's behalf, so the order is credited with `amount`, while
+  // `netReceived` is what actually landed in the bank.
+  amount   Float
+  mode     PaymentMode @default(CASH)
+
+  tdsApplicable Boolean @default(false)
+  tdsPct        Float   @default(0)
+  tdsAmount     Float   @default(0)
+  netReceived   Float   @default(0)
+
   reference    String?
   notes        String?
-  receivedAt   DateTime    @default(now())
-  recordedBy   User        @relation("PaymentBy", fields: [recordedById], references: [id])
+  receivedAt   DateTime @default(now())
+  recordedBy   User     @relation("PaymentBy", fields: [recordedById], references: [id])
   recordedById Int
 }
 

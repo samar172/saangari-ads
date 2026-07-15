@@ -9,9 +9,11 @@ const emptyClient = { name: '', phone: '', email: '', company: '', taxCategory: 
 export default function NewBooking() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const quotationMode = params.get('mode') === 'quotation';
   const [sites, setSites] = useState([]);
   const [clients, setClients] = useState([]);
   const [partners, setPartners] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [quote, setQuote] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -23,6 +25,7 @@ export default function NewBooking() {
   const [form, setForm] = useState({
     bookingType: 'REGULAR',
     clientId: '',
+    categoryId: '',
     bookingDate: dayjs().format('YYYY-MM-DD'),
     description: '',
     defaultStart: defStart,
@@ -42,27 +45,26 @@ export default function NewBooking() {
     discountRemarks: '',
     notes: '',
   });
-  const [lines, setLines] = useState([]); // { siteId, startDate, endDate, dayRateOverride }
+  const [lines, setLines] = useState([]); // { siteId, startDate, endDate, dayRateOverride, displayNotes }
   const [addOns, setAddOns] = useState([]); // { label, amount }
   const [clientForm, setClientForm] = useState(emptyClient);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
+  // Fetch every site, not just the bookable ones — a line seeded from the grid may
+  // point at a booked site, and we still need its code/rate to render the row.
   useEffect(() => {
     api.get('/clients').then((r) => setClients(r.data));
     api.get('/printing-partners').then((r) => setPartners(r.data.filter((p) => p.active)));
+    api.get('/categories').then((r) => setCategories(r.data));
+    api.get('/sites').then((r) => setSites(r.data));
   }, []);
 
-  // Regular = only available sites; Loose = all sites (waitlist/override)
+  // Seed lines from ?siteId= (single, from the site modal) or ?siteIds= (grid multi-select)
   useEffect(() => {
-    const p = form.bookingType === 'REGULAR' ? { status: 'AVAILABLE' } : {};
-    api.get('/sites', { params: p }).then((r) => setSites(r.data));
-  }, [form.bookingType]);
-
-  // Seed a first line from ?siteId=
-  useEffect(() => {
-    const sid = params.get('siteId');
-    if (sid) setLines([{ siteId: Number(sid), startDate: defStart, endDate: defEnd, dayRateOverride: '' }]);
+    const ids = (params.get('siteIds') || params.get('siteId') || '')
+      .split(',').map((s) => Number(s.trim())).filter(Boolean);
+    if (ids.length) setLines(ids.map((siteId) => ({ siteId, startDate: defStart, endDate: defEnd, dayRateOverride: '', displayNotes: '' })));
   }, []); // eslint-disable-line
 
   // When a client is chosen, default their tax category
@@ -72,11 +74,13 @@ export default function NewBooking() {
   }, [form.clientId]); // eslint-disable-line
 
   const siteById = useMemo(() => Object.fromEntries(sites.map((s) => [s.id, s])), [sites]);
-  const available = sites.filter((s) => !lines.some((l) => l.siteId === s.id));
+  // Regular bookings may only pick vacant sites; loose bookings can override onto any site.
+  const available = sites.filter((s) =>
+    !lines.some((l) => l.siteId === s.id) && (form.bookingType === 'LOOSE' || s.status === 'AVAILABLE'));
 
   function addSite(id) {
     if (!id) return;
-    setLines((ls) => [...ls, { siteId: Number(id), startDate: form.defaultStart, endDate: form.defaultEnd, dayRateOverride: '' }]);
+    setLines((ls) => [...ls, { siteId: Number(id), startDate: form.defaultStart, endDate: form.defaultEnd, dayRateOverride: '', displayNotes: '' }]);
   }
   const updateLine = (i, k, v) => setLines((ls) => ls.map((l, idx) => (idx === i ? { ...l, [k]: v } : l)));
   const removeLine = (i) => setLines((ls) => ls.filter((_, idx) => idx !== i));
@@ -116,6 +120,7 @@ export default function NewBooking() {
 
       const { data } = await api.post('/orders', {
         clientId: Number(clientId),
+        categoryId: form.categoryId ? Number(form.categoryId) : undefined,
         type: form.bookingType,
         status,
         bookingDate: form.bookingDate,
@@ -135,7 +140,11 @@ export default function NewBooking() {
         discountRemarks: form.discountRemarks,
         addOns: addOns.filter((a) => a.label),
         notes: form.notes,
-        items: lines.map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, dayRateOverride: l.dayRateOverride || undefined })),
+        items: lines.map((l) => ({
+          siteId: l.siteId, startDate: l.startDate, endDate: l.endDate,
+          dayRateOverride: l.dayRateOverride || undefined,
+          displayNotes: l.displayNotes || undefined,
+        })),
       });
       navigate(`/orders?highlight=${data.id}`);
     } catch (err) {
@@ -147,8 +156,12 @@ export default function NewBooking() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-slate-800 mb-1">New Booking / Quotation</h1>
-      <p className="text-sm text-slate-500 mb-5">Add multiple sites for one client — price updates live</p>
+      <h1 className="text-2xl font-bold text-slate-800 mb-1">{quotationMode ? 'New Quotation' : 'New Booking / Quotation'}</h1>
+      <p className="text-sm text-slate-500 mb-5">
+        {quotationMode
+          ? 'Build a client quotation from vacant sites — nothing is held until you confirm it'
+          : 'Add multiple sites for one client — price updates live'}
+      </p>
 
       {error && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</div>}
 
@@ -182,9 +195,18 @@ export default function NewBooking() {
                 <input type="date" className="input" value={form.defaultEnd} onChange={(e) => set('defaultEnd', e.target.value)} />
               </div>
             </div>
-            <div>
-              <label className="label">Description</label>
-              <input className="input" placeholder="e.g. Summer campaign — Diwali promo" value={form.description} onChange={(e) => set('description', e.target.value)} />
+            <div className="grid sm:grid-cols-3 gap-4">
+              <div>
+                <label className="label">Category</label>
+                <select className="input" value={form.categoryId} onChange={(e) => set('categoryId', e.target.value)}>
+                  <option value="">Uncategorised</option>
+                  {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="label">Description</label>
+                <input className="input" placeholder="e.g. Summer campaign — Diwali promo" value={form.description} onChange={(e) => set('description', e.target.value)} />
+              </div>
             </div>
           </div>
 
@@ -219,6 +241,11 @@ export default function NewBooking() {
                         <div><div className="text-[10px] text-slate-400 mb-0.5">End</div><input type="date" className="input py-1 text-xs" value={l.endDate} onChange={(e) => updateLine(i, 'endDate', e.target.value)} /></div>
                         <div><div className="text-[10px] text-slate-400 mb-0.5">Day Rate</div><input type="number" className="input py-1 text-xs" placeholder={s ? String(Math.round(s.monthlyRate / 30)) : ''} value={l.dayRateOverride} onChange={(e) => updateLine(i, 'dayRateOverride', e.target.value)} /></div>
                         <div><div className="text-[10px] text-slate-400 mb-0.5">Days</div><div className="input py-1 text-xs bg-slate-50">{days > 0 ? days : '—'}</div></div>
+                      </div>
+                      <div className="mt-2">
+                        <div className="text-[10px] text-slate-400 mb-0.5">Display notes <span className="text-slate-300">(prints on the billing plan)</span></div>
+                        <input className="input py-1 text-xs" placeholder="e.g. Facing the highway exit — client wants it lit"
+                          value={l.displayNotes || ''} onChange={(e) => updateLine(i, 'displayNotes', e.target.value)} />
                       </div>
                     </div>
                   );
@@ -377,12 +404,25 @@ export default function NewBooking() {
                 </div>
               </dl>
             )}
-            <button className="btn-primary w-full mt-4" disabled={busy || !quote} onClick={() => submit('CONFIRMED')}>
-              {busy ? 'Saving…' : '✓ Confirm Booking'}
-            </button>
-            <button className="btn-accent w-full mt-2" disabled={busy || !quote} onClick={() => submit('QUOTATION')}>
-              💾 Save as Quotation
-            </button>
+            {quotationMode ? (
+              <>
+                <button className="btn-primary w-full mt-4" disabled={busy || !quote} onClick={() => submit('QUOTATION')}>
+                  {busy ? 'Saving…' : '💾 Save as Quotation'}
+                </button>
+                <button className="btn-accent w-full mt-2" disabled={busy || !quote} onClick={() => submit('CONFIRMED')}>
+                  ✓ Confirm Booking instead
+                </button>
+              </>
+            ) : (
+              <>
+                <button className="btn-primary w-full mt-4" disabled={busy || !quote} onClick={() => submit('CONFIRMED')}>
+                  {busy ? 'Saving…' : '✓ Confirm Booking'}
+                </button>
+                <button className="btn-accent w-full mt-2" disabled={busy || !quote} onClick={() => submit('QUOTATION')}>
+                  💾 Save as Quotation
+                </button>
+              </>
+            )}
             <button type="button" className="btn-ghost w-full mt-2" onClick={() => navigate(-1)}>Cancel</button>
           </div>
         </div>

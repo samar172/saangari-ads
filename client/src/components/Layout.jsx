@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth, can } from '../auth';
-import api from '../api';
+import NotificationBar from './NotificationBar';
 
 const NAV = [
   { to: '/', label: 'Inventory', icon: '🗺️', show: () => true },
@@ -10,6 +10,7 @@ const NAV = [
   { to: '/reminders', label: 'Reminders', icon: '🔔', show: () => true, badge: true },
   { to: '/clients', label: 'Clients', icon: '👥', show: () => true },
   { to: '/printing-partners', label: 'Printing Partners', icon: '🖨️', show: () => true },
+  { to: '/categories', label: 'Categories', icon: '🏷️', show: (u) => can(u, 'manageCategories') },
   { to: '/invoices', label: 'Invoices', icon: '🧾', show: (u) => can(u, 'viewInvoices') },
   { to: '/reports', label: 'Reports', icon: '📊', show: (u) => can(u, 'viewReports') },
   { to: '/users', label: 'Users', icon: '⚙️', show: (u) => u.role === 'SUPER_ADMIN' },
@@ -23,15 +24,8 @@ const ROLE_LABEL = {
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  // The notification bar already polls; reuse its critical+pending tally for the badge.
   const [dueCount, setDueCount] = useState(0);
-
-  useEffect(() => {
-    let alive = true;
-    const load = () => api.get('/reminders/count').then((r) => alive && setDueCount(r.data.count)).catch(() => {});
-    load();
-    const t = setInterval(load, 60000);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
 
   return (
     <div className="flex min-h-screen">
@@ -74,7 +68,10 @@ export default function Layout({ children }) {
         </div>
       </aside>
       <main className="flex-1 overflow-x-hidden">
-        <div className="mx-auto max-w-7xl p-6">{children}</div>
+        <div className="mx-auto max-w-7xl p-6">
+          <NotificationBar onCount={setDueCount} />
+          {children}
+        </div>
       </main>
     </div>
   );

@@ -4,6 +4,7 @@ const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
 const { nextInvoiceNo } = require('../utils/counters');
 const { GST_RATE } = require('../utils/pricing');
+const { writeLineNotes } = require('../utils/pdf');
 
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
 
@@ -18,8 +19,9 @@ router.get('/', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
   res.json(invoices);
 });
 
-// Generate a tax invoice for an order. Blocked until at least one monitoring photo
-// exists on any line (proof-of-display gate).
+// Generate a tax invoice for an order. Blocked until at least one monitoring
+// photo exists on any line (proof-of-display gate) — but purely loose orders
+// are 1–2 day displays with no monitoring cycle, so they invoice straight away.
 router.post('/', requireRole('FINANCE'), async (req, res) => {
   const { orderId } = req.body || {};
   const order = await prisma.order.findUnique({
@@ -27,8 +29,10 @@ router.post('/', requireRole('FINANCE'), async (req, res) => {
     include: { client: true, items: { include: { photos: true } } },
   });
   if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  const hasRegularLine = order.items.some((it) => it.type === 'REGULAR');
   const photoCount = order.items.reduce((n, it) => n + it.photos.length, 0);
-  if (photoCount === 0)
+  if (hasRegularLine && photoCount === 0)
     return res.status(422).json({ error: 'Cannot invoice: no monitoring photo uploaded yet (proof-of-display required).' });
 
   const taxCategory = order.taxCategory;
@@ -102,13 +106,14 @@ router.get('/:id/pdf', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
   doc.fillColor('#333').font('Helvetica');
   for (const it of order.items) {
     const period = `${new Date(it.startDate).toLocaleDateString('en-IN')}–${new Date(it.endDate).toLocaleDateString('en-IN')}`;
-    doc.fontSize(8)
+    doc.font('Helvetica').fillColor('#333').fontSize(8)
       .text(it.site.code, x.code, y, { width: 60 })
       .text(it.site.location, x.loc, y, { width: 185 })
       .text(period, x.period, y, { width: 115 })
       .text(String(it.days), x.days, y, { width: 40 })
       .text(INR(it.subtotal), x.amt, y, { width: 80, align: 'right' });
     y += Math.max(16, doc.heightOfString(it.site.location, { width: 185, fontSize: 8 }));
+    y = writeLineNotes(doc, it, x.loc, y);
     if (y > 720) { doc.addPage(); y = 60; }
   }
 

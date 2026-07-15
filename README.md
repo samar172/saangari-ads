@@ -10,16 +10,35 @@ role-based analytics.
 
 ## Key concepts
 - **Order (quotation):** one client, many site line-items, plus order-level
-  printing (partner · no. of prints · rate), mounting (30-day), add-ons,
-  description and booking date. Save as a **Quotation** (downloadable PDF) or
-  **Confirm** directly. One tax invoice per order.
+  **category** (see below), printing (partner · no. of prints · rate),
+  mounting (30-day), add-ons, description and booking date. Save as a
+  **Quotation** (downloadable PDF) or **Confirm** directly. One tax invoice per
+  order.
+- **Book from the grid:** on the Inventory dashboard, **Select sites** turns the
+  tiles into checkboxes; pick several and the action bar takes them straight to
+  a booking or quotation. There's also a **Vacant only** filter and a
+  **Quotation** shortcut in the toolbar.
+- **Categories:** the client maintains their own booking categories (Institute,
+  Hospital, Coaching, Events, …) on the **Categories** page (Manager). The
+  dropdown appears on the booking form; revenue-by-category shows in Reports.
 - **GST:** intra-state orders split tax into CGST 9% + SGST 9%; inter-state use
   IGST 18%. Reports break down tax collected.
-- **Monitoring reminders:** ticking Monitoring → Start / Mid / End creates in-app
-  reminders on each phase's date (bell badge + Reminders page). Uploading the
-  Ops photo for a phase auto-closes its reminder.
-- **Payments:** record part-payments per order (Payments tab); balance due and
-  client ledger update automatically.
+- **Monitoring — 9 proofs:** each phase (Start / Mid / End) needs three photos —
+  **GPS, normal and newspaper** — shown as a 3×3 grid per site. A phase reminder
+  only clears once every monitored line has all three; re-uploading a
+  (phase, kind) replaces the old file. Loose bookings skip the proof-of-display
+  gate entirely.
+- **Notification centre:** a bar at the top of every page rolls monitoring
+  reminders and outstanding payments into one colour-coded feed
+  (🔴 critical · 🟡 pending · 🔵 non-critical); clicking an item opens the order.
+- **Payments & TDS:** record part-payments per order (Payments tab). If the
+  client deducts **TDS** at source, tick it and pick the rate — the order is
+  credited the gross (TDS is remitted to the government on the client's behalf)
+  while *net received* records what hit the bank. Reports show total TDS.
+- **Line operations:** per site line you can add **display notes** (printed on
+  the quotation + invoice), **shift** the booking to another vacant site (same
+  dates/price, audited), or **stop** the display immediately — which frees the
+  site and re-prices the order to bill only the days actually run.
 
 ## Stack
 - **Backend:** Node.js + Express + Prisma + PostgreSQL
@@ -62,8 +81,9 @@ Open http://localhost:5173 and sign in with a demo account (see below).
 ## Key business rules (from the client's process flow)
 - **Booking types:** *Regular* only allows available sites; *Loose* allows any
   site and parks conflicts as **WAITLIST** (manually released later).
-- **Proof-of-display gate:** an invoice cannot be generated until at least one
-  Ops monitoring photo is uploaded for the booking.
+- **Proof-of-display gate:** a Regular order cannot be invoiced until at least
+  one monitoring photo exists. Purely *Loose* orders (1–2 day displays with no
+  monitoring cycle) invoice immediately.
 - **Invoice numbering:** separate GST (`GST/FY/nnnn`) and Non-GST (`NGST/FY/nnnn`)
   sequences, per financial year (Apr–Mar).
 - **Site state machine:** AVAILABLE → TENTATIVE → BOOKED → (LIVE once photo'd).

@@ -1,30 +1,65 @@
 const router = require('express').Router();
 const dayjs = require('dayjs');
 const PDFDocument = require('pdfkit');
+const { Prisma } = require('@prisma/client');
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
-const { computeOrder } = require('../utils/pricing');
+const { computeOrder, computeLine, recomputeOrderTotals } = require('../utils/pricing');
 const { nextOrderNo, nextBookingNo } = require('../utils/counters');
+const { writeLineNotes } = require('../utils/pdf');
 
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
 const ACTIVE = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
 
-// Detect an overlapping active booking on a site (ignoring a given order's own lines).
-async function findConflict(siteId, startDate, endDate, excludeOrderId) {
-  return prisma.booking.findFirst({
+// Detect an overlapping active booking on a site.
+// `db` is the prisma client or an active transaction — pass the tx so the check
+// and the insert that follows it are atomic under a site-row lock (see
+// lockSites), which is what actually stops two concurrent bookings racing.
+// When shifting, exclude only the line being moved — a sibling line of the same
+// order sitting on the target is still a real clash.
+//
+// endDate is the *exclusive* take-down day: a booking [Aug 9, Oct 9) occupies
+// Aug 9…Oct 8, so a new booking starting Oct 9 does NOT overlap. Hence strict
+// inequalities — two bookings truly clash iff existing.start < new.end AND
+// existing.end > new.start. Using lte/gte here would wrongly reject legitimate
+// back-to-back bookings that share the take-down day.
+async function findConflict(db, siteId, startDate, endDate, { excludeOrderId, excludeBookingId } = {}) {
+  return db.booking.findFirst({
     where: {
       siteId,
-      orderId: excludeOrderId ? { not: excludeOrderId } : undefined,
+      ...(excludeOrderId ? { orderId: { not: excludeOrderId } } : {}),
+      ...(excludeBookingId ? { id: { not: excludeBookingId } } : {}),
       status: { in: ACTIVE },
-      startDate: { lte: new Date(endDate) },
-      endDate: { gte: new Date(startDate) },
+      startDate: { lt: new Date(endDate) },
+      endDate: { gt: new Date(startDate) },
     },
     include: { order: { include: { client: { select: { name: true } } } } },
   });
 }
 
+// Two date ranges overlap on the same site, exclusive end (mirrors findConflict).
+function rangesOverlap(startA, endA, startB, endB) {
+  return new Date(startA) < new Date(endB) && new Date(endA) > new Date(startB);
+}
+
+// Serialize concurrent bookings on the same physical sites: take a row lock on
+// the Site rows up front so a second transaction touching any of the same sites
+// blocks until this one commits. Without it, two overlapping bookings can both
+// pass findConflict (time-of-check) before either inserts (time-of-use).
+async function lockSites(tx, siteIds) {
+  const ids = [...new Set(siteIds.map(Number))].filter(Number.isInteger);
+  if (ids.length === 0) return;
+  await tx.$queryRaw`SELECT id FROM "Site" WHERE id IN (${Prisma.join(ids)}) FOR UPDATE`;
+}
+
+// Thrown inside a booking transaction when a REGULAR line clashes; mapped to 409.
+class BookingConflict extends Error {
+  constructor(message) { super(message); this.status = 409; }
+}
+
 const orderInclude = {
   client: true,
+  category: true,
   createdBy: { select: { id: true, name: true } },
   printingPartner: true,
   addOns: true,
@@ -35,9 +70,39 @@ const orderInclude = {
     include: {
       site: true,
       photos: { include: { uploadedBy: { select: { name: true } } }, orderBy: { takenAt: 'asc' } },
+      shifts: {
+        orderBy: { shiftedAt: 'desc' },
+        include: {
+          fromSite: { select: { code: true, location: true } },
+          toSite: { select: { code: true, location: true } },
+          by: { select: { name: true } },
+        },
+      },
     },
   },
 };
+
+// Release a site back to AVAILABLE unless another live booking still holds it.
+async function releaseSite(tx, siteId, exceptBookingId) {
+  const stillHeld = await tx.booking.findFirst({
+    where: { siteId, status: { in: ACTIVE }, id: exceptBookingId ? { not: exceptBookingId } : undefined },
+  });
+  if (!stillHeld) await tx.site.update({ where: { id: siteId }, data: { status: 'AVAILABLE' } });
+}
+
+// Re-price the order from its saved lines (dates change when a line is stopped
+// or shifted, so the stored order totals go stale).
+async function repriceOrder(tx, orderId) {
+  const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
+  const t = recomputeOrderTotals(order, order.items);
+  await tx.order.update({
+    where: { id: orderId },
+    data: {
+      rentalSubtotal: t.rentalSubtotal, discountAmount: t.discountAmount, taxableAmount: t.taxableAmount,
+      cgst: t.cgst, sgst: t.sgst, igst: t.igst, gstAmount: t.gstAmount, grandTotal: t.grandTotal,
+    },
+  });
+}
 
 function withDerived(order) {
   const paid = (order.payments || []).reduce((s, p) => s + p.amount, 0);
@@ -57,6 +122,7 @@ router.get('/', async (req, res) => {
     orderBy: { createdAt: 'desc' },
     include: {
       client: { select: { id: true, name: true, phone: true, taxCategory: true } },
+      category: { select: { id: true, name: true } },
       createdBy: { select: { id: true, name: true } },
       items: { select: { id: true, siteId: true, status: true, site: { select: { code: true } }, photos: { select: { id: true } } } },
       payments: { select: { amount: true } },
@@ -111,7 +177,7 @@ async function priceFromBody(body) {
 router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const body = req.body || {};
   const {
-    clientId, items = [], type = 'REGULAR', bookingDate, description,
+    clientId, categoryId, items = [], type = 'REGULAR', bookingDate, description,
     printingPartnerId, noOfPrints = 0, printRate = 0, mountingCost = 0,
     monitoring = false, monitorStart = false, monitorMid = false, monitorEnd = false,
     taxCategory = 'NON_GST', interState = false, placeOfSupply,
@@ -129,17 +195,20 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
   try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, taxCategory, interState }); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
-  // Conflict check per line
-  const lineStatus = {};
-  for (const it of items) {
-    const conflict = await findConflict(Number(it.siteId), it.startDate, it.endDate);
-    if (conflict && type === 'REGULAR')
-      return res.status(409).json({ error: `${priced.sites[Number(it.siteId)]?.code || 'Site'} is already booked for these dates by ${conflict.order.client.name}. Use a Loose booking to waitlist.` });
-    lineStatus[it.siteId] = conflict && type === 'LOOSE' ? 'WAITLIST' : (status === 'CONFIRMED' ? 'CONFIRMED' : 'TENTATIVE');
+  // Reject a request that double-books the same site against itself: two lines
+  // on one site with overlapping dates would each pass the DB conflict check
+  // (neither is persisted yet), so guard it here before we touch the database.
+  for (let a = 0; a < items.length; a++) {
+    for (let b = a + 1; b < items.length; b++) {
+      if (Number(items[a].siteId) !== Number(items[b].siteId)) continue;
+      if (rangesOverlap(items[a].startDate, items[a].endDate, items[b].startDate, items[b].endDate)) {
+        const code = priced.sites[Number(items[a].siteId)]?.code || 'A site';
+        return res.status(409).json({ error: `${code} appears twice with overlapping dates in this order.` });
+      }
+    }
   }
 
   const r = priced.result;
-  const orderNo = await nextOrderNo();
 
   // Reminder due dates from the campaign envelope
   const starts = items.map((i) => dayjs(i.startDate));
@@ -154,10 +223,27 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
     if (monitorEnd) reminders.push({ phase: 'END', dueDate: maxEnd.toDate() });
   }
 
-  const order = await prisma.$transaction(async (tx) => {
+  let order;
+  try {
+    order = await prisma.$transaction(async (tx) => {
+    // Lock the involved sites, then re-check conflicts inside the transaction so
+    // a concurrent booking on the same site can't slip between check and insert.
+    await lockSites(tx, items.map((i) => i.siteId));
+    const lineStatus = {};
+    for (const it of items) {
+      const conflict = await findConflict(tx, Number(it.siteId), it.startDate, it.endDate);
+      if (conflict && type === 'REGULAR')
+        throw new BookingConflict(`${priced.sites[Number(it.siteId)]?.code || 'Site'} is already booked for these dates by ${conflict.order.client.name}. Use a Loose booking to waitlist.`);
+      lineStatus[it.siteId] = conflict && type === 'LOOSE' ? 'WAITLIST' : (status === 'CONFIRMED' ? 'CONFIRMED' : 'TENTATIVE');
+    }
+
+    // Allocate the order number only after the checks pass, so a rejected
+    // booking doesn't burn a number and leave a gap in the SO- sequence.
+    const orderNo = await nextOrderNo();
     const created = await tx.order.create({
       data: {
         orderNo, clientId: Number(clientId), createdById: req.user.id,
+        categoryId: categoryId ? Number(categoryId) : null,
         status: status === 'CONFIRMED' ? 'CONFIRMED' : 'QUOTATION',
         bookingDate: bookingDate ? new Date(bookingDate) : new Date(),
         description,
@@ -178,13 +264,15 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
     for (const line of r.lines) {
       const bookingNo = await nextBookingNo();
       const st = lineStatus[line.siteId];
+      const src = items.find((i) => Number(i.siteId) === line.siteId);
       await tx.booking.create({
         data: {
           bookingNo, orderId: created.id, siteId: line.siteId, type,
           status: st,
-          startDate: new Date(items.find((i) => Number(i.siteId) === line.siteId).startDate),
-          endDate: new Date(items.find((i) => Number(i.siteId) === line.siteId).endDate),
+          startDate: new Date(src.startDate),
+          endDate: new Date(src.endDate),
           days: line.days, dayRate: line.dayRate, subtotal: line.subtotal,
+          displayNotes: src.displayNotes || null,
         },
       });
       // Reflect hold on the tile
@@ -193,7 +281,11 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
     }
 
     return tx.order.findUnique({ where: { id: created.id }, include: orderInclude });
-  });
+    });
+  } catch (e) {
+    if (e instanceof BookingConflict) return res.status(409).json({ error: e.message });
+    throw e;
+  }
 
   res.status(201).json(withDerived(order));
 });
@@ -212,6 +304,8 @@ router.post('/:id/status', requireRole('SALES', 'MANAGER', 'FINANCE'), async (re
     await tx.order.update({ where: { id }, data: { status } });
     if (lineFor[status]) {
       for (const line of order.items) {
+        // A stopped line is finished — never drag it back into the order's status
+        if (line.status === 'STOPPED') continue;
         // Leave waitlisted lines alone unless we're cancelling/completing the order
         if (line.status === 'WAITLIST' && !['CANCELLED', 'COMPLETED'].includes(status)) continue;
         await tx.booking.update({ where: { id: line.id }, data: { status: lineFor[status] } });
@@ -225,25 +319,143 @@ router.post('/:id/status', requireRole('SALES', 'MANAGER', 'FINANCE'), async (re
 });
 
 // Record a payment received against the order (credits the client ledger).
+// `amount` is the gross settled against the order. Where the client deducts TDS
+// at source they remit it to the government on our behalf, so the order is
+// still credited the full gross; `netReceived` is what reached the bank.
 router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (req, res) => {
   const id = Number(req.params.id);
-  const { amount, mode = 'CASH', reference, notes } = req.body || {};
+  const { amount, mode = 'CASH', reference, notes, tdsApplicable = false, tdsPct = 0 } = req.body || {};
   const order = await prisma.order.findUnique({ where: { id } });
   if (!order) return res.status(404).json({ error: 'Order not found' });
-  if (!amount || Number(amount) <= 0) return res.status(400).json({ error: 'Amount must be greater than zero' });
 
-  const payment = await prisma.payment.create({
-    data: {
-      orderId: id, clientId: order.clientId, amount: Number(amount), mode,
-      reference, notes, recordedById: req.user.id,
-    },
-  });
-  await prisma.ledgerEntry.create({
-    data: { clientId: order.clientId, type: 'CREDIT', amount: Number(amount), narration: `Payment received · ${order.orderNo}${reference ? ' · ' + reference : ''}` },
+  const gross = Number(amount);
+  if (!gross || gross <= 0) return res.status(400).json({ error: 'Amount must be greater than zero' });
+
+  const pct = tdsApplicable ? Number(tdsPct) || 0 : 0;
+  if (pct < 0 || pct > 100) return res.status(400).json({ error: 'TDS rate must be between 0 and 100' });
+  const tdsAmount = Math.round(gross * pct / 100);
+  const netReceived = gross - tdsAmount;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.payment.create({
+      data: {
+        orderId: id, clientId: order.clientId, amount: gross, mode,
+        tdsApplicable: !!tdsApplicable && pct > 0, tdsPct: pct, tdsAmount, netReceived,
+        reference, notes, recordedById: req.user.id,
+      },
+    });
+    const tdsNote = tdsAmount ? ` · TDS ${pct}% ₹${tdsAmount.toLocaleString('en-IN')} deducted` : '';
+    await tx.ledgerEntry.create({
+      data: {
+        clientId: order.clientId, type: 'CREDIT', amount: gross,
+        narration: `Payment received · ${order.orderNo}${reference ? ' · ' + reference : ''}${tdsNote}`,
+      },
+    });
   });
 
   const full = await prisma.order.findUnique({ where: { id }, include: orderInclude });
   res.status(201).json(withDerived(full));
+});
+
+// ── Line-item operations ────────────────────────────────────────────────────
+
+// Edit a line's display notes (they print on the quotation + invoice).
+router.patch('/:id/items/:lineId', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) => {
+  const { displayNotes } = req.body || {};
+  const line = await prisma.booking.findUnique({ where: { id: Number(req.params.lineId) } });
+  if (!line || line.orderId !== Number(req.params.id)) return res.status(404).json({ error: 'Line not found on this order' });
+
+  await prisma.booking.update({
+    where: { id: line.id },
+    data: { displayNotes: displayNotes === '' ? null : displayNotes },
+  });
+  const full = await prisma.order.findUnique({ where: { id: line.orderId }, include: orderInclude });
+  res.json(withDerived(full));
+});
+
+// Shift a live line onto a different site, keeping the same dates and price.
+router.post('/:id/items/:lineId/shift', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const { toSiteId, reason } = req.body || {};
+  const orderId = Number(req.params.id);
+  const line = await prisma.booking.findUnique({ where: { id: Number(req.params.lineId) } });
+  if (!line || line.orderId !== orderId) return res.status(404).json({ error: 'Line not found on this order' });
+  if (['COMPLETED', 'CANCELLED', 'STOPPED'].includes(line.status))
+    return res.status(422).json({ error: `A ${line.status.toLowerCase()} line cannot be shifted` });
+
+  const target = Number(toSiteId);
+  if (!target) return res.status(400).json({ error: 'Target site is required' });
+  if (target === line.siteId) return res.status(400).json({ error: 'The line is already on that site' });
+
+  const site = await prisma.site.findUnique({ where: { id: target } });
+  if (!site) return res.status(404).json({ error: 'Target site not found' });
+
+  // Moving a waitlisted line onto a free site is how a waitlist gets resolved,
+  // so promote it rather than leaving the site BOOKED under a WAITLIST line.
+  const status = line.status === 'WAITLIST' ? 'CONFIRMED' : line.status;
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Lock the target site and re-check the clash inside the transaction, so a
+      // concurrent booking on that site can't land between check and move.
+      await lockSites(tx, [target]);
+      const conflict = await findConflict(tx, target, line.startDate, line.endDate, { excludeBookingId: line.id });
+      if (conflict)
+        throw new BookingConflict(`${site.code} is already booked for these dates by ${conflict.order.client.name}`);
+
+      const fromSiteId = line.siteId;
+      await tx.booking.update({ where: { id: line.id }, data: { siteId: target, status } });
+      await tx.siteShift.create({
+        data: { bookingId: line.id, fromSiteId, toSiteId: target, reason: reason || null, byId: req.user.id },
+      });
+      await releaseSite(tx, fromSiteId, line.id);
+      await tx.site.update({
+        where: { id: target },
+        data: { status: status === 'TENTATIVE' ? 'TENTATIVE' : 'BOOKED' },
+      });
+    });
+  } catch (e) {
+    if (e instanceof BookingConflict) return res.status(409).json({ error: e.message });
+    throw e;
+  }
+
+  const full = await prisma.order.findUnique({ where: { id: orderId }, include: orderInclude });
+  res.json(withDerived(full));
+});
+
+// Stop a display immediately: bill only the days it actually ran, free the site.
+router.post('/:id/items/:lineId/stop', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const { reason } = req.body || {};
+  const orderId = Number(req.params.id);
+  const line = await prisma.booking.findUnique({ where: { id: Number(req.params.lineId) }, include: { site: true } });
+  if (!line || line.orderId !== orderId) return res.status(404).json({ error: 'Line not found on this order' });
+  if (['COMPLETED', 'CANCELLED', 'STOPPED'].includes(line.status))
+    return res.status(422).json({ error: `This line is already ${line.status.toLowerCase()}` });
+
+  // End today, but never before it started — a same-day stop still bills 1 day.
+  const today = dayjs().startOf('day');
+  const start = dayjs(line.startDate).startOf('day');
+  const endDate = today.isBefore(start) ? start : today;
+  const priced = computeLine({
+    monthlyRate: line.site.monthlyRate,
+    startDate: line.startDate,
+    endDate: endDate.toDate(),
+    dayRateOverride: line.dayRate,
+  });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.booking.update({
+      where: { id: line.id },
+      data: {
+        status: 'STOPPED', stoppedAt: new Date(), stopReason: reason || null,
+        endDate: endDate.toDate(), days: priced.days, subtotal: priced.subtotal,
+      },
+    });
+    await releaseSite(tx, line.siteId, line.id);
+    await repriceOrder(tx, orderId);
+  });
+
+  const full = await prisma.order.findUnique({ where: { id: orderId }, include: orderInclude });
+  res.json(withDerived(full));
 });
 
 // Quotation PDF for the client
@@ -269,6 +481,7 @@ router.get('/:id/quotation.pdf', async (req, res) => {
   if (order.client.company) doc.text(order.client.company);
   doc.text(`Phone: ${order.client.phone}`);
   if (order.client.gstNumber) doc.text(`GSTIN: ${order.client.gstNumber}`);
+  if (order.category) { doc.moveDown(0.5); doc.fillColor('#000').text('Category: ', { continued: true }).fillColor('#333').text(order.category.name); }
   if (order.description) { doc.moveDown(0.5); doc.fillColor('#000').text('Description: ', { continued: true }).fillColor('#333').text(order.description); }
 
   doc.moveDown();
@@ -284,13 +497,14 @@ router.get('/:id/quotation.pdf', async (req, res) => {
   doc.fillColor('#333').font('Helvetica');
   for (const it of order.items) {
     const period = `${new Date(it.startDate).toLocaleDateString('en-IN')}–${new Date(it.endDate).toLocaleDateString('en-IN')}`;
-    doc.fontSize(8)
+    doc.font('Helvetica').fillColor('#333').fontSize(8)
       .text(it.site.code, x.code, y, { width: 60 })
       .text(it.site.location, x.loc, y, { width: 185 })
       .text(period, x.period, y, { width: 115 })
       .text(String(it.days), x.days, y, { width: 40 })
       .text(INR(it.subtotal), x.amt, y, { width: 80, align: 'right' });
     y += Math.max(16, doc.heightOfString(it.site.location, { width: 185, fontSize: 8 }));
+    y = writeLineNotes(doc, it, x.loc, y);
     if (y > 720) { doc.addPage(); y = 60; }
   }
 

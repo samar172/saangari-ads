@@ -43,6 +43,8 @@ export function can(user, action) {
     viewInvoices: ['FINANCE', 'MANAGER'],
     manageLedger: ['FINANCE'],
     managePartners: ['MANAGER', 'FINANCE'],
+    manageCategories: ['MANAGER'],
+    shiftOrStopBooking: ['MANAGER', 'FINANCE'],
     exportInventory: ['MANAGER', 'FINANCE'],
     viewReports: ['MANAGER', 'FINANCE'],
     manageUsers: [],

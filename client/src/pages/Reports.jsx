@@ -39,11 +39,34 @@ export default function Reports() {
         <StatTile label="Clients" value={overview.totalClients} sub={`${overview.repeatClients} repeat`} />
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <StatTile label="Top Category" value={overview.topCategory || '—'} accent="text-brand" />
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+        <StatTile label="Top Media Type" value={overview.topCategory || '—'} accent="text-brand" />
         <StatTile label="GST Collected" value={<Money value={overview.gstCollected} />} />
         <StatTile label="CGST + SGST" value={<Money value={overview.cgst + overview.sgst} />} sub="intra-state" />
         <StatTile label="IGST" value={<Money value={overview.igst} />} sub="inter-state" />
+        <StatTile label="TDS Deducted" value={<Money value={overview.tdsDeducted || 0} />} accent="text-indigo-600" sub={`${'₹' + Number(overview.netReceived || 0).toLocaleString('en-IN')} net in bank`} />
+      </div>
+
+      <div className="card p-5 mb-5">
+        <h2 className="font-semibold text-slate-700 mb-3">Revenue by Booking Category</h2>
+        {Object.keys(overview.revenueByCategory || {}).length === 0 ? (
+          <div className="text-sm text-slate-400">No categorised orders yet.</div>
+        ) : (
+          <div className="space-y-2">
+            {Object.entries(overview.revenueByCategory).sort((a, b) => b[1] - a[1]).map(([name, value], i) => {
+              const max = Math.max(...Object.values(overview.revenueByCategory));
+              return (
+                <div key={name} className="flex items-center gap-3">
+                  <div className="w-32 shrink-0 text-sm text-slate-600 truncate">{name}</div>
+                  <div className="flex-1 h-5 rounded bg-slate-100 overflow-hidden">
+                    <div className="h-full rounded" style={{ width: `${max ? (value / max) * 100 : 0}%`, background: COLORS[i % COLORS.length] }} />
+                  </div>
+                  <div className="w-28 text-right text-sm font-medium text-slate-800"><Money value={value} /></div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-2 gap-5 mb-5">
@@ -70,7 +93,7 @@ export default function Reports() {
         </div>
 
         <div className="card p-5">
-          <h2 className="font-semibold text-slate-700 mb-3">Revenue by Category</h2>
+          <h2 className="font-semibold text-slate-700 mb-3">Revenue by Media Type</h2>
           <ResponsiveContainer width="100%" height={260}>
             <PieChart>
               <Pie data={revByType} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={(e) => e.name}>

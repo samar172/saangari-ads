@@ -12,13 +12,17 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
     prisma.site.groupBy({ by: ['type'], where: { active: true }, _count: { _all: true } }),
     prisma.order.findMany({
       where: { status: NON_CANCELLED },
-      select: { id: true, clientId: true, grandTotal: true, taxableAmount: true, cgst: true, sgst: true, igst: true, gstAmount: true, status: true },
+      select: {
+        id: true, clientId: true, grandTotal: true, taxableAmount: true,
+        cgst: true, sgst: true, igst: true, gstAmount: true, status: true,
+        category: { select: { name: true } },
+      },
     }),
     prisma.booking.findMany({
       where: { status: NON_CANCELLED },
       select: { subtotal: true, site: { select: { type: true, zone: true } } },
     }),
-    prisma.payment.aggregate({ _sum: { amount: true } }),
+    prisma.payment.aggregate({ _sum: { amount: true, tdsAmount: true, netReceived: true } }),
     prisma.client.count(),
   ]);
 
@@ -27,7 +31,10 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   const occupancy = siteCount ? Math.round((booked / siteCount) * 100) : 0;
 
   const bookedValue = orders.reduce((s, o) => s + o.grandTotal, 0);
+  // Payments credit the gross; TDS is the slice the client remitted to the government.
   const paidRevenue = payments._sum.amount || 0;
+  const tdsDeducted = payments._sum.tdsAmount || 0;
+  const netReceived = payments._sum.netReceived || 0;
   const outstanding = Math.max(0, bookedValue - paidRevenue);
   const gstCollected = orders.reduce((s, o) => s + o.gstAmount, 0);
   const cgst = orders.reduce((s, o) => s + o.cgst, 0);
@@ -42,6 +49,13 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   }
   const topCategory = Object.entries(revByType).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
 
+  // Revenue by the client's booking category (institute, hospital, …)
+  const revByCategory = {};
+  for (const o of orders) {
+    const name = o.category?.name || 'Uncategorised';
+    revByCategory[name] = (revByCategory[name] || 0) + o.grandTotal;
+  }
+
   // Repeat clients (2+ orders)
   const perClient = {};
   for (const o of orders) perClient[o.clientId] = (perClient[o.clientId] || 0) + 1;
@@ -51,9 +65,11 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
     siteCount, occupancy, siteStatus: statusMap,
     siteByType: Object.fromEntries(byType.map((t) => [t.type, t._count._all])),
     bookedValue, paidRevenue, outstanding,
+    tdsDeducted, netReceived,
     gstCollected, cgst, sgst, igst,
     totalOrders: orders.length, totalBookings: lines.length, totalClients: clients, repeatClients,
     revenueByType: revByType, bookingsByType: cntByType, topCategory,
+    revenueByCategory: revByCategory,
   });
 });
 
