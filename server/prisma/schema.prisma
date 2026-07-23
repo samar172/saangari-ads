@@ -92,6 +92,12 @@ enum PaymentMode {
   CARD
 }
 
+// Whether the client pays up front (ADVANCE) or after the display runs (POSTPAID).
+enum PaymentTerms {
+  ADVANCE
+  POSTPAID
+}
+
 model User {
   id        Int      @id @default(autoincrement())
   name      String
@@ -141,7 +147,8 @@ model Category {
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  orders Order[]
+  orders  Order[]
+  clients Client[]
 }
 
 model Client {
@@ -155,6 +162,11 @@ model Client {
   state       String?     @default("Rajasthan")
   address     String?
   createdAt   DateTime    @default(now())
+
+  // The client's line of business (hospital, coaching, …). Orders inherit it, so
+  // the category is maintained once per client rather than picked per booking.
+  category   Category? @relation(fields: [categoryId], references: [id])
+  categoryId Int?
 
   orders   Order[]
   invoices Invoice[]
@@ -247,6 +259,7 @@ model Order {
   placeOfSupply String?     @default("Rajasthan")
 
   // Commercials (computed + stored)
+  paymentTerms    PaymentTerms @default(ADVANCE)
   discountPct     Float  @default(0)
   discountRemarks String?
   rentalSubtotal  Float  @default(0)

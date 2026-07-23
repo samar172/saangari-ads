@@ -16,7 +16,7 @@ router.get('/', async (req, res) => {
   const clients = await prisma.client.findMany({
     where,
     orderBy: { createdAt: 'desc' },
-    include: { _count: { select: { orders: true } } },
+    include: { category: true, _count: { select: { orders: true } } },
   });
   res.json(clients);
 });
@@ -25,6 +25,7 @@ router.get('/:id', async (req, res) => {
   const client = await prisma.client.findUnique({
     where: { id: Number(req.params.id) },
     include: {
+      category: true,
       orders: {
         orderBy: { createdAt: 'desc' },
         include: { items: { include: { site: { select: { code: true, location: true, type: true } } } }, invoices: true, payments: true },
@@ -39,11 +40,17 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, phone, email, company, gstNumber, taxCategory, address } = req.body || {};
+  const { name, phone, email, company, gstNumber, taxCategory, address, state, categoryId } = req.body || {};
   if (!name || !phone) return res.status(400).json({ error: 'Name and phone are required' });
   try {
     const client = await prisma.client.create({
-      data: { name, phone: String(phone).trim(), email, company, gstNumber, taxCategory: taxCategory || 'NON_GST', address },
+      data: {
+        name, phone: String(phone).trim(), email, company, gstNumber,
+        taxCategory: taxCategory || 'NON_GST', address,
+        ...(state ? { state } : {}),
+        categoryId: categoryId ? Number(categoryId) : null,
+      },
+      include: { category: true },
     });
     res.status(201).json(client);
   } catch (e) {
@@ -53,11 +60,22 @@ router.post('/', async (req, res) => {
 });
 
 router.patch('/:id', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
-  const { name, phone, email, company, gstNumber, taxCategory, address } = req.body || {};
-  const data = { name, phone, email, company, gstNumber, taxCategory, address };
+  const { name, phone, email, company, gstNumber, taxCategory, address, state, categoryId } = req.body || {};
+  const data = { name, phone, email, company, gstNumber, taxCategory, address, state };
   Object.keys(data).forEach((k) => data[k] === undefined && delete data[k]);
-  const client = await prisma.client.update({ where: { id: Number(req.params.id) }, data });
-  res.json(client);
+  // An empty string means "clear the category", which Prisma wants as null.
+  if (categoryId !== undefined) data.categoryId = categoryId ? Number(categoryId) : null;
+  try {
+    const client = await prisma.client.update({
+      where: { id: Number(req.params.id) },
+      data,
+      include: { category: true },
+    });
+    res.json(client);
+  } catch (e) {
+    if (e.code === 'P2002') return res.status(409).json({ error: 'A client with this phone number already exists' });
+    throw e;
+  }
 });
 
 // Record a payment (credit) against a client's ledger

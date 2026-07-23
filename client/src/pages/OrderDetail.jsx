@@ -36,36 +36,48 @@ export default function OrderDetail() {
           <h1 className="text-2xl font-bold text-slate-800">{o.orderNo}</h1>
           <p className="text-sm text-slate-500">{o.client.name}</p>
         </div>
-        <div className="flex gap-2 ml-4">
+        <div className="flex flex-wrap gap-2 sm:ml-4">
           <Badge status={o.status} />
           {o.items[0]?.type === 'LOOSE' && <span className="badge bg-purple-100 text-purple-800">Loose</span>}
           {o.category && <span className="badge bg-teal-100 text-teal-800 flex items-center gap-1"><Tag size={12} /> {o.category.name}</span>}
           <span className="badge bg-slate-100 text-slate-700">{o.taxCategory === 'GST' ? (o.interState ? 'IGST' : 'CGST+SGST') : 'Non-GST'}</span>
+          <span className={`badge ${o.paymentTerms === 'POSTPAID' ? 'bg-orange-100 text-orange-800' : 'bg-emerald-100 text-emerald-800'}`}>
+            {o.paymentTerms === 'POSTPAID' ? 'Postpaid' : 'Advance'}
+          </span>
         </div>
         <div className="flex-1" />
         <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/orders/${id}/quotation.pdf`, `Quotation-${o.orderNo}.pdf`)}><Download size={16} /> Quotation PDF</button>
       </div>
 
       <div className="card">
-        {/* Tabs */}
-        <div className="flex gap-1 border-b border-slate-200 px-2 pt-2 bg-slate-50/50 rounded-t-xl">
-          {[['overview', 'Overview'], ['sites', `Sites (${o.items.length})`], ['payments', `Payments`]].map(([k, l]) => (
-            <button key={k} onClick={() => setTab(k)}
-              className={`px-4 py-3 text-sm font-medium border-b-2 -mb-px transition ${tab === k ? 'border-brand text-brand bg-white rounded-t-lg' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{l}</button>
-          ))}
-        </div>
-
-        <div className="p-6">
-          {tab === 'overview' && <Overview o={o} user={user} busy={busy} changeStatus={changeStatus} />}
-          {tab === 'sites' && (
-            <div className="space-y-4">
-              {o.items.map((it) => <LineCard key={it.id} order={o} line={it} onChanged={load} />)}
-            </div>
-          )}
-          {tab === 'payments' && <Payments o={o} user={user} onChanged={load} />}
-        </div>
+        <OrderTabs o={o} user={user} busy={busy} changeStatus={changeStatus} onChanged={load} tab={tab} setTab={setTab} />
       </div>
     </div>
+  );
+}
+
+// The tabbed body of an order. Exported so the orders list can expand a row into
+// the exact same panel — one implementation, so the two can never drift apart.
+export function OrderTabs({ o, user, busy, changeStatus, onChanged, tab, setTab, compact }) {
+  return (
+    <>
+      <div className={`flex gap-1 overflow-x-auto border-b border-slate-200 px-2 pt-2 bg-slate-50/50 ${compact ? '' : 'rounded-t-xl'}`}>
+        {[['overview', 'Overview'], ['sites', `Sites (${o.items.length})`], ['payments', 'Payments']].map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`shrink-0 px-4 ${compact ? 'py-2 text-xs' : 'py-3 text-sm'} font-medium border-b-2 -mb-px transition ${tab === k ? 'border-brand text-brand bg-white rounded-t-lg' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{l}</button>
+        ))}
+      </div>
+
+      <div className={compact ? 'p-4' : 'p-6'}>
+        {tab === 'overview' && <Overview o={o} user={user} busy={busy} changeStatus={changeStatus} />}
+        {tab === 'sites' && (
+          <div className="space-y-4">
+            {o.items.map((it) => <LineCard key={it.id} order={o} line={it} onChanged={onChanged} />)}
+          </div>
+        )}
+        {tab === 'payments' && <Payments o={o} user={user} onChanged={onChanged} />}
+      </div>
+    </>
   );
 }
 
@@ -111,9 +123,22 @@ function Overview({ o, user, busy, changeStatus }) {
           {o.cgst > 0 && <Row k="CGST 9%"><Money value={o.cgst} /></Row>}
           {o.sgst > 0 && <Row k="SGST 9%"><Money value={o.sgst} /></Row>}
           {o.igst > 0 && <Row k="IGST 18%"><Money value={o.igst} /></Row>}
-          <div className="flex justify-between border-t border-slate-300 pt-3 mt-2 text-base font-bold text-brand"><span>Grand Total</span><Money value={o.grandTotal} /></div>
-          <div className="flex justify-between text-emerald-700 font-medium mt-2"><span>Paid</span><Money value={o.amountPaid} /></div>
-          <div className="flex justify-between font-bold text-red-600 mt-2"><span>Balance Due</span><Money value={o.balanceDue} /></div>
+          <div className="flex justify-between border-t border-slate-300 pt-3 mt-2 text-base font-bold text-brand">
+            <span>{o.receivable ? 'Grand Total' : 'Quoted Value'}</span><Money value={o.grandTotal} />
+          </div>
+          {/* A quotation owes nothing until it is confirmed, so no paid/balance rows. */}
+          {o.receivable ? (
+            <>
+              <div className="flex justify-between text-emerald-700 font-medium mt-2"><span>Paid</span><Money value={o.amountPaid} /></div>
+              <div className="flex justify-between font-bold text-red-600 mt-2"><span>Balance Due</span><Money value={o.balanceDue} /></div>
+            </>
+          ) : (
+            <div className="mt-2 text-xs text-slate-500">
+              {o.status === 'QUOTATION'
+                ? 'Not yet a receivable — confirm the quotation to bill and collect against it.'
+                : 'This order is cancelled; nothing is due.'}
+            </div>
+          )}
         </dl>
         {o.addOns?.length > 0 && (
           <div className="mt-4 text-xs text-slate-500 space-y-1">
@@ -133,7 +158,7 @@ function LineCard({ order, line, onChanged }) {
 
   return (
     <div className="rounded-xl border border-slate-200 p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-2 mb-3">
+      <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
         <div className="min-w-0">
           <span className="font-semibold text-slate-800 text-base">{line.bookingNo} · {line.site.code}</span>
           <span className="text-sm text-slate-500"> — {line.site.location}</span>
@@ -337,7 +362,7 @@ function PhotoSection({ booking, monitoring, onUploaded }) {
         onChange={handleFileSelect} 
       />
 
-      <div className={`grid grid-cols-[100px_repeat(3,minmax(0,1fr))] gap-2 mb-4 max-w-2xl ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
+      <div className={`grid grid-cols-[68px_repeat(3,minmax(0,1fr))] sm:grid-cols-[100px_repeat(3,minmax(0,1fr))] gap-2 mb-4 max-w-2xl ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
         <div />
         {PHASES.map((ph) => <div key={ph} className="text-xs font-semibold text-slate-500 text-center">{ph}</div>)}
         {KINDS.map(([k, label]) => (
@@ -414,9 +439,22 @@ function Payments({ o, user, onChanged }) {
   return (
     <div className="grid md:grid-cols-2 gap-8">
       <div>
-        <div className="flex justify-between text-base mb-2"><span className="text-slate-500">Grand Total</span><span className="font-semibold"><Money value={o.grandTotal} /></span></div>
-        <div className="flex justify-between text-base mb-2"><span className="text-slate-500">Paid</span><span className="text-emerald-700 font-semibold"><Money value={o.amountPaid} /></span></div>
-        <div className="flex justify-between text-base mb-5 border-t border-slate-200 pt-3"><span className="text-slate-500">Balance Due</span><span className="text-red-600 font-bold"><Money value={o.balanceDue} /></span></div>
+        <div className="flex justify-between text-base mb-2">
+          <span className="text-slate-500">{o.receivable ? 'Grand Total' : 'Quoted Value'}</span>
+          <span className="font-semibold"><Money value={o.grandTotal} /></span>
+        </div>
+        {o.receivable ? (
+          <>
+            <div className="flex justify-between text-base mb-2"><span className="text-slate-500">Paid</span><span className="text-emerald-700 font-semibold"><Money value={o.amountPaid} /></span></div>
+            <div className="flex justify-between text-base mb-5 border-t border-slate-200 pt-3"><span className="text-slate-500">Balance Due</span><span className="text-red-600 font-bold"><Money value={o.balanceDue} /></span></div>
+          </>
+        ) : (
+          <div className="mb-5 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700">
+            {o.status === 'QUOTATION'
+              ? 'Payments cannot be collected against a quotation. Confirm it first — otherwise the credit lands on the client’s ledger with nothing owed against it.'
+              : 'This order is cancelled; no payment can be recorded.'}
+          </div>
+        )}
 
         {o.payments.length === 0 ? <div className="text-sm text-slate-400">No payments recorded.</div> : (
           <div className="space-y-3">

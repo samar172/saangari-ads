@@ -25,7 +25,7 @@ export default function Reminders() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Monitoring Reminders</h1>
           <p className="text-sm text-slate-500">Upload the monitoring photo on each phase's date</p>

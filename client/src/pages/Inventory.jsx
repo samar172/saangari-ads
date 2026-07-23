@@ -166,8 +166,9 @@ export default function Inventory() {
 
       {hover && !selectMode && <HoverCard hover={hover} detail={detail} />}
 
+      {/* lg:left-60 clears the docked sidebar; on phones it is off-canvas so the bar spans full width */}
       {picked.length > 0 && (
-        <div className="fixed bottom-0 left-60 right-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur px-6 py-3 shadow-2xl">
+        <div className="fixed bottom-0 left-0 lg:left-60 right-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur px-4 sm:px-6 py-3 shadow-2xl">
           <div className="mx-auto max-w-7xl flex flex-wrap items-center gap-3">
             <span className="text-sm font-semibold text-slate-800">
               {picked.length} site{picked.length !== 1 ? 's' : ''} selected

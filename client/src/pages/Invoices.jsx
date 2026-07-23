@@ -24,13 +24,13 @@ export default function Invoices() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <h1 className="text-2xl font-bold text-slate-800">Invoices</h1>
         {can(user, 'generateInvoice') && <button className="btn-accent flex items-center gap-1.5" onClick={() => setGenOpen(true)}><Plus size={16} /> Generate Invoice</button>}
       </div>
       {loading ? <Spinner /> : (
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="card overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
             <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
               <tr>
                 <th className="px-4 py-2 text-left">Invoice No</th>

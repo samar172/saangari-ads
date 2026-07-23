@@ -39,16 +39,23 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   const booked = statusMap.BOOKED || 0;
   const occupancy = siteCount ? Math.round((booked / siteCount) * 100) : 0;
 
-  const bookedValue = orders.reduce((s, o) => s + o.grandTotal, 0);
+  // A quotation is pipeline, not revenue — counting it as booked value would
+  // inflate the dashboard and make outstanding look like money owed when the
+  // client has not committed to anything. Report it separately instead.
+  const confirmed = orders.filter((o) => o.status !== 'QUOTATION');
+  const quotations = orders.filter((o) => o.status === 'QUOTATION');
+
+  const bookedValue = confirmed.reduce((s, o) => s + o.grandTotal, 0);
+  const quotationValue = quotations.reduce((s, o) => s + o.grandTotal, 0);
   // Payments credit the gross; TDS is the slice the client remitted to the government.
   const paidRevenue = payments._sum.amount || 0;
   const tdsDeducted = payments._sum.tdsAmount || 0;
   const netReceived = payments._sum.netReceived || 0;
   const outstanding = Math.max(0, bookedValue - paidRevenue);
-  const gstCollected = orders.reduce((s, o) => s + o.gstAmount, 0);
-  const cgst = orders.reduce((s, o) => s + o.cgst, 0);
-  const sgst = orders.reduce((s, o) => s + o.sgst, 0);
-  const igst = orders.reduce((s, o) => s + o.igst, 0);
+  const gstCollected = confirmed.reduce((s, o) => s + o.gstAmount, 0);
+  const cgst = confirmed.reduce((s, o) => s + o.cgst, 0);
+  const sgst = confirmed.reduce((s, o) => s + o.sgst, 0);
+  const igst = confirmed.reduce((s, o) => s + o.igst, 0);
 
   // Revenue + booking count by site category (from line items)
   const revByType = {}, cntByType = {};
@@ -60,7 +67,7 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
 
   // Revenue by the client's booking category (institute, hospital, …)
   const revByCategory = {};
-  for (const o of orders) {
+  for (const o of confirmed) {
     const name = o.category?.name || 'Uncategorised';
     revByCategory[name] = (revByCategory[name] || 0) + o.grandTotal;
   }
@@ -73,7 +80,8 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   res.json({
     siteCount, occupancy, siteStatus: statusMap,
     siteByType: Object.fromEntries(byType.map((t) => [t.type, t._count._all])),
-    bookedValue, paidRevenue, outstanding,
+    bookedValue, quotationValue, quotationCount: quotations.length,
+    paidRevenue, outstanding,
     tdsDeducted, netReceived,
     gstCollected, cgst, sgst, igst,
     totalOrders: orders.length, totalBookings: lines.length, totalClients: clients, repeatClients,

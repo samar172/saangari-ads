@@ -9,7 +9,7 @@ router.get('/', async (req, res) => {
   const categories = await prisma.category.findMany({
     where,
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-    include: { _count: { select: { orders: true } } },
+    include: { _count: { select: { orders: true, clients: true } } },
   });
   res.json(categories);
 });
@@ -44,13 +44,17 @@ router.patch('/:id', requireRole('MANAGER'), async (req, res) => {
 });
 
 // Hard-delete only if nothing references it; otherwise deactivate so historical
-// orders keep their category.
+// orders — and the clients filed under it — keep their category.
 router.delete('/:id', requireRole('MANAGER'), async (req, res) => {
   const id = Number(req.params.id);
-  const used = await prisma.order.count({ where: { categoryId: id } });
+  const [orders, clients] = await Promise.all([
+    prisma.order.count({ where: { categoryId: id } }),
+    prisma.client.count({ where: { categoryId: id } }),
+  ]);
+  const used = orders + clients;
   if (used > 0) {
     const category = await prisma.category.update({ where: { id }, data: { active: false } });
-    return res.json({ ...category, deactivated: true, usedBy: used });
+    return res.json({ ...category, deactivated: true, usedBy: used, orders, clients });
   }
   await prisma.category.delete({ where: { id } });
   res.json({ ok: true, deleted: true });

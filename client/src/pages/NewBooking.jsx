@@ -4,9 +4,9 @@ import dayjs from 'dayjs';
 import { Save, CheckCircle, Plus, Check } from 'lucide-react';
 import api from '../api';
 import { useCompany } from '../CompanyContext';
-import { Money } from '../components/ui';
+import { Money, Badge } from '../components/ui';
 
-const emptyClient = { name: '', phone: '', email: '', company: '', taxCategory: 'NON_GST', gstNumber: '', state: 'Rajasthan' };
+const emptyClient = { name: '', phone: '', email: '', company: '', taxCategory: 'NON_GST', gstNumber: '', state: 'Rajasthan', categoryId: '' };
 
 export default function NewBooking() {
   const navigate = useNavigate();
@@ -21,6 +21,8 @@ export default function NewBooking() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [newClient, setNewClient] = useState(false);
+  // Full record (orders + ledger) for the selected client, shown as history.
+  const [clientInfo, setClientInfo] = useState(null);
 
   const defStart = dayjs().format('YYYY-MM-DD');
   const defEnd = dayjs().add(29, 'day').format('YYYY-MM-DD'); // 30-day mounting cycle
@@ -44,6 +46,7 @@ export default function NewBooking() {
     taxCategory: 'NON_GST',
     interState: false,
     placeOfSupply: 'Rajasthan',
+    paymentTerms: 'ADVANCE',
     discountPct: 0,
     discountRemarks: '',
     notes: '',
@@ -70,11 +73,30 @@ export default function NewBooking() {
     if (ids.length) setLines(ids.map((siteId) => ({ siteId, startDate: defStart, endDate: defEnd, dayRateOverride: '', displayNotes: '' })));
   }, []); // eslint-disable-line
 
-  // When a client is chosen, default their tax category
+  // When a client is chosen, default their tax category. The order's category is
+  // the client's, so it rides along here rather than being picked separately.
   useEffect(() => {
     const c = clients.find((x) => x.id === Number(form.clientId));
-    if (c) setForm((f) => ({ ...f, taxCategory: c.taxCategory, interState: (c.state && c.state !== 'Rajasthan') || false }));
+    if (c) setForm((f) => ({
+      ...f,
+      taxCategory: c.taxCategory,
+      interState: (c.state && c.state !== 'Rajasthan') || false,
+      categoryId: c.categoryId ? String(c.categoryId) : '',
+    }));
   }, [form.clientId]); // eslint-disable-line
+
+  // Pull the chosen client's past activity for the history panel.
+  useEffect(() => {
+    if (!form.clientId) { setClientInfo(null); return; }
+    let alive = true;
+    api.get(`/clients/${form.clientId}`)
+      .then((r) => { if (alive) setClientInfo(r.data); })
+      .catch(() => { if (alive) setClientInfo(null); });
+    return () => { alive = false; };
+  }, [form.clientId]);
+
+  const selectedClient = clients.find((x) => x.id === Number(form.clientId)) || null;
+  const clientCategory = categories.find((c) => c.id === Number(form.categoryId)) || null;
 
   const siteById = useMemo(() => Object.fromEntries(sites.map((s) => [s.id, s])), [sites]);
   // Regular bookings may only pick vacant sites; loose bookings can override onto any site.
@@ -149,6 +171,7 @@ export default function NewBooking() {
         taxCategory: effectiveTaxCategory,
         interState: form.interState,
         placeOfSupply: form.placeOfSupply,
+        paymentTerms: form.paymentTerms,
         discountPct: Number(form.discountPct) || 0,
         discountRemarks: form.discountRemarks,
         addOns: addOns.filter((a) => a.label),
@@ -180,20 +203,73 @@ export default function NewBooking() {
 
       <div className="grid lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-4">
-          {/* Order basics */}
-          <div className="card p-5 space-y-4">
+          {/* Booking type */}
+          <div className="card p-5">
             <div>
               <label className="label">Booking Type</label>
-              <div className="flex gap-2">
+              {/* Side by side needs ~200px each for the descriptions; stack them on phones. */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {[['REGULAR', 'Regular', 'Available sites only'], ['LOOSE', 'Loose', 'Any site — waitlist/override (1–2 day displays)']].map(([v, l, d]) => (
                   <button type="button" key={v} onClick={() => set('bookingType', v)}
-                    className={`flex-1 rounded-lg border p-3 text-left transition ${form.bookingType === v ? 'border-brand bg-brand/5' : 'border-slate-200'}`}>
+                    className={`rounded-lg border p-3 text-left transition ${form.bookingType === v ? 'border-brand bg-brand/5' : 'border-slate-200'}`}>
                     <div className="font-medium text-sm">{l}</div>
                     <div className="text-xs text-slate-500">{d}</div>
                   </button>
                 ))}
               </div>
             </div>
+          </div>
+
+          {/* Client — sits directly under the booking type because the client
+              decides the category and tax defaults for everything below. */}
+          <div className="card p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="label mb-0">Client</label>
+              <button type="button" className="text-xs text-brand-light font-medium" onClick={() => setNewClient((v) => !v)}>
+                {newClient ? '← Select existing' : '+ New client'}
+              </button>
+            </div>
+            {!newClient ? (
+              <>
+                <select className="input" value={form.clientId} onChange={(e) => set('clientId', e.target.value)}>
+                  <option value="">Select client…</option>
+                  {clients.map((c) => <option key={c.id} value={c.id}>{c.name} — {c.phone}</option>)}
+                </select>
+                {selectedClient && (
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-slate-500">Category:</span>
+                    {clientCategory
+                      ? <span className="badge bg-teal-100 text-teal-800">{clientCategory.name}</span>
+                      : <span className="badge bg-slate-100 text-slate-500">Uncategorised</span>}
+                    <span className="text-slate-400">
+                      · inherited from the client. Change it on the Clients page.
+                    </span>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="grid sm:grid-cols-2 gap-3">
+                <input className="input" placeholder="Name *" value={clientForm.name} onChange={(e) => setClientForm({ ...clientForm, name: e.target.value })} />
+                <input className="input" placeholder="Phone * (unique)" value={clientForm.phone} onChange={(e) => setClientForm({ ...clientForm, phone: e.target.value })} />
+                <div className="sm:col-span-2">
+                  <select className="input" value={clientForm.categoryId} onChange={(e) => setClientForm({ ...clientForm, categoryId: e.target.value })}>
+                    <option value="">Category — uncategorised</option>
+                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+                <input className="input" placeholder="Company" value={clientForm.company} onChange={(e) => setClientForm({ ...clientForm, company: e.target.value })} />
+                <input className="input" placeholder="Email" value={clientForm.email} onChange={(e) => setClientForm({ ...clientForm, email: e.target.value })} />
+                <select className="input" value={clientForm.taxCategory} onChange={(e) => setClientForm({ ...clientForm, taxCategory: e.target.value })}>
+                  <option value="NON_GST">Non-GST</option>
+                  <option value="GST">GST</option>
+                </select>
+                <input className="input" placeholder="GSTIN" value={clientForm.gstNumber} onChange={(e) => setClientForm({ ...clientForm, gstNumber: e.target.value })} />
+              </div>
+            )}
+          </div>
+
+          {/* Dates & description */}
+          <div className="card p-5 space-y-4">
             <div className="grid sm:grid-cols-4 gap-4">
               <div>
                 <label className="label">Booking Date</label>
@@ -231,15 +307,8 @@ export default function NewBooking() {
                 <input type="date" className="input" value={form.defaultEnd} onChange={(e) => set('defaultEnd', e.target.value)} />
               </div>
             </div>
-            <div className="grid sm:grid-cols-3 gap-4">
+            <div>
               <div>
-                <label className="label">Category</label>
-                <select className="input" value={form.categoryId} onChange={(e) => set('categoryId', e.target.value)}>
-                  <option value="">Uncategorised</option>
-                  {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <div className="sm:col-span-2">
                 <label className="label">Description</label>
                 <input className="input" placeholder="e.g. Summer campaign — Diwali promo" value={form.description} onChange={(e) => set('description', e.target.value)} />
               </div>
@@ -272,7 +341,8 @@ export default function NewBooking() {
                         </div>
                         <button type="button" onClick={() => removeLine(i)} className="text-slate-400 hover:text-red-600 text-lg leading-none">&times;</button>
                       </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-2">
+                      {/* Native date inputs need ~130px; two columns only fit above ~420px wide. */}
+                      <div className="grid grid-cols-1 min-[420px]:grid-cols-2 sm:grid-cols-5 gap-2 mt-2">
                         <div><div className="text-[10px] text-slate-400 mb-0.5">Start</div><input type="date" className="input py-1 text-xs" value={l.startDate} onChange={(e) => { updateLine(i, 'startDate', e.target.value); updateLine(i, 'customDays', undefined); }} /></div>
                         <div>
                           <div className="text-[10px] text-slate-400 mb-0.5">Duration</div>
@@ -363,8 +433,8 @@ export default function NewBooking() {
               <div className="space-y-2">
                 {addOns.map((a, i) => (
                   <div key={i} className="flex gap-2">
-                    <input className="input" placeholder="Label" value={a.label} onChange={(e) => updateAddOn(i, 'label', e.target.value)} />
-                    <input type="number" className="input w-36" placeholder="Amount" value={a.amount} onChange={(e) => updateAddOn(i, 'amount', e.target.value)} />
+                    <input className="input min-w-0 flex-1" placeholder="Label" value={a.label} onChange={(e) => updateAddOn(i, 'label', e.target.value)} />
+                    <input type="number" className="input w-24 shrink-0 sm:w-36" placeholder="Amount" value={a.amount} onChange={(e) => updateAddOn(i, 'amount', e.target.value)} />
                     <button type="button" onClick={() => setAddOns((x) => x.filter((_, idx) => idx !== i))} className="text-slate-400 hover:text-red-600 px-1">&times;</button>
                   </div>
                 ))}
@@ -393,6 +463,23 @@ export default function NewBooking() {
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Payment terms — advance (paid up front) vs postpaid (billed after run) */}
+          <div className="card p-5 space-y-3">
+            <div className="text-sm font-semibold text-slate-700">Payment Terms</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {[
+                ['ADVANCE', 'Advance', 'Client pays before the display goes up'],
+                ['POSTPAID', 'Postpaid', 'Billed after the campaign runs'],
+              ].map(([v, l, d]) => (
+                <button type="button" key={v} onClick={() => set('paymentTerms', v)}
+                  className={`rounded-lg border p-3 text-left transition ${form.paymentTerms === v ? 'border-brand bg-brand/5' : 'border-slate-200'}`}>
+                  <div className="font-medium text-sm">{l}</div>
+                  <div className="text-xs text-slate-500">{d}</div>
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Tax — hidden/forced based on company */}
@@ -438,38 +525,11 @@ export default function NewBooking() {
             </div>
           </div>
 
-          {/* Client */}
-          <div className="card p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <label className="label mb-0">Client</label>
-              <button type="button" className="text-xs text-brand-light font-medium" onClick={() => setNewClient((v) => !v)}>
-                {newClient ? '← Select existing' : '+ New client'}
-              </button>
-            </div>
-            {!newClient ? (
-              <select className="input" value={form.clientId} onChange={(e) => set('clientId', e.target.value)}>
-                <option value="">Select client…</option>
-                {clients.map((c) => <option key={c.id} value={c.id}>{c.name} — {c.phone}</option>)}
-              </select>
-            ) : (
-              <div className="grid sm:grid-cols-2 gap-3">
-                <input className="input" placeholder="Name *" value={clientForm.name} onChange={(e) => setClientForm({ ...clientForm, name: e.target.value })} />
-                <input className="input" placeholder="Phone * (unique)" value={clientForm.phone} onChange={(e) => setClientForm({ ...clientForm, phone: e.target.value })} />
-                <input className="input" placeholder="Company" value={clientForm.company} onChange={(e) => setClientForm({ ...clientForm, company: e.target.value })} />
-                <input className="input" placeholder="Email" value={clientForm.email} onChange={(e) => setClientForm({ ...clientForm, email: e.target.value })} />
-                <select className="input" value={clientForm.taxCategory} onChange={(e) => setClientForm({ ...clientForm, taxCategory: e.target.value })}>
-                  <option value="NON_GST">Non-GST</option>
-                  <option value="GST">GST</option>
-                </select>
-                <input className="input" placeholder="GSTIN" value={clientForm.gstNumber} onChange={(e) => setClientForm({ ...clientForm, gstNumber: e.target.value })} />
-              </div>
-            )}
-          </div>
         </div>
 
-        {/* Price summary */}
-        <div className="lg:col-span-1">
-          <div className="card p-5 sticky top-6">
+        {/* Price summary + the selected client's history */}
+        <div className="lg:col-span-1 space-y-4 lg:sticky lg:top-6 lg:self-start">
+          <div className="card p-5">
             <div className="text-sm font-semibold text-slate-700 mb-3">Order Summary</div>
             {!quote ? (
               <div className="text-sm text-slate-400 py-6 text-center">Add a site and dates</div>
@@ -510,8 +570,86 @@ export default function NewBooking() {
             )}
             <button type="button" className="btn-ghost w-full mt-2" onClick={() => navigate(-1)}>Cancel</button>
           </div>
+
+          {selectedClient && <ClientHistory client={selectedClient} info={clientInfo} category={clientCategory} />}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Past activity for the client being booked, so the sales user can see standing
+// balance and what was booked before without leaving the form.
+function ClientHistory({ client, info, category }) {
+  const orders = info?.orders || [];
+  const recent = orders.slice(0, 5);
+  const lifetime = orders.reduce((s, o) => s + (o.grandTotal || 0), 0);
+  const balance = info?.balance || 0;
+
+  return (
+    <div className="card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+        <div className="text-sm font-semibold text-slate-700">Client History</div>
+        {category
+          ? <span className="badge bg-teal-100 text-teal-800">{category.name}</span>
+          : <span className="badge bg-slate-100 text-slate-500">Uncategorised</span>}
+      </div>
+      <div className="text-xs text-slate-500 mb-3">{client.name}{client.company ? ` · ${client.company}` : ''}</div>
+
+      {!info ? (
+        <div className="text-sm text-slate-400 py-4 text-center">Loading…</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            <Stat label="Orders" value={orders.length} />
+            <Stat label="Lifetime" value={<Money value={lifetime} />} />
+            <Stat
+              label="Balance"
+              value={<Money value={balance} />}
+              tone={balance > 0 ? 'text-red-600' : 'text-emerald-600'}
+            />
+          </div>
+
+          {recent.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-200 p-4 text-center text-xs text-slate-400">
+              First booking for this client
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Recent activity</div>
+              {recent.map((o) => (
+                <div key={o.id} className="rounded-lg border border-slate-200 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-slate-800">{o.orderNo}</span>
+                    <span className="text-xs font-medium text-slate-700"><Money value={o.grandTotal} /></span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-slate-500 truncate">
+                      {o.items?.map((it) => it.site?.code).filter(Boolean).join(', ') || 'No sites'}
+                    </span>
+                    <span className="text-[10px] text-slate-400 shrink-0">
+                      {dayjs(o.bookingDate || o.createdAt).format('DD MMM YY')}
+                    </span>
+                  </div>
+                  <div className="mt-1.5"><Badge status={o.status} /></div>
+                </div>
+              ))}
+              {orders.length > recent.length && (
+                <div className="text-[11px] text-slate-400">+{orders.length - recent.length} older order{orders.length - recent.length === 1 ? '' : 's'}</div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value, tone }) {
+  return (
+    <div className="rounded-lg bg-slate-50 p-2">
+      <div className="text-[10px] uppercase tracking-wide text-slate-400">{label}</div>
+      <div className={`text-sm font-bold truncate ${tone || 'text-slate-800'}`}>{value}</div>
     </div>
   );
 }
@@ -564,8 +702,9 @@ function AddSitePicker({ sites, onPickMultiple }) {
       <button type="button" onClick={() => setOpen((o) => !o)} className="btn-accent text-sm py-1.5 px-3 flex items-center gap-1">
         <Plus size={16} /> Add sites <span className="opacity-70 ml-0.5">▾</span>
       </button>
+      {/* 20rem is wider than a phone's content column, so cap the panel to the viewport. */}
       {open && (
-        <div className="absolute right-0 z-30 mt-1 w-80 rounded-xl border border-slate-200 bg-white shadow-xl overflow-hidden flex flex-col">
+        <div className="absolute right-0 z-30 mt-1 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white shadow-xl overflow-hidden flex flex-col">
           <div className="p-2 border-b border-slate-100 shrink-0">
             <input autoFocus className="input py-1.5 text-sm" placeholder="Search code, location or zone…"
               value={q} onChange={(e) => setQ(e.target.value)} />

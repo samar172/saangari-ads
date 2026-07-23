@@ -5,22 +5,31 @@ import api, { downloadFile } from '../api';
 import { useCompany } from '../CompanyContext';
 import { Money, Spinner } from '../components/ui';
 
+// Same rates offered on the order detail payment form.
+const TDS_RATES = [1, 2, 5, 10];
+
 export default function Payments() {
-  const { activeCompany } = useCompany();
+  const { activeCompany, companies } = useCompany();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [from, setFrom] = useState(dayjs().startOf('month').format('YYYY-MM-DD'));
   const [to, setTo] = useState(dayjs().format('YYYY-MM-DD'));
   const [expandedDate, setExpandedDate] = useState(null);
   const [modal, setModal] = useState(false);
+  // '' means every company. A payment belongs to its order's company, so money
+  // collected against another entity's order is invisible while scoped — which
+  // looks exactly like a missing payment. Make the scope explicit and switchable.
+  const [companyId, setCompanyId] = useState(activeCompany?.id ? String(activeCompany.id) : '');
+
+  useEffect(() => { setCompanyId(activeCompany?.id ? String(activeCompany.id) : ''); }, [activeCompany]);
 
   function load() {
     setLoading(true);
-    api.get('/payments/datewise', { params: { companyId: activeCompany?.id, from, to } })
+    api.get('/payments/datewise', { params: { companyId: companyId || undefined, from, to } })
       .then((r) => setData(r.data))
       .finally(() => setLoading(false));
   }
-  useEffect(load, [activeCompany, from, to]);
+  useEffect(load, [companyId, from, to]);
 
   const totals = data.reduce(
     (acc, d) => ({
@@ -34,7 +43,7 @@ export default function Payments() {
 
   function exportExcel() {
     const params = new URLSearchParams();
-    if (activeCompany?.id) params.set('companyId', activeCompany.id);
+    if (companyId) params.set('companyId', companyId);
     if (from) params.set('from', from);
     if (to) params.set('to', to);
     downloadFile(`/payments/export/excel?${params.toString()}`, 'payments.xlsx');
@@ -42,11 +51,13 @@ export default function Payments() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Payments</h1>
           <p className="text-sm text-slate-500">
-            {activeCompany ? `${activeCompany.name} — ` : ''}Date-wise payment received
+            Date-wise payment received — {companyId
+              ? (companies.find((c) => String(c.id) === companyId)?.name || 'selected business')
+              : 'all businesses'}
           </p>
         </div>
         <div className="flex gap-2">
@@ -55,9 +66,16 @@ export default function Payments() {
         </div>
       </div>
 
-      {/* Date range filter */}
+      {/* Company + date range filter */}
       <div className="card p-4 mb-5">
         <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <label className="label">Business</label>
+            <select className="input w-auto" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
+              <option value="">All businesses</option>
+              {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
           <div>
             <label className="label">From</label>
             <input type="date" className="input" value={from} onChange={(e) => setFrom(e.target.value)} />
@@ -66,7 +84,8 @@ export default function Payments() {
             <label className="label">To</label>
             <input type="date" className="input" value={to} onChange={(e) => setTo(e.target.value)} />
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-ghost text-xs py-1.5" onClick={() => { const t = dayjs().format('YYYY-MM-DD'); setFrom(t); setTo(t); }}>Today</button>
             <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(dayjs().startOf('month').format('YYYY-MM-DD')); setTo(dayjs().format('YYYY-MM-DD')); }}>This month</button>
             <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(dayjs().subtract(1, 'month').startOf('month').format('YYYY-MM-DD')); setTo(dayjs().subtract(1, 'month').endOf('month').format('YYYY-MM-DD')); }}>Last month</button>
             <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(dayjs().startOf('year').format('YYYY-MM-DD')); setTo(dayjs().format('YYYY-MM-DD')); }}>This year</button>
@@ -83,8 +102,8 @@ export default function Payments() {
       </div>
 
       {loading ? <Spinner /> : (
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="card overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
             <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
               <tr>
                 <th className="px-4 py-2 text-left">Date</th>
@@ -99,6 +118,7 @@ export default function Payments() {
                 <DateRow
                   key={d.date}
                   day={d}
+                  showCompany={!companyId}
                   expanded={expandedDate === d.date}
                   onToggle={() => setExpandedDate(expandedDate === d.date ? null : d.date)}
                 />
@@ -127,7 +147,7 @@ export default function Payments() {
   );
 }
 
-function DateRow({ day, expanded, onToggle }) {
+function DateRow({ day, expanded, onToggle, showCompany }) {
   return (
     <>
       <tr
@@ -148,6 +168,10 @@ function DateRow({ day, expanded, onToggle }) {
           <td className="px-4 py-1.5 pl-10 text-xs text-slate-600">
             {p.client.name}
             <span className="text-slate-400 ml-1">· {p.order.orderNo}</span>
+            {/* Which entity the money landed in — only ambiguous when unscoped. */}
+            {showCompany && p.company && (
+              <span className="badge bg-slate-100 text-slate-500 text-[10px] ml-1.5">{p.company.name}</span>
+            )}
           </td>
           <td className="px-4 py-1.5 text-right text-xs">
             <span className="badge bg-slate-100 text-slate-600 text-[10px]">{p.mode}</span>
@@ -180,7 +204,16 @@ function RecordPaymentModal({ onClose, onSaved }) {
   const [orderId, setOrderId] = useState('');
   const [amount, setAmount] = useState('');
   const [mode, setMode] = useState('CASH');
+  const [reference, setReference] = useState('');
+  const [tdsApplicable, setTdsApplicable] = useState(false);
+  const [tdsPct, setTdsPct] = useState(TDS_RATES[0]);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  // Mirrors the server: TDS is withheld from the gross, but the order is still
+  // credited the full gross — the client remits the deduction on our behalf.
+  const gross = Number(amount) || 0;
+  const tds = tdsApplicable ? Math.round(gross * (Number(tdsPct) || 0) / 100) : 0;
 
   useEffect(() => {
     if (search.length > 1 && !client) {
@@ -201,19 +234,26 @@ function RecordPaymentModal({ onClose, onSaved }) {
   async function submit(e) {
     e.preventDefault();
     if (!orderId || !amount) return;
-    setBusy(true);
+    setBusy(true); setErr('');
     try {
-      await api.post(`/orders/${orderId}/payments`, { amount, mode });
+      await api.post(`/orders/${orderId}/payments`, {
+        amount, mode, reference: reference || undefined,
+        tdsApplicable, tdsPct: tdsApplicable ? Number(tdsPct) : 0,
+      });
       onSaved();
       onClose();
+    } catch (e2) {
+      // Surface server rejections (e.g. paying against a quotation) instead of
+      // closing the modal as though it had saved.
+      setErr(e2.response?.data?.error || 'Could not record this payment');
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
-      <form onSubmit={submit} className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
+    <div className="fixed inset-0 bg-slate-900/50 flex items-start justify-center p-4 z-50 overflow-y-auto">
+      <form onSubmit={submit} className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md my-auto">
         <h2 className="text-xl font-bold mb-4">Record Payment</h2>
         
         <div className="space-y-4">
@@ -256,21 +296,49 @@ function RecordPaymentModal({ onClose, onSaved }) {
           )}
 
           {orderId && (
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="label">Amount</label>
-                <input type="number" className="input" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} required />
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="label">Amount (gross)</label>
+                  <input type="number" className="input" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} required />
+                </div>
+                <div>
+                  <label className="label">Mode</label>
+                  <select className="input" value={mode} onChange={(e) => setMode(e.target.value)}>
+                    {['CASH', 'UPI', 'BANK', 'CHEQUE', 'CARD'].map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
               </div>
+
               <div>
-                <label className="label">Mode</label>
-                <select className="input" value={mode} onChange={(e) => setMode(e.target.value)}>
-                  <option value="CASH">CASH</option>
-                  <option value="BANK">BANK</option>
-                  <option value="CHEQUE">CHEQUE</option>
-                </select>
+                <label className="label">Reference (optional)</label>
+                <input className="input" placeholder="UTR / cheque no." value={reference} onChange={(e) => setReference(e.target.value)} />
               </div>
-            </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
+                <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                  <input type="checkbox" checked={tdsApplicable} onChange={(e) => setTdsApplicable(e.target.checked)} />
+                  TDS applicable on this payment
+                </label>
+                {tdsApplicable && (
+                  <>
+                    <select className="input py-2 text-sm" value={tdsPct} onChange={(e) => setTdsPct(e.target.value)}>
+                      {TDS_RATES.map((r) => <option key={r} value={r}>{r}% TDS</option>)}
+                    </select>
+                    <div className="text-sm text-slate-600 space-y-1">
+                      <div className="flex justify-between"><span>TDS deducted</span><span className="text-indigo-700 font-medium">−<Money value={tds} /></span></div>
+                      <div className="flex justify-between border-t border-slate-200 pt-1 mt-1"><span>Net received in bank</span><span className="font-bold text-slate-800"><Money value={gross - tds} /></span></div>
+                      <p className="text-xs text-slate-500 pt-1 leading-tight">
+                        The order is still credited the full <Money value={gross} /> — the client remits the TDS on your behalf.
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
           )}
+
+          {err && <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
         </div>
 
         <div className="flex justify-end gap-3 mt-6">

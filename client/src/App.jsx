@@ -14,7 +14,6 @@ import Reports from './pages/Reports';
 import Payments from './pages/Payments';
 import Reminders from './pages/Reminders';
 import PrintingPartners from './pages/PrintingPartners';
-import Categories from './pages/Categories';
 import Companies from './pages/Companies';
 import Users from './pages/Users';
 
@@ -40,7 +39,8 @@ export default function App() {
             <Route path="/reminders" element={<Protected><Reminders /></Protected>} />
             <Route path="/clients" element={<Protected><Clients /></Protected>} />
             <Route path="/printing-partners" element={<Protected><PrintingPartners /></Protected>} />
-            <Route path="/categories" element={<Protected><Categories /></Protected>} />
+            {/* Categories moved into Business Setup; keep old links working. */}
+            <Route path="/categories" element={<Navigate to="/settings/companies" replace />} />
             <Route path="/invoices" element={<Protected><Invoices /></Protected>} />
             <Route path="/invoices/:id" element={<Protected><InvoiceDetail /></Protected>} />
             <Route path="/reports" element={<Protected><Reports /></Protected>} />

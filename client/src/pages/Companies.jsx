@@ -4,6 +4,7 @@ import api from '../api';
 import { useAuth, can } from '../auth';
 import { useCompany } from '../CompanyContext';
 import { Modal, Spinner } from '../components/ui';
+import CategoryManager from '../components/CategoryManager';
 
 const EMPTY = {
   code: '', name: '', legalName: '', gstin: '', pan: '',
@@ -21,6 +22,7 @@ export default function Companies() {
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
+  const [tab, setTab] = useState('businesses'); // 'businesses' | 'categories'
 
   function load() {
     setLoading(true);
@@ -73,15 +75,27 @@ export default function Companies() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Business Setup</h1>
-          <p className="text-sm text-slate-500">Manage business entities, GST, and terms & conditions</p>
+          <p className="text-sm text-slate-500">Manage business entities, GST, terms & conditions, and client categories</p>
         </div>
-        {can(user, 'manageCompanies') && <button className="btn-accent text-sm flex items-center gap-1.5" onClick={startCreate}><Plus size={16} /> New Business</button>}
+        {tab === 'businesses' && can(user, 'manageCompanies') && (
+          <button className="btn-accent text-sm flex items-center gap-1.5" onClick={startCreate}><Plus size={16} /> New Business</button>
+        )}
       </div>
 
-      {loading ? <Spinner /> : (
+      <div className="flex gap-1 overflow-x-auto border-b border-slate-200 mb-5">
+        {[['businesses', 'Businesses'], ['categories', 'Client Categories']].map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`shrink-0 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition ${
+              tab === k ? 'border-brand text-brand' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{l}</button>
+        ))}
+      </div>
+
+      {tab === 'categories' && <CategoryManager />}
+
+      {tab === 'businesses' && (loading ? <Spinner /> : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
           {companies.map((c) => (
             <div key={c.id} className="card p-5 hover:border-brand/30 transition cursor-pointer" onClick={() => startEdit(c)}>
@@ -102,7 +116,7 @@ export default function Companies() {
             </div>
           ))}
         </div>
-      )}
+      ))}
 
       <Modal open={!!editing} onClose={() => setEditing(null)} title={editing === 'new' ? 'New Business Entity' : 'Edit Business Entity'} wide>
         {err && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}

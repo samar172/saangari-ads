@@ -105,16 +105,31 @@ async function repriceOrder(tx, orderId) {
   });
 }
 
+// A quotation is a proposal, not a receivable — nobody owes anything until it is
+// confirmed — and a cancelled order is dead. Neither carries a balance, so they
+// must never surface as money due on the order list, the client's balance or the
+// dashboard. Only RECEIVABLE statuses do.
+const RECEIVABLE = ['CONFIRMED', 'LIVE', 'COMPLETED'];
+
 function withDerived(order) {
   const paid = (order.payments || []).reduce((s, p) => s + p.amount, 0);
-  return { ...order, amountPaid: paid, balanceDue: Math.max(0, (order.grandTotal || 0) - paid) };
+  const receivable = RECEIVABLE.includes(order.status);
+  return {
+    ...order,
+    amountPaid: paid,
+    receivable,
+    balanceDue: receivable ? Math.max(0, (order.grandTotal || 0) - paid) : 0,
+  };
 }
 
 // List orders (Sales sees only their own)
 router.get('/', async (req, res) => {
-  const { status, clientId, mine, companyId } = req.query;
+  const { status, clientId, mine, companyId, excludeStatus } = req.query;
   const where = {};
   if (status) where.status = status;
+  // The Campaigns list asks for everything-but-quotations; without this a
+  // quotation shows up alongside real bookings.
+  else if (excludeStatus) where.status = { notIn: String(excludeStatus).split(',') };
   if (clientId) where.clientId = Number(clientId);
   if (companyId) where.companyId = Number(companyId);
   if (mine === 'true' || req.user.role === 'SALES') where.createdById = req.user.id;
@@ -127,7 +142,13 @@ router.get('/', async (req, res) => {
       category: { select: { id: true, name: true } },
       company: { select: { id: true, name: true, code: true } },
       createdBy: { select: { id: true, name: true } },
-      items: { select: { id: true, siteId: true, status: true, site: { select: { code: true } }, photos: { select: { id: true } } } },
+      // startDate/endDate drive the display-period columns on the orders table.
+      items: {
+        select: {
+          id: true, siteId: true, status: true, startDate: true, endDate: true,
+          site: { select: { code: true } }, photos: { select: { id: true } },
+        },
+      },
       payments: { select: { amount: true } },
       invoices: { select: { id: true, invoiceNo: true, status: true } },
     },
@@ -184,8 +205,12 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
     printingPartnerId, noOfPrints = 0, printRate = 0, mountingCost = 0,
     monitoring = false, monitorStart = false, monitorMid = false, monitorEnd = false,
     taxCategory: rawTaxCategory = 'NON_GST', interState = false, placeOfSupply,
+    paymentTerms: rawPaymentTerms = 'ADVANCE',
     discountPct = 0, discountRemarks, addOns = [], notes, status = 'QUOTATION',
   } = body;
+
+  // Only the two known terms are allowed; anything else falls back to ADVANCE.
+  const paymentTerms = rawPaymentTerms === 'POSTPAID' ? 'POSTPAID' : 'ADVANCE';
 
   // Look up the company and enforce GST rules
   if (!companyId) return res.status(400).json({ error: 'Company is required' });
@@ -200,6 +225,19 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
 
   if (!clientId) return res.status(400).json({ error: 'Client is required' });
   if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'Add at least one site' });
+
+  // Category lives on the client now, so an order inherits it. An explicit
+  // categoryId in the body still wins, which keeps older callers working.
+  let effectiveCategoryId = categoryId ? Number(categoryId) : null;
+  if (!effectiveCategoryId) {
+    const client = await prisma.client.findUnique({
+      where: { id: Number(clientId) },
+      select: { categoryId: true },
+    });
+    if (!client) return res.status(400).json({ error: 'Invalid client' });
+    effectiveCategoryId = client.categoryId;
+  }
+
   for (const it of items) {
     if (!it.siteId || !it.startDate || !it.endDate) return res.status(400).json({ error: 'Each site needs a start and end date' });
   }
@@ -258,7 +296,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
       data: {
         orderNo, clientId: Number(clientId), createdById: req.user.id,
         companyId: Number(companyId),
-        categoryId: categoryId ? Number(categoryId) : null,
+        categoryId: effectiveCategoryId,
         status: status === 'CONFIRMED' ? 'CONFIRMED' : 'QUOTATION',
         bookingDate: bookingDate ? new Date(bookingDate) : new Date(),
         description,
@@ -267,6 +305,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
         mountingCost: r.mountingTotal,
         monitoring: !!monitoring, monitorStart: !!monitorStart, monitorMid: !!monitorMid, monitorEnd: !!monitorEnd,
         taxCategory, interState: !!interState, placeOfSupply: placeOfSupply || 'Rajasthan',
+        paymentTerms,
         discountPct: Number(discountPct) || 0, discountRemarks,
         rentalSubtotal: r.rentalSubtotal, addOnTotal: r.addOnTotal, discountAmount: r.discountAmount,
         taxableAmount: r.taxableAmount, cgst: r.cgst, sgst: r.sgst, igst: r.igst,
@@ -342,6 +381,17 @@ router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (
   const { amount, mode = 'CASH', reference, notes, tdsApplicable = false, tdsPct = 0 } = req.body || {};
   const order = await prisma.order.findUnique({ where: { id } });
   if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  // Money must not be collected against a proposal: the credit would land on the
+  // client's ledger with no matching debit and skew their balance. Confirm the
+  // quotation first.
+  if (!RECEIVABLE.includes(order.status)) {
+    return res.status(400).json({
+      error: order.status === 'QUOTATION'
+        ? `${order.orderNo} is still a quotation — confirm it before recording a payment.`
+        : `${order.orderNo} is ${order.status.toLowerCase()}; payments cannot be recorded against it.`,
+    });
+  }
 
   const gross = Number(amount);
   if (!gross || gross <= 0) return res.status(400).json({ error: 'Amount must be greater than zero' });

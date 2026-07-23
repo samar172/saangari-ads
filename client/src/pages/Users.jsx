@@ -19,13 +19,13 @@ export default function Users() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <h1 className="text-2xl font-bold text-slate-800">Users</h1>
         {can(user, 'manageUsers') && <button className="btn-accent flex items-center gap-1.5" onClick={() => setOpen(true)}><Plus size={16} /> Add User</button>}
       </div>
       {loading ? <Spinner /> : (
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="card overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
             <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
               <tr><th className="px-4 py-2 text-left">Name</th><th className="px-4 py-2 text-left">Email</th><th className="px-4 py-2 text-left">Role</th><th className="px-4 py-2 text-left">Status</th><th className="px-4 py-2 text-right">Actions</th></tr>
             </thead>
