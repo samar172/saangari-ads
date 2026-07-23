@@ -1,0 +1,166 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --nav-h: 78px;
+  }
+
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* No global `scroll-behavior: smooth` — it would make the jump-to-top on
+     route change animate all the way up from a deep scroll position. The
+     back-to-top button passes behavior:'smooth' explicitly instead. */
+  html {
+    scroll-padding-top: 96px;
+  }
+
+  body {
+    @apply bg-cream-100 text-ink font-sans antialiased;
+    overflow-x: hidden;
+  }
+
+  ::selection {
+    @apply bg-brand-700 text-cream-50;
+  }
+
+  /* Brand scrollbar */
+  ::-webkit-scrollbar {
+    width: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-cream-200;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-brand-700/70 rounded-full border-2 border-cream-200;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-brand-700;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-display tracking-tight;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+}
+
+@layer components {
+  .container-x {
+    @apply mx-auto w-full max-w-7xl px-5 sm:px-8 lg:px-12;
+  }
+
+  /* ---- Buttons ---------------------------------------------------- */
+  .btn {
+    @apply relative inline-flex items-center justify-center gap-2 overflow-hidden rounded-full
+           px-7 py-3.5 text-sm font-semibold tracking-wide transition-all duration-300
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500 focus-visible:ring-offset-2;
+  }
+  .btn-primary {
+    @apply btn bg-brand-700 text-cream-50 shadow-soft hover:-translate-y-0.5 hover:bg-brand-800 hover:shadow-lift;
+  }
+  .btn-gold {
+    @apply btn bg-gold-500 text-brand-950 shadow-soft hover:-translate-y-0.5 hover:bg-gold-400 hover:shadow-glow;
+  }
+  .btn-ghost {
+    @apply btn border border-brand-700/25 bg-transparent text-brand-800
+           hover:-translate-y-0.5 hover:border-brand-700 hover:bg-brand-700 hover:text-cream-50;
+  }
+  .btn-light {
+    @apply btn border border-cream-50/30 bg-cream-50/10 text-cream-50 backdrop-blur
+           hover:-translate-y-0.5 hover:bg-cream-50 hover:text-brand-800;
+  }
+  /* sweep highlight on hover */
+  .btn::after {
+    content: '';
+    @apply pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r
+           from-transparent via-white/25 to-transparent transition-transform duration-700;
+  }
+  .btn:hover::after {
+    @apply translate-x-full;
+  }
+
+  /* ---- Surfaces ---------------------------------------------------- */
+  .card {
+    @apply relative rounded-3xl border border-brand-900/10 bg-cream-50 shadow-soft
+           transition-all duration-500 will-change-transform;
+  }
+  .card-hover {
+    @apply hover:-translate-y-2 hover:border-brand-700/25 hover:shadow-lift;
+  }
+
+  .eyebrow {
+    @apply inline-flex items-center gap-2 rounded-full border border-brand-700/20 bg-brand-50
+           px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.22em] text-brand-700;
+  }
+  .eyebrow-light {
+    @apply inline-flex items-center gap-2 rounded-full border border-cream-50/25 bg-cream-50/10
+           px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.22em] text-gold-300 backdrop-blur;
+  }
+
+  .link-underline {
+    @apply relative after:absolute after:-bottom-1 after:left-0 after:h-px after:w-0
+           after:bg-current after:transition-all after:duration-300 hover:after:w-full;
+  }
+
+  .field {
+    @apply w-full rounded-2xl border border-brand-900/15 bg-cream-50 px-5 py-3.5 text-sm text-ink
+           placeholder:text-ink/35 transition-all duration-200
+           focus:border-brand-700 focus:outline-none focus:ring-4 focus:ring-brand-700/10;
+  }
+
+  .divider-gold {
+    @apply h-px w-16 origin-left bg-gradient-to-r from-gold-500 to-transparent;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-gradient-to-br from-brand-600 via-brand-700 to-brand-900 bg-clip-text text-transparent;
+  }
+  .text-gradient-gold {
+    @apply bg-gradient-to-r from-gold-300 via-gold-500 to-gold-300 bg-clip-text text-transparent;
+  }
+  .mask-fade-x {
+    mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  }
+  .paused:hover {
+    animation-play-state: paused;
+  }
+}
+
+/* Scroll reveal (IntersectionObserver driven) */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(26px);
+  transition:
+    opacity 0.85s cubic-bezier(0.2, 0.7, 0.2, 1),
+    transform 0.85s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+[data-reveal='visible'] {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+  }
+}

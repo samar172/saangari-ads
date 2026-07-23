@@ -96,7 +96,7 @@ export default function NewBooking() {
   // Live order quote
   useEffect(() => {
     const items = lines.filter((l) => l.siteId && l.startDate && l.endDate)
-      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, dayRateOverride: l.dayRateOverride || undefined }));
+      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, dayRateOverride: l.monthlyRateOverride ? Math.round(Number(l.monthlyRateOverride) / 30) : undefined }));
     if (items.length === 0) { setQuote(null); return; }
     const t = setTimeout(() => {
       api.post('/orders/quote', {
@@ -155,7 +155,7 @@ export default function NewBooking() {
         notes: form.notes,
         items: lines.map((l) => ({
           siteId: l.siteId, startDate: l.startDate, endDate: l.endDate,
-          dayRateOverride: l.dayRateOverride || undefined,
+          dayRateOverride: l.monthlyRateOverride ? Math.round(Number(l.monthlyRateOverride) / 30) : undefined,
           displayNotes: l.displayNotes || undefined,
         })),
       });
@@ -273,7 +273,7 @@ export default function NewBooking() {
                         <button type="button" onClick={() => removeLine(i)} className="text-slate-400 hover:text-red-600 text-lg leading-none">&times;</button>
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-2">
-                        <div><div className="text-[10px] text-slate-400 mb-0.5">Start</div><input type="date" className="input py-1 text-xs" value={l.startDate} onChange={(e) => updateLine(i, 'startDate', e.target.value)} /></div>
+                        <div><div className="text-[10px] text-slate-400 mb-0.5">Start</div><input type="date" className="input py-1 text-xs" value={l.startDate} onChange={(e) => { updateLine(i, 'startDate', e.target.value); updateLine(i, 'customDays', undefined); }} /></div>
                         <div>
                           <div className="text-[10px] text-slate-400 mb-0.5">Duration</div>
                           <select className="input py-1 text-xs" onChange={(e) => {
@@ -286,6 +286,7 @@ export default function NewBooking() {
                                 end = dayjs(l.startDate).add(Number(val.replace('D', '')) - 1, 'day').format('YYYY-MM-DD');
                               }
                               updateLine(i, 'endDate', end);
+                              updateLine(i, 'customDays', undefined);
                             }
                           }}>
                             <option value="">Custom...</option>
@@ -297,9 +298,22 @@ export default function NewBooking() {
                             <option value="12M">12 Months</option>
                           </select>
                         </div>
-                        <div><div className="text-[10px] text-slate-400 mb-0.5">End</div><input type="date" className="input py-1 text-xs" value={l.endDate} onChange={(e) => updateLine(i, 'endDate', e.target.value)} /></div>
-                        <div><div className="text-[10px] text-slate-400 mb-0.5">Day Rate</div><input type="number" className="input py-1 text-xs" placeholder={s ? String(Math.round(s.monthlyRate / 30)) : ''} value={l.dayRateOverride} onChange={(e) => updateLine(i, 'dayRateOverride', e.target.value)} /></div>
-                        <div><div className="text-[10px] text-slate-400 mb-0.5">Days</div><div className="input py-1 text-xs bg-slate-50">{days > 0 ? days : '—'}</div></div>
+                        <div><div className="text-[10px] text-slate-400 mb-0.5">End</div><input type="date" className="input py-1 text-xs" value={l.endDate} onChange={(e) => { updateLine(i, 'endDate', e.target.value); updateLine(i, 'customDays', undefined); }} /></div>
+                        <div><div className="text-[10px] text-slate-400 mb-0.5">Rate/Month</div><input type="number" className="input py-1 text-xs" placeholder={s ? String(s.monthlyRate) : ''} value={l.monthlyRateOverride || ''} onChange={(e) => updateLine(i, 'monthlyRateOverride', e.target.value)} /></div>
+                        <div>
+                          <div className="text-[10px] text-slate-400 mb-0.5">Days</div>
+                          <input type="text" className="input py-1 text-xs" value={l.customDays !== undefined ? l.customDays : (days > 0 ? days : '')} onChange={(e) => {
+                            const val = e.target.value;
+                            updateLine(i, 'customDays', val);
+                            const d = parseInt(val, 10);
+                            if (d > 0) {
+                              const end = dayjs(l.startDate).add(d - 1, 'day').format('YYYY-MM-DD');
+                              setLines((ls) => ls.map((line, idx) => (idx === i ? { ...line, customDays: val, endDate: end } : line)));
+                            } else {
+                              setLines((ls) => ls.map((line, idx) => (idx === i ? { ...line, customDays: val } : line)));
+                            }
+                          }} />
+                        </div>
                       </div>
                       <div className="mt-2">
                         <div className="text-[10px] text-slate-400 mb-0.5">Display notes <span className="text-slate-300">(prints on the billing plan)</span></div>

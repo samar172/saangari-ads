@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, ChevronDown, ChevronRight } from 'lucide-react';
+import { Download, ChevronDown, ChevronRight, PlusSquare } from 'lucide-react';
 import dayjs from 'dayjs';
 import api, { downloadFile } from '../api';
 import { useCompany } from '../CompanyContext';
@@ -12,6 +12,7 @@ export default function Payments() {
   const [from, setFrom] = useState(dayjs().startOf('month').format('YYYY-MM-DD'));
   const [to, setTo] = useState(dayjs().format('YYYY-MM-DD'));
   const [expandedDate, setExpandedDate] = useState(null);
+  const [modal, setModal] = useState(false);
 
   function load() {
     setLoading(true);
@@ -48,7 +49,10 @@ export default function Payments() {
             {activeCompany ? `${activeCompany.name} — ` : ''}Date-wise payment received
           </p>
         </div>
-        <button className="btn-accent text-sm flex items-center gap-1.5" onClick={exportExcel}><Download size={16} /> Export Excel</button>
+        <div className="flex gap-2">
+          <button className="btn-primary text-sm flex items-center gap-1.5" onClick={() => setModal(true)}><PlusSquare size={16} /> Record Payment</button>
+          <button className="btn-accent text-sm flex items-center gap-1.5" onClick={exportExcel}><Download size={16} /> Export Excel</button>
+        </div>
       </div>
 
       {/* Date range filter */}
@@ -117,6 +121,8 @@ export default function Payments() {
           </table>
         </div>
       )}
+      
+      {modal && <RecordPaymentModal onClose={() => setModal(false)} onSaved={load} />}
     </div>
   );
 }
@@ -162,6 +168,116 @@ function SummaryTile({ label, value, accent = 'text-slate-800' }) {
     <div className="card p-4">
       <div className="text-xs text-slate-500 mb-1">{label}</div>
       <div className={`text-lg font-bold ${accent}`}>{value}</div>
+    </div>
+  );
+}
+
+function RecordPaymentModal({ onClose, onSaved }) {
+  const [search, setSearch] = useState('');
+  const [clients, setClients] = useState([]);
+  const [client, setClient] = useState(null);
+  const [orders, setOrders] = useState([]);
+  const [orderId, setOrderId] = useState('');
+  const [amount, setAmount] = useState('');
+  const [mode, setMode] = useState('CASH');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (search.length > 1 && !client) {
+      api.get(`/clients?q=${search}`).then((r) => setClients(r.data));
+    } else {
+      setClients([]);
+    }
+  }, [search, client]);
+
+  useEffect(() => {
+    if (client) {
+      api.get('/orders', { params: { clientId: client.id } }).then((r) => {
+        setOrders(r.data.filter((o) => o.balanceDue > 0));
+      });
+    }
+  }, [client]);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!orderId || !amount) return;
+    setBusy(true);
+    try {
+      await api.post(`/orders/${orderId}/payments`, { amount, mode });
+      onSaved();
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
+      <form onSubmit={submit} className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
+        <h2 className="text-xl font-bold mb-4">Record Payment</h2>
+        
+        <div className="space-y-4">
+          {!client ? (
+            <div>
+              <label className="label">Search Client</label>
+              <input type="text" className="input" placeholder="Name or phone..." value={search} onChange={(e) => setSearch(e.target.value)} autoFocus />
+              {clients.length > 0 && (
+                <div className="mt-2 border border-slate-200 rounded-lg max-h-40 overflow-y-auto">
+                  {clients.map((c) => (
+                    <div key={c.id} className="p-2 border-b last:border-b-0 border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={() => { setClient(c); setSearch(''); }}>
+                      <div className="font-medium text-sm">{c.name}</div>
+                      <div className="text-xs text-slate-500">{c.phone}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="label mb-0">Client</label>
+                <button type="button" className="text-xs text-brand hover:underline" onClick={() => { setClient(null); setOrderId(''); }}>Change</button>
+              </div>
+              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-sm">{client.name} ({client.phone})</div>
+            </div>
+          )}
+
+          {client && (
+            <div>
+              <label className="label">Pending Order</label>
+              <select className="input" value={orderId} onChange={(e) => setOrderId(e.target.value)} required>
+                <option value="">Select an order...</option>
+                {orders.map((o) => (
+                  <option key={o.id} value={o.id}>{o.orderNo} (Balance: ₹{o.balanceDue})</option>
+                ))}
+              </select>
+              {orders.length === 0 && <div className="text-xs text-red-500 mt-1">No pending orders found.</div>}
+            </div>
+          )}
+
+          {orderId && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Amount</label>
+                <input type="number" className="input" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} required />
+              </div>
+              <div>
+                <label className="label">Mode</label>
+                <select className="input" value={mode} onChange={(e) => setMode(e.target.value)}>
+                  <option value="CASH">CASH</option>
+                  <option value="BANK">BANK</option>
+                  <option value="CHEQUE">CHEQUE</option>
+                </select>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-3 mt-6">
+          <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy || !orderId || !amount}>Save Payment</button>
+        </div>
+      </form>
     </div>
   );
 }
