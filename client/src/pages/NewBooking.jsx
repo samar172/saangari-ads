@@ -8,6 +8,34 @@ import { Money, Badge } from '../components/ui';
 
 const emptyClient = { name: '', phone: '', email: '', company: '', taxCategory: 'NON_GST', gstNumber: '', state: 'Rajasthan', categoryId: '' };
 
+// Duration presets. Value encodes the tenure; the label is what the user picks.
+const DURATIONS = [
+  ['7D', '1 Week'], ['15D', '15 Days'],
+  ['1M', '1 Month'], ['2M', '2 Months'], ['3M', '3 Months'],
+  ['6M', '6 Months'], ['9M', '9 Months'], ['12M', '12 Months'],
+];
+
+// End date for a preset, using the inclusive last-active-day convention: a month
+// tenure from the 23rd runs to the 22nd of the target month (start + N months − 1
+// day); a day tenure of N days ends on start + N − 1.
+function presetEnd(startDate, val) {
+  const start = dayjs(startDate);
+  if (val.endsWith('M')) return start.add(Number(val.replace('M', '')), 'month').subtract(1, 'day').format('YYYY-MM-DD');
+  return start.add(Number(val.replace('D', '')) - 1, 'day').format('YYYY-MM-DD');
+}
+
+// Billed days for an inclusive [start, end] span — mirrors the server's
+// computeLine (flat 30-day months). Returns 0 for an invalid span.
+function billedDays(startDate, endDate) {
+  const start = dayjs(startDate).startOf('day');
+  const end = dayjs(endDate).startOf('day');
+  if (!startDate || !endDate || end.isBefore(start)) return 0;
+  const takeDown = end.add(1, 'day');
+  const months = takeDown.diff(start, 'month');
+  const remainingDays = takeDown.diff(start.add(months, 'month'), 'day');
+  return Math.max(1, months * 30 + remainingDays);
+}
+
 export default function NewBooking() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -118,7 +146,7 @@ export default function NewBooking() {
   // Live order quote
   useEffect(() => {
     const items = lines.filter((l) => l.siteId && l.startDate && l.endDate)
-      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, dayRateOverride: l.monthlyRateOverride ? Math.round(Number(l.monthlyRateOverride) / 30) : undefined }));
+      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, monthlyRateOverride: l.monthlyRateOverride || undefined }));
     if (items.length === 0) { setQuote(null); return; }
     const t = setTimeout(() => {
       api.post('/orders/quote', {
@@ -178,7 +206,7 @@ export default function NewBooking() {
         notes: form.notes,
         items: lines.map((l) => ({
           siteId: l.siteId, startDate: l.startDate, endDate: l.endDate,
-          dayRateOverride: l.monthlyRateOverride ? Math.round(Number(l.monthlyRateOverride) / 30) : undefined,
+          monthlyRateOverride: l.monthlyRateOverride || undefined,
           displayNotes: l.displayNotes || undefined,
         })),
       });
@@ -282,24 +310,10 @@ export default function NewBooking() {
               <div>
                 <label className="label">Duration</label>
                 <select className="input" onChange={(e) => {
-                  const val = e.target.value;
-                  if (val) {
-                    let end;
-                    if (val.endsWith('M')) {
-                      end = dayjs(form.defaultStart).add(Number(val.replace('M', '')), 'month').format('YYYY-MM-DD');
-                    } else {
-                      end = dayjs(form.defaultStart).add(Number(val.replace('D', '')) - 1, 'day').format('YYYY-MM-DD');
-                    }
-                    set('defaultEnd', end);
-                  }
+                  if (e.target.value) set('defaultEnd', presetEnd(form.defaultStart, e.target.value));
                 }}>
                   <option value="">Custom...</option>
-                  <option value="7D">1 Week</option>
-                  <option value="15D">15 Days</option>
-                  <option value="1M">1 Month</option>
-                  <option value="3M">3 Months</option>
-                  <option value="6M">6 Months</option>
-                  <option value="12M">12 Months</option>
+                  {DURATIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </div>
               <div>
@@ -327,11 +341,7 @@ export default function NewBooking() {
               <div className="space-y-2">
                 {lines.map((l, i) => {
                   const s = siteById[l.siteId];
-                  const start = dayjs(l.startDate).startOf('day');
-                  const end = dayjs(l.endDate).startOf('day');
-                  const months = end.isBefore(start) ? 0 : end.diff(start, 'month');
-                  const remainingDays = end.isBefore(start) ? 0 : end.diff(start.add(months, 'month'), 'day');
-                  const days = end.isBefore(start) ? 0 : (months === 0 ? remainingDays + 1 : (months * 30) + remainingDays);
+                  const days = billedDays(l.startDate, l.endDate);
                   return (
                     <div key={i} className="rounded-lg border border-slate-200 p-3">
                       <div className="flex items-start justify-between gap-2">
@@ -347,25 +357,13 @@ export default function NewBooking() {
                         <div>
                           <div className="text-[10px] text-slate-400 mb-0.5">Duration</div>
                           <select className="input py-1 text-xs" onChange={(e) => {
-                            const val = e.target.value;
-                            if (val) {
-                              let end;
-                              if (val.endsWith('M')) {
-                                end = dayjs(l.startDate).add(Number(val.replace('M', '')), 'month').format('YYYY-MM-DD');
-                              } else {
-                                end = dayjs(l.startDate).add(Number(val.replace('D', '')) - 1, 'day').format('YYYY-MM-DD');
-                              }
-                              updateLine(i, 'endDate', end);
+                            if (e.target.value) {
+                              updateLine(i, 'endDate', presetEnd(l.startDate, e.target.value));
                               updateLine(i, 'customDays', undefined);
                             }
                           }}>
                             <option value="">Custom...</option>
-                            <option value="7D">1 Week</option>
-                            <option value="15D">15 Days</option>
-                            <option value="1M">1 Month</option>
-                            <option value="3M">3 Months</option>
-                            <option value="6M">6 Months</option>
-                            <option value="12M">12 Months</option>
+                            {DURATIONS.map(([v, l2]) => <option key={v} value={v}>{l2}</option>)}
                           </select>
                         </div>
                         <div><div className="text-[10px] text-slate-400 mb-0.5">End</div><input type="date" className="input py-1 text-xs" value={l.endDate} onChange={(e) => { updateLine(i, 'endDate', e.target.value); updateLine(i, 'customDays', undefined); }} /></div>

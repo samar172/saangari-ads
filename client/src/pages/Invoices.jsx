@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Download } from 'lucide-react';
 import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
 import { useCompany } from '../CompanyContext';
@@ -26,7 +26,10 @@ export default function Invoices() {
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <h1 className="text-2xl font-bold text-slate-800">Invoices</h1>
-        {can(user, 'generateInvoice') && <button className="btn-accent flex items-center gap-1.5" onClick={() => setGenOpen(true)}><Plus size={16} /> Generate Invoice</button>}
+        <div className="flex flex-wrap gap-2">
+          <button className="btn-ghost flex items-center gap-1.5" onClick={() => downloadFile(`/exports/invoices/excel${activeCompany?.id ? `?companyId=${activeCompany.id}` : ''}`, 'invoices.xlsx')}><Download size={16} /> Export Excel</button>
+          {can(user, 'generateInvoice') && <button className="btn-accent flex items-center gap-1.5" onClick={() => setGenOpen(true)}><Plus size={16} /> Generate Invoice</button>}
+        </div>
       </div>
       {loading ? <Spinner /> : (
         <div className="card overflow-x-auto">

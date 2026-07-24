@@ -46,6 +46,7 @@ export default function OrderDetail() {
           </span>
         </div>
         <div className="flex-1" />
+        <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/orders/${id}/proposal.pdf`, `Proposal-${o.orderNo}.pdf`)}><FileText size={16} /> Proposal Letter</button>
         <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/orders/${id}/quotation.pdf`, `Quotation-${o.orderNo}.pdf`)}><Download size={16} /> Quotation PDF</button>
       </div>
 

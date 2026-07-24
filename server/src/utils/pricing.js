@@ -8,16 +8,38 @@ function dayRateOf(monthlyRate) {
 }
 
 // Price a single site line: rental for the display period.
-function computeLine({ monthlyRate, startDate, endDate, dayRateOverride }) {
+// endDate is the *inclusive* last active day of the display. Billing uses flat
+// 30-day months: a display from the 23rd for one month runs 23rd → 22nd of the
+// next month and bills 30 days, regardless of the calendar length of that month.
+//
+// To count consistently we work off the exclusive take-down day (end + 1): whole
+// months then contribute exactly 30 each and any leftover days are added on. This
+// avoids the old off-by-one where a full calendar month billed 30 but a 31-day
+// span billed 31.
+function computeLine({ monthlyRate, startDate, endDate, dayRateOverride, monthlyRateOverride }) {
   const start = dayjs(startDate).startOf('day');
   const end = dayjs(endDate).startOf('day');
   if (end.isBefore(start)) throw new Error('End date must be on or after start date');
-  
-  const months = end.diff(start, 'month');
-  const remainingDays = end.diff(start.add(months, 'month'), 'day');
-  const days = months === 0 ? remainingDays + 1 : (months * 30) + remainingDays;
-  const dayRate = dayRateOverride != null && dayRateOverride !== '' ? Number(dayRateOverride) : dayRateOf(monthlyRate);
-  const subtotal = Math.round(dayRate * days);
+
+  const takeDown = end.add(1, 'day'); // exclusive day the hoarding comes down
+  const months = takeDown.diff(start, 'month');
+  const remainingDays = takeDown.diff(start.add(months, 'month'), 'day');
+  const days = Math.max(1, (months * 30) + remainingDays);
+
+  const hasDayOverride = dayRateOverride != null && dayRateOverride !== '';
+  const effMonthly = monthlyRateOverride != null && monthlyRateOverride !== ''
+    ? Number(monthlyRateOverride) : Number(monthlyRate);
+  const dayRate = hasDayOverride ? Number(dayRateOverride) : dayRateOf(effMonthly);
+
+  // An explicit day-rate override (e.g. a stopped display billed for the days it
+  // actually ran) is priced straight at day-rate × days. Otherwise bill whole
+  // months at the full monthly rate and only the leftover days at the day rate,
+  // so a one-month display equals exactly one month's rent — never short by the
+  // few rupees lost to rounding monthlyRate/30.
+  const subtotal = hasDayOverride
+    ? Math.round(dayRate * days)
+    : Math.round(months * effMonthly + remainingDays * (effMonthly / 30));
+
   return { days, dayRate, subtotal };
 }
 

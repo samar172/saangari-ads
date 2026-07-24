@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import api from '../api';
+import { Download } from 'lucide-react';
+import api, { downloadFile } from '../api';
 import { useCompany } from '../CompanyContext';
 import { Money, Spinner, StatTile } from '../components/ui';
 import {
@@ -46,14 +47,19 @@ export default function Reports() {
           <h1 className="text-2xl font-bold text-slate-800 mb-1">Reports & Analytics</h1>
           <p className="text-sm text-slate-500">{localCid === 'ALL' ? 'Combined performance across all companies' : `${companies.find(c => c.id === Number(localCid))?.name} — Company performance overview`}</p>
         </div>
-        <select 
-          className="input w-auto py-1.5" 
-          value={localCid} 
-          onChange={(e) => setLocalCid(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value))}
-        >
-          <option value="ALL">All Companies (Combined)</option>
-          {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            className="input w-auto py-1.5"
+            value={localCid}
+            onChange={(e) => setLocalCid(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value))}
+          >
+            <option value="ALL">All Companies (Combined)</option>
+            {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <button className="btn-accent text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/exports/reports/excel${cid ? `?companyId=${cid}` : ''}`, 'reports.xlsx')}>
+            <Download size={16} /> Export Excel
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4">

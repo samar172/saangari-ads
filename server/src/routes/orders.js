@@ -18,11 +18,11 @@ const ACTIVE = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
 // When shifting, exclude only the line being moved — a sibling line of the same
 // order sitting on the target is still a real clash.
 //
-// endDate is the *exclusive* take-down day: a booking [Aug 9, Oct 9) occupies
-// Aug 9…Oct 8, so a new booking starting Oct 9 does NOT overlap. Hence strict
-// inequalities — two bookings truly clash iff existing.start < new.end AND
-// existing.end > new.start. Using lte/gte here would wrongly reject legitimate
-// back-to-back bookings that share the take-down day.
+// endDate is the *inclusive* last active day: a display Aug 9 → Oct 8 occupies
+// every day up to and including Oct 8, so a new display starting Oct 9 does NOT
+// overlap, but one starting Oct 8 does. Hence inclusive bounds — two bookings
+// clash iff existing.start <= new.end AND existing.end >= new.start. Back-to-back
+// bookings (one ends the day before the next begins) correctly do not clash.
 async function findConflict(db, siteId, startDate, endDate, { excludeOrderId, excludeBookingId } = {}) {
   return db.booking.findFirst({
     where: {
@@ -30,16 +30,16 @@ async function findConflict(db, siteId, startDate, endDate, { excludeOrderId, ex
       ...(excludeOrderId ? { orderId: { not: excludeOrderId } } : {}),
       ...(excludeBookingId ? { id: { not: excludeBookingId } } : {}),
       status: { in: ACTIVE },
-      startDate: { lt: new Date(endDate) },
-      endDate: { gt: new Date(startDate) },
+      startDate: { lte: new Date(endDate) },
+      endDate: { gte: new Date(startDate) },
     },
     include: { order: { include: { client: { select: { name: true } } } } },
   });
 }
 
-// Two date ranges overlap on the same site, exclusive end (mirrors findConflict).
+// Two date ranges overlap on the same site, inclusive end (mirrors findConflict).
 function rangesOverlap(startA, endA, startB, endB) {
-  return new Date(startA) < new Date(endB) && new Date(endA) > new Date(startB);
+  return new Date(startA) <= new Date(endB) && new Date(endA) >= new Date(startB);
 }
 
 // Serialize concurrent bookings on the same physical sites: take a row lock on
@@ -187,7 +187,7 @@ async function priceFromBody(body) {
   const pricedItems = items.map((i) => {
     const site = byId[Number(i.siteId)];
     if (!site) throw new Error(`Site ${i.siteId} not found`);
-    return { siteId: site.id, monthlyRate: site.monthlyRate, startDate: i.startDate, endDate: i.endDate, dayRateOverride: i.dayRateOverride };
+    return { siteId: site.id, monthlyRate: site.monthlyRate, startDate: i.startDate, endDate: i.endDate, dayRateOverride: i.dayRateOverride, monthlyRateOverride: i.monthlyRateOverride };
   });
 
   const result = computeOrder({
@@ -611,6 +611,140 @@ router.get('/:id/quotation.pdf', async (req, res) => {
   }
 
   doc.font('Helvetica').fontSize(8).fillColor('#888').text('This quotation is valid for 15 days. Prices exclusive of printing/mounting unless stated.', 45, 780, { align: 'center', width: 505 });
+  doc.end();
+});
+
+// Formal proposal letter (matches the printed Saangari letterhead the sales team
+// hands to clients): red header, intro letter, a rate table, T&C, signature.
+// The letterhead identity is fixed company stationery, kept here as constants.
+const LETTER = {
+  brand: '#9E2015',
+  signatory: 'Anant Pareek',
+  signatoryTitle: 'Business Head',
+  legalName: 'Saangari Ads Private Limited',
+  headOffice: '27/A Waterloo ST, Kolkata, West Bengal 70069',
+  branchOffice: 'Opposite Kothari Palace, Near RaniBazar Flyover, RaniBazar, Bikaner',
+  contact: 'saangariads@gmail.com, +91 988-988-1751, 988-988-2751',
+};
+
+router.get('/:id/proposal.pdf', async (req, res) => {
+  const order = await prisma.order.findUnique({ where: { id: Number(req.params.id) }, include: orderInclude });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  const path = require('path');
+  const doc = new PDFDocument({ margin: 0, size: 'A4' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="Proposal-${order.orderNo}.pdf"`);
+  doc.pipe(res);
+
+  const W = doc.page.width;   // 595
+  const M = 40;               // body margin
+  const bodyW = W - M * 2;
+
+  // ── Header banner with logo ──
+  const bannerH = 92;
+  doc.rect(0, 0, W, bannerH).fill(LETTER.brand);
+  const logoPath = path.join(__dirname, '../assets/logo.png');
+  try { doc.image(logoPath, (W - 150) / 2, 8, { width: 150 }); }
+  catch (e) {
+    doc.fillColor('#fff').font('Helvetica-Bold').fontSize(30).text('SAANGARI', 0, 24, { align: 'center', width: W });
+    doc.font('Helvetica').fontSize(9).text('ADS PRIVATE LIMITED · Transforming Brands With Creativity', 0, 60, { align: 'center', width: W });
+  }
+
+  let y = bannerH + 18;
+  // Ref no + date
+  const prNo = `BKN/2026/PR/${String(order.orderNo).replace(/\D/g, '') || order.id}`;
+  doc.font('Helvetica-Bold').fontSize(9).fillColor('#000')
+    .text(`S No. ${prNo}`, M, y, { width: bodyW / 2, align: 'left' });
+  doc.text(`Date:- ${new Date(order.bookingDate).toLocaleDateString('en-GB').replace(/\//g, '-')}`, M + bodyW / 2, y, { width: bodyW / 2, align: 'right' });
+  y += 26;
+
+  // Addressee
+  doc.font('Helvetica-Bold').fontSize(11).fillColor('#000').text(order.client.name, M, y);
+  y = doc.y;
+  if (order.client.company) { doc.text(order.client.company, M, y); y = doc.y; }
+  y += 12;
+
+  // Letter body
+  doc.font('Helvetica-Bold').fontSize(10).text('Dear Sir,', M, y);
+  y = doc.y + 6;
+  doc.font('Helvetica').fontSize(10).fillColor('#222');
+  const para = (t) => { doc.text(t, M, y, { width: bodyW, align: 'justify', indent: 18, lineGap: 2 }); y = doc.y + 8; };
+  para(`We hope this letter finds you well. On behalf of ${LETTER.legalName}, we are excited to introduce ourselves as a fresh and dynamic player in the outdoor advertising industry.`);
+  para(`As a professional and innovative company, we specialize in providing top-notch advertisement sites/unipoles that can elevate your brand's visibility and reach. Our team of creative experts is dedicated to transforming your brand with innovative ideas, cutting-edge designs, and strategic placements.`);
+  para(`We understand the importance of effective advertising in today's competitive market. We would be delighted to provide you with a personalized quotation for our advertisement sites/unipoles. Please find the comprehensive quote outlining our services and pricing.`);
+
+  // ── Rate table (one row per site, styled like the reference) ──
+  y += 2;
+  const col = { no: M, loc: M + 34, period: M + 320, amt: M + 410 };
+  const rowH = 18;
+  doc.rect(M, y, bodyW, rowH).fill(LETTER.brand);
+  doc.fillColor('#fff').font('Helvetica-Bold').fontSize(9)
+    .text('#', col.no + 4, y + 5, { width: 26 })
+    .text('Location', col.loc + 4, y + 5, { width: 280 })
+    .text('Period', col.period + 4, y + 5, { width: 84 })
+    .text('Amount', col.amt + 4, y + 5, { width: bodyW - (col.amt - M) - 8, align: 'right' });
+  y += rowH;
+
+  doc.font('Helvetica').fontSize(9);
+  order.items.forEach((it, i) => {
+    const loc = `${it.site.code} — ${it.site.location}`;
+    const h = Math.max(rowH, doc.heightOfString(loc, { width: 280 }) + 8);
+    if (i % 2 === 1) { doc.rect(M, y, bodyW, h).fill('#f7dede'); }
+    else { doc.rect(M, y, bodyW, h).fill('#fbeded'); }
+    doc.fillColor('#000')
+      .text(String(i + 1), col.no + 4, y + 4, { width: 26 })
+      .text(loc, col.loc + 4, y + 4, { width: 280 })
+      .text(`${it.days} days`, col.period + 4, y + 4, { width: 84 })
+      .text(INR(it.subtotal), col.amt + 4, y + 4, { width: bodyW - (col.amt - M) - 8, align: 'right' });
+    y += h;
+  });
+  // Grand total row
+  doc.rect(M, y, bodyW, rowH).fill('#efc9c9');
+  doc.font('Helvetica-Bold').fillColor('#000')
+    .text('Grand Total', col.loc + 4, y + 5, { width: 280 })
+    .text(INR(order.grandTotal), col.amt + 4, y + 5, { width: bodyW - (col.amt - M) - 8, align: 'right' });
+  y += rowH + 3;
+  doc.font('Helvetica-Oblique').fontSize(8).fillColor('#333')
+    .text(order.taxCategory === 'GST' ? '*GST Applicable 18%' : '*GST not applicable', M, y, { width: bodyW, align: 'right' });
+  y += 16;
+
+  // ── Terms & Conditions ──
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#000').text('Terms and Conditions:', M, y);
+  y = doc.y + 4;
+  const terms = [
+    'Rates are excluding Print. Printing & Mounting Charges are billed per unipole.',
+    'Design changes will be subject to additional costs, which will be borne by your company.',
+    `Payment terms: - ${order.paymentTerms === 'POSTPAID' ? 'Postpaid.' : 'Advance.'}`,
+  ];
+  doc.font('Helvetica').fontSize(9.5).fillColor('#222');
+  for (const t of terms) {
+    doc.text('•', M + 6, y);
+    doc.text(t, M + 20, y, { width: bodyW - 26 });
+    y = doc.y + 3;
+  }
+  y += 6;
+
+  doc.fontSize(10).fillColor('#222');
+  para(`If you require any further information or would like to discuss how ${LETTER.legalName} can help amplify your brand's presence, please do not hesitate to contact us.`);
+  para(`Thank you for considering ${LETTER.legalName} as your advertising partner. We look forward to the opportunity to work with you and help your brand shine.`);
+
+  // ── Signature ──
+  y += 6;
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#000').text('Best regards,', M, y, { width: bodyW, align: 'right' });
+  y = doc.y + 26;
+  doc.text(LETTER.signatory, M, y, { width: bodyW, align: 'right' });
+  doc.font('Helvetica').fontSize(9).text(LETTER.signatoryTitle, M, doc.y, { width: bodyW, align: 'right' });
+  doc.text(LETTER.legalName, M, doc.y, { width: bodyW, align: 'right' });
+
+  // ── Footer banner ──
+  const footY = doc.page.height - 46;
+  doc.rect(0, footY, W, 46).fill(LETTER.brand);
+  doc.font('Helvetica-Bold').fontSize(7).fillColor('#fff')
+    .text('Head Office: ', M, footY + 8, { continued: true }).font('Helvetica').text(LETTER.headOffice, { continued: true })
+    .font('Helvetica-Bold').text('   Branch Office: ', { continued: true }).font('Helvetica').text(LETTER.branchOffice);
+  doc.font('Helvetica-Bold').text('Contact: ', M, doc.y + 2, { continued: true, width: bodyW }).font('Helvetica').text(LETTER.contact);
+
   doc.end();
 });
 
