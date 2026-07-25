@@ -5,7 +5,7 @@ import { useAuth, can } from '../auth';
 import { X, CheckSquare, Plus, FileText, Download, MapPin, RefreshCw, Camera, Pencil, Check } from 'lucide-react';
 import { Badge, Money, Modal, Spinner } from '../components/ui';
 
-const TYPE_LABELS = { UNIPOLE: 'Unipole', GANTRY: 'Gantry', KIOSK: 'Kiosk', HOARDING: 'Hoarding' };
+const TYPE_LABELS = { UNIPOLE: 'Unipole', GANTRY: 'Gantry', KIOSK: 'Kiosk' };
 const TILE_COLORS = {
   AVAILABLE: 'bg-emerald-500 hover:bg-emerald-600 ring-emerald-300',
   BOOKED: 'bg-red-500 hover:bg-red-600 ring-red-300',

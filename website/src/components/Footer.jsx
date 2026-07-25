@@ -33,6 +33,8 @@ export default function Footer() {
                 <a
                   key={s.label}
                   href={s.href}
+                  target="_blank"
+                  rel="noreferrer"
                   className="rounded-full border border-cream-50/15 px-4 py-2 text-xs font-medium text-cream-100/70 transition-all duration-300 hover:-translate-y-0.5 hover:border-gold-500 hover:bg-gold-500 hover:text-brand-950"
                 >
                   {s.label}
@@ -84,10 +86,7 @@ export default function Footer() {
               </li>
               <li className="flex gap-3">
                 <Phone size={16} className="mt-0.5 shrink-0 text-gold-500" />
-                <a
-                  href={`tel:${company.phone.replace(/\s/g, '')}`}
-                  className="link-underline hover:text-gold-300"
-                >
+                <a href={company.phoneHref} className="link-underline hover:text-gold-300">
                   {company.phone}
                 </a>
               </li>

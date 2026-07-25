@@ -216,7 +216,7 @@ function Sidebar() {
       icon: Phone,
       label: 'Phone',
       value: company.phone,
-      href: `tel:${company.phone.replace(/\s/g, '')}`,
+      href: company.phoneHref,
     },
     { icon: MapPin, label: 'Studio', value: company.address },
     { icon: Clock, label: 'Hours', value: company.hours },
@@ -266,6 +266,8 @@ function Sidebar() {
             <a
               key={s.label}
               href={s.href}
+              target="_blank"
+              rel="noreferrer"
               className="rounded-2xl border border-brand-900/12 px-4 py-3 text-center text-xs font-semibold text-ink/60 transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-700 hover:bg-brand-700 hover:text-cream-50"
             >
               {s.label}
@@ -302,12 +304,7 @@ function MapStrip() {
           Come see the studio — the coffee is genuinely good
         </h2>
         <p className="max-w-md text-sm text-cream-100/55">{company.address}</p>
-        <a
-          href="https://maps.google.com"
-          target="_blank"
-          rel="noreferrer"
-          className="btn-light"
-        >
+        <a href={company.mapsUrl} target="_blank" rel="noreferrer" className="btn-light">
           Open in Maps
         </a>
       </div>

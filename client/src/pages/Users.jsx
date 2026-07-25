@@ -56,7 +56,7 @@ function AddUser({ onClose, onDone }) {
 
   async function submit() {
     setBusy(true); setErr('');
-    try { await api.post('/users', form); onDone(); }
+    try { await api.post('/users', { ...form, email: form.email.trim().toLowerCase(), password: form.password.trim() }); onDone(); }
     catch (e) { setErr(e.response?.data?.error || 'Failed'); }
     finally { setBusy(false); }
   }
@@ -65,10 +65,10 @@ function AddUser({ onClose, onDone }) {
     <Modal open onClose={onClose} title="Add User">
       {err && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
       <div className="space-y-3">
-        <input className="input" placeholder="Name" value={form.name} onChange={(e) => set('name', e.target.value)} />
-        <input className="input" placeholder="Email" value={form.email} onChange={(e) => set('email', e.target.value)} />
-        <input className="input" placeholder="Phone" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
-        <input className="input" type="password" placeholder="Password" value={form.password} onChange={(e) => set('password', e.target.value)} />
+        <input className="input" placeholder="Name" autoComplete="off" value={form.name} onChange={(e) => set('name', e.target.value)} />
+        <input className="input" placeholder="Email" autoComplete="off" value={form.email} onChange={(e) => set('email', e.target.value)} />
+        <input className="input" placeholder="Phone" autoComplete="off" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
+        <input className="input" type="text" placeholder="Password" autoComplete="new-password" value={form.password} onChange={(e) => set('password', e.target.value)} />
         <select className="input" value={form.role} onChange={(e) => set('role', e.target.value)}>
           {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
         </select>

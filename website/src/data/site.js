@@ -6,15 +6,13 @@ export const company = {
   legalName: 'Saangari Ads Private Limited',
   tagline: 'Transforming Brands With Creativity',
   email: 'hello@saangariads.com',
-  phone: '+91 98765 43210',
-  address: 'Level 4, Creative House, MG Road, Bengaluru 560001, India',
+  phone: '098898 81751',
+  phoneHref: 'tel:+919889881751',
+  address: 'Kothari Palace, Chopra Katla, Rani Bazar, Bikaner, Rajasthan 334001',
+  mapsUrl:
+    'https://www.google.com/maps/search/?api=1&query=Kothari+Palace%2C+Chopra+Katla%2C+Rani+Bazar%2C+Bikaner%2C+Rajasthan+334001',
   hours: 'Mon – Sat · 10:00 to 19:00 IST',
-  socials: [
-    { label: 'Instagram', href: '#' },
-    { label: 'LinkedIn', href: '#' },
-    { label: 'Behance', href: '#' },
-    { label: 'YouTube', href: '#' },
-  ],
+  socials: [{ label: 'Instagram', href: 'https://www.instagram.com/saangariads/' }],
 }
 
 export const nav = [
