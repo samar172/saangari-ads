@@ -27,9 +27,19 @@ function cleanSiteData(body = {}) {
   return data;
 }
 
-// Inventory dashboard: all sites with current/upcoming booking info
+// Statuses that actually hold a site's calendar (WAITLIST does not).
+const HOLDING = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
+
+// Inventory dashboard: all sites with current/upcoming booking info.
+//
+// The `status` column is a single denormalized snapshot and is date-blind — a
+// site whose live campaign ends next week still reads "BOOKED" today, and a
+// future campaign flips it "BOOKED" now. So when the caller passes a start/end
+// range we compute availability against the actual booking calendar and return
+// `availableForRange` + the overlapping `rangeConflict`. Callers booking for a
+// date range must trust those, not the raw `status`.
 router.get('/', async (req, res) => {
-  const { type, zone, status } = req.query;
+  const { type, zone, status, start, end } = req.query;
   const where = { active: true };
   if (type) where.type = type;
   if (zone) where.zone = zone;
@@ -46,6 +56,28 @@ router.get('/', async (req, res) => {
       },
     },
   });
+
+  if (start && end) {
+    const s = new Date(start);
+    const e = new Date(end);
+    for (const site of sites) {
+      // Inclusive overlap: existing.start <= new.end AND existing.end >= new.start
+      const conflict = site.bookings.find(
+        (b) => HOLDING.includes(b.status) && new Date(b.startDate) <= e && new Date(b.endDate) >= s,
+      );
+      site.availableForRange = !conflict;
+      site.rangeConflict = conflict
+        ? {
+            status: conflict.status,
+            orderNo: conflict.order?.orderNo,
+            client: conflict.order?.client?.name,
+            startDate: conflict.startDate,
+            endDate: conflict.endDate,
+          }
+        : null;
+    }
+  }
+
   res.json(sites);
 });
 
@@ -101,6 +133,37 @@ router.patch('/:id', requireRole('MANAGER'), async (req, res) => {
   const data = cleanSiteData(req.body);
   const site = await prisma.site.update({ where: { id: Number(req.params.id) }, data });
   res.json(site);
+});
+
+// Put a lightweight manual hold on a site — no quotation, no booking, just keep
+// it off the market for now (e.g. a client is deciding). Only a free site can be
+// held; a booked one must go through the normal booking/waitlist flow.
+router.post('/:id/hold', requireRole('SALES', 'MANAGER'), async (req, res) => {
+  const id = Number(req.params.id);
+  const { note, until } = req.body || {};
+  const site = await prisma.site.findUnique({ where: { id } });
+  if (!site) return res.status(404).json({ error: 'Site not found' });
+  if (['BOOKED', 'TENTATIVE'].includes(site.status))
+    return res.status(400).json({ error: `${site.code} is already booked — it cannot be put on hold.` });
+
+  const updated = await prisma.site.update({
+    where: { id },
+    data: { status: 'HOLD', holdNote: note ? String(note) : null, holdUntil: until ? new Date(until) : null },
+  });
+  res.json(updated);
+});
+
+// Release a manual hold back to AVAILABLE.
+router.post('/:id/release', requireRole('SALES', 'MANAGER'), async (req, res) => {
+  const id = Number(req.params.id);
+  const site = await prisma.site.findUnique({ where: { id } });
+  if (!site) return res.status(404).json({ error: 'Site not found' });
+  if (site.status !== 'HOLD') return res.status(400).json({ error: `${site.code} is not on hold.` });
+  const updated = await prisma.site.update({
+    where: { id },
+    data: { status: 'AVAILABLE', holdNote: null, holdUntil: null },
+  });
+  res.json(updated);
 });
 
 // Upload / replace the site's display image (Manager / Super Admin)

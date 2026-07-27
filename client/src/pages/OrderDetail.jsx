@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Tag, Download, Receipt, FileText, StopCircle, ArrowRightLeft, Camera, MapPin, Image as ImageIcon, Newspaper, Banknote, Check } from 'lucide-react';
+import { Tag, Download, Receipt, FileText, StopCircle, ArrowRightLeft, Camera, MapPin, Image as ImageIcon, Newspaper, Banknote, Check, Plus, Trash2 } from 'lucide-react';
 import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
 import { Badge, Money, Spinner } from '../components/ui';
@@ -16,6 +16,7 @@ export default function OrderDetail() {
   const [o, setO] = useState(null);
   const [tab, setTab] = useState('overview');
   const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   function load() { api.get(`/orders/${id}`).then((r) => setO(r.data)).catch(() => navigate('/orders')); }
   useEffect(load, [id, navigate]);
@@ -48,10 +49,57 @@ export default function OrderDetail() {
         <div className="flex-1" />
         <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/orders/${id}/proposal.pdf`, `Proposal-${o.orderNo}.pdf`)}><FileText size={16} /> Proposal Letter</button>
         <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/orders/${id}/quotation.pdf`, `Quotation-${o.orderNo}.pdf`)}><Download size={16} /> Quotation PDF</button>
+        {can(user, 'manageCategories') && (
+          <button className="btn-ghost text-sm flex items-center gap-1.5 text-red-600 hover:bg-red-50" onClick={() => setConfirmDelete(true)}><Trash2 size={16} /> Delete</button>
+        )}
       </div>
 
       <div className="card">
         <OrderTabs o={o} user={user} busy={busy} changeStatus={changeStatus} onChanged={load} tab={tab} setTab={setTab} />
+      </div>
+
+      {confirmDelete && (
+        <DeleteOrderModal order={o} onClose={() => setConfirmDelete(false)} onDeleted={() => navigate('/orders')} />
+      )}
+    </div>
+  );
+}
+
+// Two-step delete: the user must type the order number to arm the button, so a
+// campaign can't be wiped by a stray click. The server still refuses if money
+// or invoices exist.
+function DeleteOrderModal({ order, onClose, onDeleted }) {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const armed = text.trim().toUpperCase() === order.orderNo.toUpperCase();
+
+  async function del() {
+    setBusy(true); setErr('');
+    try {
+      await api.delete(`/orders/${order.id}`);
+      onDeleted();
+    } catch (e) {
+      setErr(e.response?.data?.error || 'Could not delete this order');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 flex items-start justify-center p-4 z-50 overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md my-auto p-6">
+        <h2 className="text-lg font-bold text-red-700 flex items-center gap-2"><Trash2 size={18} /> Delete {order.orderNo}?</h2>
+        <p className="text-sm text-slate-600 mt-2">
+          This permanently removes the campaign, its sites and add-ons, and frees the held sites. This cannot be undone.
+          {order.amountPaid > 0 && <span className="block mt-1 text-red-600 font-medium">This order has payments — the server will refuse; cancel it instead.</span>}
+        </p>
+        <label className="label mt-4">Type <span className="font-mono font-semibold">{order.orderNo}</span> to confirm</label>
+        <input className="input" value={text} onChange={(e) => setText(e.target.value)} autoFocus placeholder={order.orderNo} />
+        {err && <div className="mt-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
+        <div className="flex justify-end gap-3 mt-5">
+          <button type="button" className="btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button type="button" className="btn-danger" disabled={busy || !armed} onClick={del}>{busy ? 'Deleting…' : 'Delete permanently'}</button>
+        </div>
       </div>
     </div>
   );
@@ -70,7 +118,7 @@ export function OrderTabs({ o, user, busy, changeStatus, onChanged, tab, setTab,
       </div>
 
       <div className={compact ? 'p-4' : 'p-6'}>
-        {tab === 'overview' && <Overview o={o} user={user} busy={busy} changeStatus={changeStatus} />}
+        {tab === 'overview' && <Overview o={o} user={user} busy={busy} changeStatus={changeStatus} onChanged={onChanged} />}
         {tab === 'sites' && (
           <div className="space-y-4">
             {o.items.map((it) => <LineCard key={it.id} order={o} line={it} onChanged={onChanged} />)}
@@ -82,7 +130,87 @@ export function OrderTabs({ o, user, busy, changeStatus, onChanged, tab, setTab,
   );
 }
 
-function Overview({ o, user, busy, changeStatus }) {
+// Add a mid-campaign extra charge (re-print / extra mount / other). Folds into
+// the order's add-on total and re-prices tax + grand total on the server.
+function AddOnForm({ orderId, onChanged }) {
+  const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState('PRINT');
+  const [label, setLabel] = useState('');
+  const [amount, setAmount] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function add() {
+    if (!label.trim() || !(Number(amount) > 0)) { setErr('Enter a label and amount'); return; }
+    setBusy(true); setErr('');
+    try {
+      await api.post(`/orders/${orderId}/addons`, { kind, label: label.trim(), amount: Number(amount) });
+      setLabel(''); setAmount(''); setOpen(false);
+      onChanged && onChanged();
+    } catch (e) {
+      setErr(e.response?.data?.error || 'Could not add this charge');
+    } finally { setBusy(false); }
+  }
+
+  if (!open) {
+    return (
+      <button type="button" className="mt-4 text-xs font-medium text-brand hover:underline flex items-center gap-1" onClick={() => setOpen(true)}>
+        <Plus size={12} /> Add-on charge (re-print / mount)
+      </button>
+    );
+  }
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3 space-y-2">
+      <div className="text-xs font-semibold text-slate-600">New add-on charge</div>
+      <div className="grid grid-cols-3 gap-2">
+        <select className="input py-1.5 text-sm" value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="PRINT">Print</option>
+          <option value="MOUNT">Mount</option>
+          <option value="OTHER">Other</option>
+        </select>
+        <input className="input py-1.5 text-sm col-span-2" placeholder="e.g. new creative re-print" value={label} onChange={(e) => setLabel(e.target.value)} />
+      </div>
+      <input type="number" min="1" className="input py-1.5 text-sm" placeholder="Amount (₹)" value={amount} onChange={(e) => setAmount(e.target.value)} />
+      {err && <div className="text-xs text-red-600">{err}</div>}
+      <div className="flex justify-end gap-2">
+        <button type="button" className="btn-ghost text-xs py-1" disabled={busy} onClick={() => { setOpen(false); setErr(''); }}>Cancel</button>
+        <button type="button" className="btn-primary text-xs py-1" disabled={busy} onClick={add}>{busy ? 'Adding…' : 'Add charge'}</button>
+      </div>
+    </div>
+  );
+}
+
+// Switch a live order between GST and cash (Non-GST) billing — for when a client
+// asks at billing time to settle in cash. Re-prices on the server.
+function TaxToggle({ order, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const toGst = order.taxCategory !== 'GST';
+
+  async function switchTax() {
+    setBusy(true); setErr('');
+    try {
+      await api.patch(`/orders/${order.id}/tax`, { taxCategory: toGst ? 'GST' : 'NON_GST' });
+      onChanged && onChanged();
+    } catch (e) {
+      setErr(e.response?.data?.error || 'Could not change the tax treatment');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="mt-3 pt-3 border-t border-slate-200">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-slate-500">Currently billed {order.taxCategory === 'GST' ? 'with GST (18%)' : 'in cash (Non-GST)'}</span>
+        <button type="button" className="text-xs font-medium text-brand hover:underline disabled:opacity-50" disabled={busy} onClick={switchTax}>
+          {busy ? 'Updating…' : toGst ? 'Apply GST (18%)' : 'Settle in cash (remove GST)'}
+        </button>
+      </div>
+      {err && <div className="mt-2 text-xs text-red-600">{err}</div>}
+    </div>
+  );
+}
+
+function Overview({ o, user, busy, changeStatus, onChanged }) {
   return (
     <div className="grid md:grid-cols-2 gap-8">
       <div>
@@ -106,7 +234,6 @@ function Overview({ o, user, busy, changeStatus }) {
         {can(user, 'changeBookingStatus') && (
           <div className="mt-6 flex flex-wrap gap-2">
             {o.status === 'QUOTATION' && <button className="btn-primary" disabled={busy} onClick={() => changeStatus('CONFIRMED')}>Confirm order</button>}
-            {['CONFIRMED', 'LIVE'].includes(o.status) && <button className="btn-ghost" disabled={busy} onClick={() => changeStatus('COMPLETED')}>Mark completed</button>}
             {!['CANCELLED', 'COMPLETED'].includes(o.status) && <button className="btn-danger" disabled={busy} onClick={() => changeStatus('CANCELLED')}>Cancel</button>}
           </div>
         )}
@@ -145,6 +272,12 @@ function Overview({ o, user, busy, changeStatus }) {
           <div className="mt-4 text-xs text-slate-500 space-y-1">
             {o.addOns.map((a) => <div key={a.id} className="flex justify-between"><span>{a.label}</span><Money value={a.amount} /></div>)}
           </div>
+        )}
+        {can(user, 'changeBookingStatus') && o.status !== 'CANCELLED' && (
+          <AddOnForm orderId={o.id} onChanged={onChanged} />
+        )}
+        {can(user, 'viewReports') && !['CANCELLED', 'COMPLETED'].includes(o.status) && (
+          <TaxToggle order={o} onChanged={onChanged} />
         )}
       </div>
     </div>

@@ -140,7 +140,7 @@ router.get('/', async (req, res) => {
     include: {
       client: { select: { id: true, name: true, phone: true, taxCategory: true } },
       category: { select: { id: true, name: true } },
-      company: { select: { id: true, name: true, code: true } },
+      company: { select: { id: true, name: true, code: true, gstHidden: true } },
       createdBy: { select: { id: true, name: true } },
       // startDate/endDate drive the display-period columns on the orders table.
       items: {
@@ -363,7 +363,11 @@ router.post('/:id/status', requireRole('SALES', 'MANAGER', 'FINANCE'), async (re
         // Leave waitlisted lines alone unless we're cancelling/completing the order
         if (line.status === 'WAITLIST' && !['CANCELLED', 'COMPLETED'].includes(status)) continue;
         await tx.booking.update({ where: { id: line.id }, data: { status: lineFor[status] } });
-        if (siteFor[status]) await tx.site.update({ where: { id: line.siteId }, data: { status: siteFor[status] } });
+        // Completing/cancelling frees the tile only if no other live booking
+        // still holds it (a site can carry back-to-back or overlapping campaigns);
+        // confirming/going live marks it booked.
+        if (siteFor[status] === 'AVAILABLE') await releaseSite(tx, line.siteId, line.id);
+        else if (siteFor[status]) await tx.site.update({ where: { id: line.siteId }, data: { status: siteFor[status] } });
       }
     }
   });
@@ -420,6 +424,80 @@ router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (
 
   const full = await prisma.order.findUnique({ where: { id }, include: orderInclude });
   res.status(201).json(withDerived(full));
+});
+
+// Add an extra charge to an existing order — e.g. a mid-campaign re-print or an
+// extra mount when the client sends a new design. Stored as an OrderAddOn line,
+// folded into addOnTotal, then the order is re-priced so tax + grand total stay
+// in step (and any receivable balance grows accordingly).
+router.post('/:id/addons', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) => {
+  const id = Number(req.params.id);
+  const { label, amount, kind } = req.body || {};
+  const amt = Math.round(Number(amount) || 0);
+  const text = String(label || '').trim();
+  if (!text || amt <= 0) return res.status(400).json({ error: 'Add-on needs a label and a positive amount' });
+
+  const order = await prisma.order.findUnique({ where: { id } });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.status === 'CANCELLED') return res.status(400).json({ error: 'Cannot add charges to a cancelled order' });
+
+  // Tag the line with its kind so print vs mount is legible on the invoice.
+  const prefix = kind === 'PRINT' ? 'Print: ' : kind === 'MOUNT' ? 'Mount: ' : '';
+  await prisma.$transaction(async (tx) => {
+    await tx.orderAddOn.create({ data: { orderId: id, label: `${prefix}${text}`, amount: amt } });
+    await tx.order.update({ where: { id }, data: { addOnTotal: (order.addOnTotal || 0) + amt } });
+    await repriceOrder(tx, id);
+  });
+
+  const full = await prisma.order.findUnique({ where: { id }, include: orderInclude });
+  res.status(201).json(withDerived(full));
+});
+
+// Switch an order's tax treatment after the fact — e.g. a campaign started
+// under GST that the client later asks to settle in cash (Non-GST) at billing
+// time. Re-prices so CGST/SGST/IGST and the grand total update.
+router.patch('/:id/tax', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const id = Number(req.params.id);
+  const { taxCategory } = req.body || {};
+  if (!['GST', 'NON_GST'].includes(taxCategory)) return res.status(400).json({ error: 'taxCategory must be GST or NON_GST' });
+
+  const order = await prisma.order.findUnique({ where: { id }, include: { company: true } });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  // A Non-GST-only entity has no GST registration to bill under.
+  if (taxCategory === 'GST' && order.company?.gstHidden)
+    return res.status(400).json({ error: `${order.company.name} does not bill GST.` });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.order.update({ where: { id }, data: { taxCategory } });
+    await repriceOrder(tx, id);
+  });
+
+  const full = await prisma.order.findUnique({ where: { id }, include: orderInclude });
+  res.json(withDerived(full));
+});
+
+// Permanently delete an order — for a campaign that was committed then ditched
+// before anything was collected or billed. Money and invoices are hard records,
+// so refuse if either exists (cancel instead); otherwise cascade removes the
+// bookings/add-ons/reminders and the freed sites are released.
+router.delete('/:id', requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+  const id = Number(req.params.id);
+  const order = await prisma.order.findUnique({
+    where: { id },
+    include: { items: { select: { siteId: true } }, payments: { select: { id: true } }, invoices: { select: { id: true } } },
+  });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.payments.length)
+    return res.status(400).json({ error: `${order.orderNo} has recorded payments — cancel it instead, or reverse the payments first.` });
+  if (order.invoices.length)
+    return res.status(400).json({ error: `${order.orderNo} has been invoiced — void the invoice before deleting.` });
+
+  const siteIds = [...new Set(order.items.map((i) => i.siteId))];
+  await prisma.$transaction(async (tx) => {
+    await tx.order.delete({ where: { id } }); // cascades bookings, add-ons, reminders
+    for (const siteId of siteIds) await releaseSite(tx, siteId);
+  });
+  res.json({ ok: true });
 });
 
 // ── Line-item operations ────────────────────────────────────────────────────

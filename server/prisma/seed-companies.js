@@ -8,6 +8,7 @@ async function seedCompanies() {
       legalName: 'Saangari Ads',
       gstMandatory: false,
       gstHidden: true,   // GST option hidden — always Non-GST
+      brandColor: '#0f172a', // slate-900 — the blue sidebar
     },
     {
       code: 'SAANGARI_COMPANY',
@@ -15,13 +16,14 @@ async function seedCompanies() {
       legalName: 'Saangari Company',
       gstMandatory: true, // GST is mandatory — always GST 18%
       gstHidden: false,
+      brandColor: '#9E2015', // maroon — matches the logo background
     },
   ];
 
   for (const c of companies) {
     await prisma.company.upsert({
       where: { code: c.code },
-      update: { name: c.name, legalName: c.legalName, gstMandatory: c.gstMandatory, gstHidden: c.gstHidden },
+      update: { name: c.name, legalName: c.legalName, gstMandatory: c.gstMandatory, gstHidden: c.gstHidden, brandColor: c.brandColor },
       create: c,
     });
     console.log(`✓ Company "${c.name}" seeded`);

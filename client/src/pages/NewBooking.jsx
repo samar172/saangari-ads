@@ -24,6 +24,22 @@ function presetEnd(startDate, val) {
   return start.add(Number(val.replace('D', '')) - 1, 'day').format('YYYY-MM-DD');
 }
 
+// Statuses that actually hold a site's calendar (WAITLIST does not).
+const HOLDING = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
+
+// Is a site free for the requested [start, end]? Uses the booking calendar, not
+// the date-blind `status` flag — so a site whose live campaign ends before the
+// range (or whose only booking is a later one) is correctly offered. Inclusive
+// overlap: existing.start <= new.end AND existing.end >= new.start.
+function siteFreeForRange(site, start, end) {
+  if (!start || !end) return site.status === 'AVAILABLE';
+  const s = new Date(start);
+  const e = new Date(end);
+  return !(site.bookings || []).some(
+    (b) => HOLDING.includes(b.status) && new Date(b.startDate) <= e && new Date(b.endDate) >= s,
+  );
+}
+
 // Billed days for an inclusive [start, end] span — mirrors the server's
 // computeLine (flat 30-day months). Returns 0 for an invalid span.
 function billedDays(startDate, endDate) {
@@ -51,6 +67,9 @@ export default function NewBooking() {
   const [newClient, setNewClient] = useState(false);
   // Full record (orders + ledger) for the selected client, shown as history.
   const [clientInfo, setClientInfo] = useState(null);
+  // Two-step submit: the buttons open a read-only review holding the target
+  // status ('CONFIRMED' | 'QUOTATION'); its Confirm runs the actual submit().
+  const [review, setReview] = useState(null);
 
   const defStart = dayjs().format('YYYY-MM-DD');
   const defEnd = dayjs().add(29, 'day').format('YYYY-MM-DD'); // 30-day mounting cycle
@@ -127,9 +146,13 @@ export default function NewBooking() {
   const clientCategory = categories.find((c) => c.id === Number(form.categoryId)) || null;
 
   const siteById = useMemo(() => Object.fromEntries(sites.map((s) => [s.id, s])), [sites]);
-  // Regular bookings may only pick vacant sites; loose bookings can override onto any site.
+  // Regular bookings may only pick sites free for the chosen dates (not merely
+  // ones whose current status flag reads AVAILABLE); loose bookings can override
+  // onto any site.
   const available = sites.filter((s) =>
-    !lines.some((l) => l.siteId === s.id) && (form.bookingType === 'LOOSE' || s.status === 'AVAILABLE'));
+    !lines.some((l) => l.siteId === s.id)
+    && (form.bookingType === 'LOOSE'
+      || (!['HOLD', 'MAINTENANCE'].includes(s.status) && siteFreeForRange(s, form.defaultStart, form.defaultEnd))));
 
   function addSites(ids) {
     if (!ids || ids.length === 0) return;
@@ -162,6 +185,20 @@ export default function NewBooking() {
     }, 250);
     return () => clearTimeout(t);
   }, [lines, addOns, form.noOfPrints, form.printRate, form.mountingCost, form.discountPct, form.taxCategory, form.interState]);
+
+  // Validate the essentials, then open the review modal instead of posting
+  // straight away — the client asked for a fill → review → confirm flow.
+  function openReview(status) {
+    setError('');
+    if (lines.length === 0) return setError('Add at least one site');
+    if (newClient) {
+      if (!clientForm.name || !clientForm.phone) return setError('New client needs a name and phone');
+    } else if (!form.clientId) {
+      return setError('Select or create a client');
+    }
+    if (!activeCompany) return setError('No company selected');
+    setReview(status);
+  }
 
   async function submit(status) {
     setError(''); setBusy(true);
@@ -549,20 +586,20 @@ export default function NewBooking() {
             )}
             {quotationMode ? (
               <>
-                <button className="btn-primary w-full mt-4 flex justify-center items-center gap-1.5" disabled={busy || !quote} onClick={() => submit('QUOTATION')}>
-                  {busy ? 'Saving…' : <><Save size={16} /> Save as Quotation</>}
+                <button className="btn-primary w-full mt-4 flex justify-center items-center gap-1.5" disabled={busy || !quote} onClick={() => openReview('QUOTATION')}>
+                  {busy ? 'Saving…' : <><Save size={16} /> Review &amp; Save Quotation</>}
                 </button>
-                <button className="btn-accent w-full mt-2 flex justify-center items-center gap-1.5" disabled={busy || !quote} onClick={() => submit('CONFIRMED')}>
-                  <CheckCircle size={16} /> Confirm Booking instead
+                <button className="btn-accent w-full mt-2 flex justify-center items-center gap-1.5" disabled={busy || !quote} onClick={() => openReview('CONFIRMED')}>
+                  <CheckCircle size={16} /> Review &amp; Confirm Booking
                 </button>
               </>
             ) : (
               <>
-                <button className="btn-primary w-full mt-4 flex justify-center items-center gap-1.5" disabled={busy || !quote} onClick={() => submit('CONFIRMED')}>
-                  {busy ? 'Saving…' : <><CheckCircle size={16} /> Confirm Booking</>}
+                <button className="btn-primary w-full mt-4 flex justify-center items-center gap-1.5" disabled={busy || !quote} onClick={() => openReview('CONFIRMED')}>
+                  {busy ? 'Saving…' : <><CheckCircle size={16} /> Review &amp; Confirm Booking</>}
                 </button>
-                <button className="btn-accent w-full mt-2 flex justify-center items-center gap-1.5" disabled={busy || !quote} onClick={() => submit('QUOTATION')}>
-                  <Save size={16} /> Save as Quotation
+                <button className="btn-accent w-full mt-2 flex justify-center items-center gap-1.5" disabled={busy || !quote} onClick={() => openReview('QUOTATION')}>
+                  <Save size={16} /> Review &amp; Save Quotation
                 </button>
               </>
             )}
@@ -572,6 +609,121 @@ export default function NewBooking() {
           {selectedClient && <ClientHistory client={selectedClient} info={clientInfo} category={clientCategory} />}
         </div>
       </div>
+
+      {review && (
+        <BookingReview
+          status={review}
+          form={form}
+          lines={lines}
+          addOns={addOns.filter((a) => a.label)}
+          quote={quote}
+          siteById={siteById}
+          client={newClient ? clientForm : selectedClient}
+          isNewClient={newClient}
+          category={clientCategory}
+          company={activeCompany}
+          busy={busy}
+          error={error}
+          onCancel={() => setReview(null)}
+          onConfirm={() => submit(review)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Read-only recap shown before anything is posted. Confirm runs the real submit;
+// on success the page navigates away, so the modal only stays up on an error.
+function BookingReview({ status, form, lines, addOns, quote, siteById, client, isNewClient, category, company, busy, error, onCancel, onConfirm }) {
+  const isBooking = status === 'CONFIRMED';
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 flex items-start justify-center p-4 z-50 overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl my-auto">
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-slate-800">Review &amp; {isBooking ? 'Confirm Booking' : 'Save Quotation'}</h2>
+            <p className="text-xs text-slate-500">Check everything below — nothing is saved until you confirm.</p>
+          </div>
+          <button type="button" onClick={onCancel} className="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+        </div>
+
+        <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
+          <div className="grid sm:grid-cols-2 gap-3 text-sm">
+            <RvRow k="Client">
+              {client?.name || '—'}{client?.phone ? ` · ${client.phone}` : ''}{isNewClient && <span className="badge bg-emerald-100 text-emerald-700 ml-1.5 text-[10px]">New</span>}
+            </RvRow>
+            <RvRow k="Category">{category?.name || 'Uncategorised'}</RvRow>
+            <RvRow k="Company">{company?.name || '—'}</RvRow>
+            <RvRow k="Booking type">{form.bookingType === 'LOOSE' ? 'Loose' : 'Regular'}</RvRow>
+            <RvRow k="Payment terms">{form.paymentTerms === 'POSTPAID' ? 'Postpaid' : 'Advance'}</RvRow>
+            <RvRow k="Tax">{form.taxCategory === 'GST' ? `GST 18% · ${form.interState ? 'Inter-state' : 'Intra-state'}` : 'Non-GST'}</RvRow>
+            {form.description && <RvRow k="Description" span>{form.description}</RvRow>}
+          </div>
+
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Sites ({lines.length})</div>
+            <div className="rounded-lg border border-slate-200 overflow-x-auto">
+              <table className="w-full text-sm min-w-[440px]">
+                <thead className="bg-slate-50 text-slate-500 text-xs">
+                  <tr><th className="px-3 py-2 text-left">Site</th><th className="px-3 py-2 text-left">Period</th><th className="px-3 py-2 text-right">Days</th><th className="px-3 py-2 text-right">Rate/mo</th></tr>
+                </thead>
+                <tbody>
+                  {lines.map((l, i) => {
+                    const s = siteById[l.siteId];
+                    return (
+                      <tr key={i} className="border-t border-slate-100">
+                        <td className="px-3 py-2"><span className="font-semibold text-slate-800">{s?.code}</span> <span className="text-slate-400 text-xs">{s?.location}</span></td>
+                        <td className="px-3 py-2 text-xs text-slate-600">{dayjs(l.startDate).format('DD MMM YY')} – {dayjs(l.endDate).format('DD MMM YY')}</td>
+                        <td className="px-3 py-2 text-right">{billedDays(l.startDate, l.endDate)}</td>
+                        <td className="px-3 py-2 text-right"><Money value={Number(l.monthlyRateOverride) || s?.monthlyRate || 0} /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {addOns.length > 0 && (
+            <div className="text-xs text-slate-600 space-y-1">
+              <div className="font-semibold uppercase tracking-wide text-slate-500">Add-ons</div>
+              {addOns.map((a, i) => <div key={i} className="flex justify-between"><span>{a.label}</span><Money value={Number(a.amount) || 0} /></div>)}
+            </div>
+          )}
+
+          {quote && (
+            <div className="rounded-lg bg-slate-50 border border-slate-200 p-4">
+              <dl className="space-y-1.5 text-sm">
+                <Line k="Rental" v={<Money value={quote.rentalSubtotal} />} />
+                {quote.printingTotal > 0 && <Line k="Printing" v={<Money value={quote.printingTotal} />} />}
+                {quote.mountingTotal > 0 && <Line k="Mounting" v={<Money value={quote.mountingTotal} />} />}
+                {quote.addOnTotal > 0 && <Line k="Add-ons" v={<Money value={quote.addOnTotal} />} />}
+                {quote.discountAmount > 0 && <Line k="Discount" v={<span className="text-red-600">−<Money value={quote.discountAmount} /></span>} />}
+                {quote.gstAmount > 0 && <Line k="GST" v={<Money value={quote.gstAmount} />} />}
+                <div className="flex justify-between border-t border-slate-300 pt-2 mt-1 text-base font-bold text-brand"><span>Grand Total</span><Money value={quote.grandTotal} /></div>
+              </dl>
+            </div>
+          )}
+
+          {error && <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</div>}
+        </div>
+
+        <div className="px-6 py-4 border-t border-slate-200 flex justify-end gap-3">
+          <button type="button" className="btn-ghost" disabled={busy} onClick={onCancel}>Back to edit</button>
+          <button type="button" className={isBooking ? 'btn-primary' : 'btn-accent'} disabled={busy} onClick={onConfirm}>
+            {busy ? 'Saving…' : (isBooking ? 'Confirm Booking' : 'Save Quotation')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RvRow({ k, children, span }) {
+  return (
+    <div className={span ? 'sm:col-span-2' : ''}>
+      <div className="text-[10px] uppercase tracking-wide text-slate-400">{k}</div>
+      <div className="text-slate-800 font-medium">{children}</div>
     </div>
   );
 }
@@ -656,7 +808,7 @@ function Line({ k, v }) {
   return <div className="flex justify-between"><dt className="text-slate-500">{k}</dt><dd className="font-medium text-slate-800">{v}</dd></div>;
 }
 
-const DOT = { AVAILABLE: 'bg-emerald-500', BOOKED: 'bg-red-500', TENTATIVE: 'bg-amber-500', MAINTENANCE: 'bg-slate-400' };
+const DOT = { AVAILABLE: 'bg-emerald-500', BOOKED: 'bg-red-500', TENTATIVE: 'bg-amber-500', HOLD: 'bg-indigo-500', MAINTENANCE: 'bg-slate-400' };
 
 // Compact searchable dropdown for adding sites to the order
 function AddSitePicker({ sites, onPickMultiple }) {

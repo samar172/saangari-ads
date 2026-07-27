@@ -5,6 +5,7 @@ import { useAuth, can } from '../auth';
 import { useCompany } from '../CompanyContext';
 import { Modal, Spinner } from '../components/ui';
 import CategoryManager from '../components/CategoryManager';
+import MediaTypeManager from '../components/MediaTypeManager';
 
 const EMPTY = {
   code: '', name: '', legalName: '', gstin: '', pan: '',
@@ -22,7 +23,7 @@ export default function Companies() {
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
-  const [tab, setTab] = useState('businesses'); // 'businesses' | 'categories'
+  const [tab, setTab] = useState('businesses'); // 'businesses' | 'categories' | 'media'
 
   function load() {
     setLoading(true);
@@ -86,7 +87,7 @@ export default function Companies() {
       </div>
 
       <div className="flex gap-1 overflow-x-auto border-b border-slate-200 mb-5">
-        {[['businesses', 'Businesses'], ['categories', 'Client Categories']].map(([k, l]) => (
+        {[['businesses', 'Businesses'], ['categories', 'Client Categories'], ['media', 'Media Types']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`shrink-0 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition ${
               tab === k ? 'border-brand text-brand' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{l}</button>
@@ -94,6 +95,7 @@ export default function Companies() {
       </div>
 
       {tab === 'categories' && <CategoryManager />}
+      {tab === 'media' && <MediaTypeManager />}
 
       {tab === 'businesses' && (loading ? <Spinner /> : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">

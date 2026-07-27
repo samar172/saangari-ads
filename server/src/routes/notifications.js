@@ -1,9 +1,25 @@
 const router = require('express').Router();
+const dayjs = require('dayjs');
 const prisma = require('../db');
 
 const DAY = 24 * 60 * 60 * 1000;
 const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; };
 const daysBetween = (a, b) => Math.floor((a - b) / DAY);
+
+// How many (flat 30-day) months the campaign runs, from its earliest start to
+// its latest end. Used to turn a grand total into a per-month installment so a
+// payment reminder shows "₹22,000/month", not the whole contract value.
+function campaignMonths(items) {
+  const live = (items || []).filter((i) => !['CANCELLED', 'WAITLIST'].includes(i.status));
+  if (!live.length) return 1;
+  const start = dayjs(Math.min(...live.map((i) => +new Date(i.startDate)))).startOf('day');
+  const end = dayjs(Math.max(...live.map((i) => +new Date(i.endDate)))).startOf('day');
+  const takeDown = end.add(1, 'day'); // exclusive take-down day
+  const months = takeDown.diff(start, 'month');
+  const remDays = takeDown.diff(start.add(months, 'month'), 'day');
+  const totalDays = Math.max(1, months * 30 + remDays);
+  return Math.max(1, Math.round(totalDays / 30));
+}
 
 // Monitoring reminder severity: already past due is critical, today needs doing,
 // anything in the next week is just a heads-up.
@@ -46,10 +62,11 @@ router.get('/', async (req, res) => {
     prisma.order.findMany({
       where: { status: { in: ['CONFIRMED', 'LIVE', 'COMPLETED'] } },
       select: {
-        id: true, orderNo: true, grandTotal: true, bookingDate: true,
+        id: true, orderNo: true, grandTotal: true, bookingDate: true, paymentTerms: true,
         client: { select: { name: true } },
         payments: { select: { amount: true } },
         invoices: { select: { invoiceNo: true, issuedAt: true, status: true } },
+        items: { select: { status: true, startDate: true, endDate: true } },
       },
     }),
   ]);
@@ -82,15 +99,27 @@ router.get('/', async (req, res) => {
     const since = unpaidInvoice ? new Date(unpaidInvoice.issuedAt) : new Date(o.bookingDate);
     const ageDays = Math.max(0, daysBetween(today, since));
 
+    // Lead with the monthly installment, not the whole contract value. A
+    // multi-month campaign is collected month by month, so the reminder should
+    // read "₹22,000/month" with the total still shown for context.
+    const months = campaignMonths(o.items);
+    const monthly = months > 1 ? Math.round(o.grandTotal / months) : balance;
+    const amountLabel = months > 1
+      ? `₹${monthly.toLocaleString('en-IN')}/month · ₹${balance.toLocaleString('en-IN')} outstanding`
+      : `₹${balance.toLocaleString('en-IN')} outstanding`;
+
     items.push({
       id: `payment-${o.id}`,
       kind: 'PAYMENT',
       severity: paymentSeverity(ageDays),
       title: `Payment due — ${o.orderNo}`,
-      detail: `${o.client.name} · ₹${balance.toLocaleString('en-IN')} outstanding${unpaidInvoice ? ` · ${unpaidInvoice.invoiceNo}` : ' · not invoiced yet'}`,
+      detail: `${o.client.name} · ${amountLabel}${unpaidInvoice ? ` · ${unpaidInvoice.invoiceNo}` : ' · not invoiced yet'}`,
       dueDate: since,
       ageDays,
       balance,
+      monthly,
+      months,
+      paymentTerms: o.paymentTerms,
       orderId: o.id,
       orderNo: o.orderNo,
     });

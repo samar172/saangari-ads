@@ -215,6 +215,15 @@ function RecordPaymentModal({ onClose, onSaved }) {
   const gross = Number(amount) || 0;
   const tds = tdsApplicable ? Math.round(gross * (Number(tdsPct) || 0) / 100) : 0;
 
+  // TDS only exists where GST applies. Companies with GST hidden (e.g. the
+  // non-GST entity) never deduct TDS, so hide the option for their orders.
+  const selectedOrder = orders.find((o) => String(o.id) === String(orderId));
+  const tdsAllowed = !!selectedOrder && !selectedOrder.company?.gstHidden;
+
+  // If the chosen order belongs to a non-GST entity, clear any TDS toggle so a
+  // stale checkbox can't send TDS the server would (rightly) reject/ignore.
+  useEffect(() => { if (!tdsAllowed && tdsApplicable) setTdsApplicable(false); }, [tdsAllowed, tdsApplicable]);
+
   useEffect(() => {
     if (search.length > 1 && !client) {
       api.get(`/clients?q=${search}`).then((r) => setClients(r.data));
@@ -315,6 +324,7 @@ function RecordPaymentModal({ onClose, onSaved }) {
                 <input className="input" placeholder="UTR / cheque no." value={reference} onChange={(e) => setReference(e.target.value)} />
               </div>
 
+              {tdsAllowed && (
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
                 <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
                   <input type="checkbox" checked={tdsApplicable} onChange={(e) => setTdsApplicable(e.target.checked)} />
@@ -335,6 +345,7 @@ function RecordPaymentModal({ onClose, onSaved }) {
                   </>
                 )}
               </div>
+              )}
             </>
           )}
 

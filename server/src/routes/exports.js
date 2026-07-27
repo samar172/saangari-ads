@@ -37,8 +37,10 @@ function sitePhoto(site) {
 // per site (photo + name + dimensions + coordinates), matching the printed deck.
 router.get('/availability/pdf', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   const { type } = req.query;
+  // An availability deck should only show sites that are actually free — drop
+  // anything currently booked, tentatively held or under maintenance.
   const sites = await prisma.site.findMany({
-    where: { active: true, ...(type ? { type } : {}) },
+    where: { active: true, status: 'AVAILABLE', ...(type ? { type } : {}) },
     orderBy: { srNo: 'asc' },
     include: {
       bookings: {

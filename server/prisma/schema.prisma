@@ -15,18 +15,16 @@ enum Role {
   SUPER_ADMIN
 }
 
-enum SiteType {
-  UNIPOLE
-  GANTRY
-  KIOSK
-  HOARDING
-}
+// Site media type is now admin-managed data (see the MediaType model), so the
+// Site.type column is a free string keyed by MediaType.code rather than a fixed
+// enum — new media (gantry, unipole, digital…) can be added without a migration.
 
 enum SiteStatus {
   AVAILABLE
   TENTATIVE
   BOOKED
   MAINTENANCE
+  HOLD
 }
 
 enum BookingType {
@@ -118,20 +116,21 @@ model User {
 
 // Operating entity — Saangari Ads (Non-GST only) vs Saangari Company (GST mandatory)
 model Company {
-  id            Int      @id @default(autoincrement())
-  code          String   @unique          // "SAANGARI_ADS" | "SAANGARI_COMPANY"
-  name          String                     // Display name
-  legalName     String?                    // For invoice / quotation header
-  gstin         String?
-  pan           String?
-  address       String?
-  phone         String?
-  email         String?
-  gstMandatory  Boolean  @default(false)  // true → booking must be GST
-  gstHidden     Boolean  @default(false)  // true → GST option hidden on booking form
-  termsAndConditions String?              // T&Cs appended to quotation PDFs
-  active        Boolean  @default(true)
-  createdAt     DateTime @default(now())
+  id                 Int      @id @default(autoincrement())
+  code               String   @unique // "SAANGARI_ADS" | "SAANGARI_COMPANY"
+  name               String // Display name
+  legalName          String? // For invoice / quotation header
+  gstin              String?
+  pan                String?
+  address            String?
+  phone              String?
+  email              String?
+  gstMandatory       Boolean  @default(false) // true → booking must be GST
+  gstHidden          Boolean  @default(false) // true → GST option hidden on booking form
+  brandColor         String? // sidebar/brand hex, e.g. "#9E2015" (maroon)
+  termsAndConditions String? // T&Cs appended to quotation PDFs
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
 
   orders   Order[]
   invoices Invoice[]
@@ -149,6 +148,18 @@ model Category {
 
   orders  Order[]
   clients Client[]
+}
+
+// Admin-managed site media types (unipole, gantry, kiosk, hoarding, digital…).
+// Site.type stores the `code`; the Inventory tabs and filters read from here so
+// a new medium can be added at any time without a code change or migration.
+model MediaType {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique // stored on Site.type, e.g. "GANTRY"
+  label     String // display name, e.g. "Gantry"
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
 }
 
 model Client {
@@ -186,7 +197,7 @@ model Site {
   height       Float      @default(0)
   qty          Int        @default(1)
   sqft         Float      @default(0)
-  type         SiteType
+  type         String // MediaType.code — e.g. "UNIPOLE", "GANTRY"
   imageUrl     String?
   printingCost Float      @default(0)
   mountingCost Float      @default(0)
@@ -198,22 +209,26 @@ model Site {
   active       Boolean    @default(true)
   createdAt    DateTime   @default(now())
 
-  bookings    Booking[]
-  shiftsFrom  SiteShift[] @relation("ShiftFrom")
-  shiftsTo    SiteShift[] @relation("ShiftTo")
+  // Lightweight manual hold — no quotation/booking, just "keep this free for now".
+  holdNote  String?
+  holdUntil DateTime?
+
+  bookings   Booking[]
+  shiftsFrom SiteShift[] @relation("ShiftFrom")
+  shiftsTo   SiteShift[] @relation("ShiftTo")
 }
 
 model PrintingPartner {
-  id        Int      @id @default(autoincrement())
-  name      String
-  contact   String?
-  phone     String?
-  email     String?
-  address   String?
-  ratePerSqft Float  @default(0)
-  active    Boolean  @default(true)
-  notes     String?
-  createdAt DateTime @default(now())
+  id          Int      @id @default(autoincrement())
+  name        String
+  contact     String?
+  phone       String?
+  email       String?
+  address     String?
+  ratePerSqft Float    @default(0)
+  active      Boolean  @default(true)
+  notes       String?
+  createdAt   DateTime @default(now())
 
   orders Order[]
 }
@@ -260,17 +275,17 @@ model Order {
 
   // Commercials (computed + stored)
   paymentTerms    PaymentTerms @default(ADVANCE)
-  discountPct     Float  @default(0)
+  discountPct     Float        @default(0)
   discountRemarks String?
-  rentalSubtotal  Float  @default(0)
-  addOnTotal      Float  @default(0)
-  discountAmount  Float  @default(0)
-  taxableAmount   Float  @default(0)
-  cgst            Float  @default(0)
-  sgst            Float  @default(0)
-  igst            Float  @default(0)
-  gstAmount       Float  @default(0)
-  grandTotal      Float  @default(0)
+  rentalSubtotal  Float        @default(0)
+  addOnTotal      Float        @default(0)
+  discountAmount  Float        @default(0)
+  taxableAmount   Float        @default(0)
+  cgst            Float        @default(0)
+  sgst            Float        @default(0)
+  igst            Float        @default(0)
+  gstAmount       Float        @default(0)
+  grandTotal      Float        @default(0)
 
   notes     String?
   createdAt DateTime @default(now())
@@ -310,8 +325,8 @@ model Booking {
   // Free-text note that prints on the billing plan (quotation + invoice)
   displayNotes String?
   // Set when the display is stopped early
-  stoppedAt  DateTime?
-  stopReason String?
+  stoppedAt    DateTime?
+  stopReason   String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -322,17 +337,17 @@ model Booking {
 
 // Audit trail: a booking line moved from one site to another mid-campaign
 model SiteShift {
-  id        Int      @id @default(autoincrement())
-  booking   Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  bookingId Int
-  fromSite  Site     @relation("ShiftFrom", fields: [fromSiteId], references: [id])
+  id         Int      @id @default(autoincrement())
+  booking    Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  bookingId  Int
+  fromSite   Site     @relation("ShiftFrom", fields: [fromSiteId], references: [id])
   fromSiteId Int
-  toSite    Site     @relation("ShiftTo", fields: [toSiteId], references: [id])
-  toSiteId  Int
-  reason    String?
-  shiftedAt DateTime @default(now())
-  by        User     @relation("ShiftedBy", fields: [byId], references: [id])
-  byId      Int
+  toSite     Site     @relation("ShiftTo", fields: [toSiteId], references: [id])
+  toSiteId   Int
+  reason     String?
+  shiftedAt  DateTime @default(now())
+  by         User     @relation("ShiftedBy", fields: [byId], references: [id])
+  byId       Int
 }
 
 model MonitoringPhoto {
@@ -365,18 +380,18 @@ model Reminder {
 }
 
 model Payment {
-  id       Int         @id @default(autoincrement())
-  order    Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  orderId  Int
-  client   Client      @relation(fields: [clientId], references: [id])
-  clientId Int
-  company  Company     @relation(fields: [companyId], references: [id])
-  companyId Int        @default(1)
+  id        Int         @id @default(autoincrement())
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId   Int
+  client    Client      @relation(fields: [clientId], references: [id])
+  clientId  Int
+  company   Company     @relation(fields: [companyId], references: [id])
+  companyId Int         @default(1)
   // Gross amount settled against the order. TDS is remitted to the government
   // on the client's behalf, so the order is credited with `amount`, while
   // `netReceived` is what actually landed in the bank.
-  amount   Float
-  mode     PaymentMode @default(CASH)
+  amount    Float
+  mode      PaymentMode @default(CASH)
 
   tdsApplicable Boolean @default(false)
   tdsPct        Float   @default(0)

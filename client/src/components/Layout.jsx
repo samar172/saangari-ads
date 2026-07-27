@@ -54,7 +54,8 @@ export default function Layout({ children }) {
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-60 shrink-0 bg-slate-900 text-white flex flex-col overflow-y-auto transition-transform duration-200 lg:static lg:translate-x-0 ${
+        style={{ backgroundColor: activeCompany?.brandColor || '#0f172a' }}
+        className={`fixed inset-y-0 left-0 z-40 w-60 shrink-0 text-white flex flex-col overflow-y-auto transition-transform duration-200 lg:static lg:translate-x-0 ${
           navOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -81,7 +82,12 @@ export default function Layout({ children }) {
               value={activeCompany?.id || ''}
               onChange={(e) => {
                 const c = companies.find((x) => x.id === Number(e.target.value));
-                if (c) setActiveCompany(c);
+                if (!c || c.id === activeCompany?.id) return;
+                setActiveCompany(c);
+                // Hard-reload onto Inventory so no half-filled form or list left
+                // over from the previous entity can be submitted against the new
+                // one. localStorage keeps the selection across the reload.
+                window.location.assign('/');
               }}
             >
               {companies.map((c) => (

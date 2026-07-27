@@ -5,11 +5,11 @@ import { useAuth, can } from '../auth';
 import { X, CheckSquare, Plus, FileText, Download, MapPin, RefreshCw, Camera, Pencil, Check } from 'lucide-react';
 import { Badge, Money, Modal, Spinner } from '../components/ui';
 
-const TYPE_LABELS = { UNIPOLE: 'Unipole', GANTRY: 'Gantry', KIOSK: 'Kiosk' };
 const TILE_COLORS = {
   AVAILABLE: 'bg-emerald-500 hover:bg-emerald-600 ring-emerald-300',
   BOOKED: 'bg-red-500 hover:bg-red-600 ring-red-300',
   TENTATIVE: 'bg-amber-500 hover:bg-amber-600 ring-amber-300',
+  HOLD: 'bg-indigo-500 hover:bg-indigo-600 ring-indigo-300',
   MAINTENANCE: 'bg-slate-400 hover:bg-slate-500 ring-slate-300',
 };
 
@@ -17,7 +17,8 @@ export default function Inventory() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [summary, setSummary] = useState({});
-  const [type, setType] = useState('UNIPOLE');
+  const [mediaTypes, setMediaTypes] = useState([]);
+  const [type, setType] = useState('');
   const [zone, setZone] = useState('');
   const [vacantOnly, setVacantOnly] = useState(false);
   const [sites, setSites] = useState([]);
@@ -36,12 +37,26 @@ export default function Inventory() {
 
   useEffect(() => { api.get('/sites/summary').then((r) => setSummary(r.data)); }, []);
 
+  // Media types are admin-managed; the tabs and the default selection follow the
+  // active list rather than a hardcoded set.
+  useEffect(() => {
+    api.get('/media-types').then((r) => {
+      setMediaTypes(r.data);
+      setType((t) => (t && r.data.some((m) => m.code === t) ? t : (r.data[0]?.code || '')));
+    });
+  }, []);
+  const typeLabels = Object.fromEntries(mediaTypes.map((m) => [m.code, m.label]));
+
+  // Fetch by type only and filter the zone client-side. Fetching with the zone
+  // applied server-side would shrink `sites` to that one zone, which in turn
+  // collapsed the zone dropdown to only the selected zone — so you couldn't
+  // switch straight from one zone to another without going via "All zones".
   useEffect(() => {
     setLoading(true);
-    api.get('/sites', { params: { type, zone: zone || undefined } })
+    api.get('/sites', { params: { type } })
       .then((r) => setSites(r.data))
       .finally(() => setLoading(false));
-  }, [type, zone]);
+  }, [type]);
 
   function onTileClick(site) {
     if (!selectMode) return setSelected(site);
@@ -78,8 +93,9 @@ export default function Inventory() {
   }
 
   const zones = [...new Set(sites.map((s) => s.zone))].sort();
-  const counts = sites.reduce((a, s) => { a[s.status] = (a[s.status] || 0) + 1; return a; }, {});
-  const visible = vacantOnly ? sites.filter((s) => s.status === 'AVAILABLE') : sites;
+  const zoneFiltered = zone ? sites.filter((s) => s.zone === zone) : sites;
+  const counts = zoneFiltered.reduce((a, s) => { a[s.status] = (a[s.status] || 0) + 1; return a; }, {});
+  const visible = vacantOnly ? zoneFiltered.filter((s) => s.status === 'AVAILABLE') : zoneFiltered;
 
   return (
     <div>
@@ -111,16 +127,12 @@ export default function Inventory() {
 
       {/* Category tabs */}
       <div className="flex flex-wrap gap-2 mb-4">
-        {Object.keys(TYPE_LABELS).map((t) => {
-          const info = summary[t];
-          if (!info) return null;
-          return (
-            <button key={t} onClick={() => setType(t)}
-              className={`rounded-lg px-4 py-2 text-sm font-medium border transition ${type === t ? 'bg-brand text-white border-brand' : 'bg-white text-slate-600 border-slate-200 hover:border-brand'}`}>
-              {TYPE_LABELS[t]} <span className="opacity-70">({info.total})</span>
-            </button>
-          );
-        })}
+        {mediaTypes.map((m) => (
+          <button key={m.code} onClick={() => setType(m.code)}
+            className={`rounded-lg px-4 py-2 text-sm font-medium border transition ${type === m.code ? 'bg-brand text-white border-brand' : 'bg-white text-slate-600 border-slate-200 hover:border-brand'}`}>
+            {m.label} <span className="opacity-70">({summary[m.code]?.total || 0})</span>
+          </button>
+        ))}
       </div>
 
       {/* Filters + legend */}
@@ -182,8 +194,8 @@ export default function Inventory() {
         </div>
       )}
 
-      <SiteDetail site={selected} onClose={() => setSelected(null)} onChanged={() => {
-        api.get('/sites', { params: { type, zone: zone || undefined } }).then((r) => setSites(r.data));
+      <SiteDetail site={selected} mediaTypes={mediaTypes} onClose={() => setSelected(null)} onChanged={() => {
+        api.get('/sites', { params: { type } }).then((r) => setSites(r.data));
       }} />
     </div>
   );
@@ -247,9 +259,9 @@ function Legend({ color, label }) {
   return <span className="flex items-center gap-1.5"><span className={`h-3 w-3 rounded ${color}`} /> {label}</span>;
 }
 
-const EMPTY_EDIT = { location: '', zone: '', city: '', light: '', width: '', height: '', sqft: '', monthlyRate: '', printingCost: '', mountingCost: '', latitude: '', longitude: '', status: 'AVAILABLE' };
+const EMPTY_EDIT = { type: '', location: '', zone: '', city: '', light: '', width: '', height: '', sqft: '', monthlyRate: '', printingCost: '', mountingCost: '', latitude: '', longitude: '', status: 'AVAILABLE' };
 
-function SiteDetail({ site, onClose, onChanged }) {
+function SiteDetail({ site, mediaTypes = [], onClose, onChanged }) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [full, setFull] = useState(null);
@@ -265,6 +277,7 @@ function SiteDetail({ site, onClose, onChanged }) {
 
   function startEdit() {
     setForm({
+      type: full.type ?? '',
       location: full.location ?? '', zone: full.zone ?? '', city: full.city ?? '', light: full.light ?? '',
       width: full.width ?? '', height: full.height ?? '', sqft: full.sqft ?? '', monthlyRate: full.monthlyRate ?? '',
       printingCost: full.printingCost ?? '', mountingCost: full.mountingCost ?? '',
@@ -286,6 +299,17 @@ function SiteDetail({ site, onClose, onChanged }) {
     const fd = new FormData(); fd.append('image', file);
     try { await api.post(`/sites/${site.id}/image`, fd); await load(); onChanged && onChanged(); }
     catch (e) { setErr(e.response?.data?.error || 'Image upload failed'); }
+    finally { setSaving(false); }
+  }
+
+  async function toggleHold() {
+    setSaving(true); setErr('');
+    const held = full.status === 'HOLD';
+    try {
+      if (held) await api.post(`/sites/${site.id}/release`);
+      else await api.post(`/sites/${site.id}/hold`, {});
+      await load(); onChanged && onChanged();
+    } catch (e) { setErr(e.response?.data?.error || 'Could not update hold'); }
     finally { setSaving(false); }
   }
 
@@ -321,6 +345,12 @@ function SiteDetail({ site, onClose, onChanged }) {
 
           {editing ? (
             <div className="grid sm:grid-cols-2 gap-3">
+              <Field label="Media Type">
+                <select className="input" value={form.type} onChange={(e) => set('type', e.target.value)}>
+                  {!mediaTypes.some((m) => m.code === form.type) && form.type && <option value={form.type}>{form.type}</option>}
+                  {mediaTypes.map((m) => <option key={m.code} value={m.code}>{m.label}</option>)}
+                </select>
+              </Field>
               <Field label="Location" span><input className="input" value={form.location} onChange={(e) => set('location', e.target.value)} /></Field>
               <Field label="Zone"><input className="input" value={form.zone} onChange={(e) => set('zone', e.target.value)} /></Field>
               <Field label="City"><input className="input" value={form.city} onChange={(e) => set('city', e.target.value)} /></Field>
@@ -335,7 +365,7 @@ function SiteDetail({ site, onClose, onChanged }) {
               <Field label="Longitude"><input type="number" className="input" value={form.longitude} onChange={(e) => set('longitude', e.target.value)} /></Field>
               <Field label="Status">
                 <select className="input" value={form.status} onChange={(e) => set('status', e.target.value)}>
-                  {['AVAILABLE', 'TENTATIVE', 'BOOKED', 'MAINTENANCE'].map((s) => <option key={s} value={s}>{s}</option>)}
+                  {['AVAILABLE', 'TENTATIVE', 'BOOKED', 'HOLD', 'MAINTENANCE'].map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
               </Field>
               <div className="sm:col-span-2 flex gap-2 mt-1">
@@ -373,8 +403,20 @@ function SiteDetail({ site, onClose, onChanged }) {
                     </div>
                   </div>
                 )}
+                {full.status === 'HOLD' && (
+                  <div className="mt-4 rounded-lg bg-indigo-50 border border-indigo-200 p-3 text-xs text-indigo-800">
+                    On hold{full.holdUntil ? ` until ${new Date(full.holdUntil).toLocaleDateString('en-IN')}` : ''}{full.holdNote ? ` · ${full.holdNote}` : ''}
+                  </div>
+                )}
                 {can(user, 'createBooking') && (
-                  <button className="btn-accent mt-4 w-full" onClick={() => navigate(`/new-booking?siteId=${site.id}`)}>Book this site</button>
+                  <div className="mt-4 flex gap-2">
+                    <button className="btn-accent flex-1" disabled={full.status === 'HOLD'} onClick={() => navigate(`/new-booking?siteId=${site.id}`)}>Book this site</button>
+                    {['AVAILABLE', 'HOLD'].includes(full.status) && (
+                      <button className={`flex-1 ${full.status === 'HOLD' ? 'btn-primary' : 'btn-ghost'}`} disabled={saving} onClick={toggleHold}>
+                        {full.status === 'HOLD' ? 'Release hold' : 'Put on hold'}
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
               <div>
