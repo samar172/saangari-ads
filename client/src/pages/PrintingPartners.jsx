@@ -111,10 +111,12 @@ export default function PrintingPartners() {
 // with the print count, rate and the sites those prints were for.
 function PartnerDetail({ id, onClose }) {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [p, setP] = useState(null);
   const [expanded, setExpanded] = useState(null);
 
-  useEffect(() => { api.get(`/printing-partners/${id}`).then((r) => setP(r.data)); }, [id]);
+  function reload() { return api.get(`/printing-partners/${id}`).then((r) => setP(r.data)); }
+  useEffect(() => { reload(); }, [id]);
 
   return (
     <Modal open onClose={onClose} title={p?.name || 'Printing Partner'} wide>
@@ -138,6 +140,8 @@ function PartnerDetail({ id, onClose }) {
           <div className="text-xs text-slate-400">
             Totals count confirmed, live and completed orders only — quotations and cancelled orders are listed but never printed.
           </div>
+
+          <MaterialsPanel partner={p} editable={can(user, 'managePartners')} onChanged={reload} />
 
           <div className="card overflow-x-auto">
             <table className="w-full min-w-[720px] text-sm">
@@ -214,5 +218,69 @@ function PartnerDetail({ id, onClose }) {
         </div>
       )}
     </Modal>
+  );
+}
+
+// Materials this partner prints (flex, pamphlet, brochure, white back…), each
+// with its own rate. These feed the material dropdown on the booking form.
+function MaterialsPanel({ partner, editable, onChanged }) {
+  const [name, setName] = useState('');
+  const [rate, setRate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const materials = partner.materials || [];
+
+  async function add(e) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setBusy(true); setErr('');
+    try {
+      await api.post(`/printing-partners/${partner.id}/materials`, { name: name.trim(), rate: Number(rate) || 0 });
+      setName(''); setRate(''); onChanged();
+    } catch (e2) { setErr(e2.response?.data?.error || 'Could not add material'); }
+    finally { setBusy(false); }
+  }
+  async function editRate(m) {
+    const next = window.prompt(`Rate for "${m.name}" (₹)`, m.rate);
+    if (next === null) return;
+    try { await api.patch(`/printing-partners/materials/${m.id}`, { rate: Number(next) || 0 }); onChanged(); }
+    catch (e2) { setErr(e2.response?.data?.error || 'Could not update'); }
+  }
+  async function remove(m) {
+    if (!window.confirm(`Delete material "${m.name}"?`)) return;
+    try { await api.delete(`/printing-partners/materials/${m.id}`); onChanged(); }
+    catch (e2) { setErr(e2.response?.data?.error || 'Could not delete'); }
+  }
+
+  return (
+    <div className="card p-4">
+      <div className="text-sm font-semibold text-slate-800 mb-2">Materials &amp; Rates</div>
+      {err && <div className="mb-2 text-sm text-red-600">{err}</div>}
+      {materials.length === 0 ? (
+        <div className="text-xs text-slate-400 mb-3">No materials yet. Add flex, pamphlet, brochure, white back, etc.</div>
+      ) : (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {materials.map((m) => (
+            <div key={m.id} className={`flex items-center gap-2 rounded-lg border px-2.5 py-1 text-sm ${m.active ? 'border-slate-200' : 'border-slate-100 opacity-50'}`}>
+              <span className="font-medium text-slate-700">{m.name}</span>
+              <span className="text-brand">₹{m.rate}</span>
+              {editable && (
+                <>
+                  <button className="text-xs text-slate-400 hover:text-slate-700" onClick={() => editRate(m)}>edit</button>
+                  <button className="text-xs text-slate-400 hover:text-red-600" onClick={() => remove(m)}>×</button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {editable && (
+        <form onSubmit={add} className="flex flex-wrap gap-2">
+          <input className="input flex-1 min-w-[160px]" placeholder="Material — e.g. Flex" value={name} onChange={(e) => setName(e.target.value)} />
+          <input type="number" className="input w-32" placeholder="Rate ₹" value={rate} onChange={(e) => setRate(e.target.value)} />
+          <button className="btn-primary text-sm" disabled={busy || !name.trim()}>{busy ? 'Adding…' : 'Add'}</button>
+        </form>
+      )}
+    </div>
   );
 }

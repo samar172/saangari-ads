@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
-import { Camera, ChevronRight, ChevronDown, ExternalLink, Download, SlidersHorizontal } from 'lucide-react';
+import { Camera, ChevronRight, ChevronDown, ExternalLink, Download, SlidersHorizontal, Plus } from 'lucide-react';
 import api, { downloadFile } from '../api';
 import { useAuth } from '../auth';
 import { useCompany } from '../CompanyContext';
@@ -137,8 +137,11 @@ export default function Orders() {
               {STATUS_FILTERS.filter(s => s !== 'QUOTATION').map((s) => <option key={s} value={s}>{s || 'All statuses'}</option>)}
             </select>
           )}
+          {isQuotations && (
+            <button className="btn-accent text-sm flex items-center gap-1.5" onClick={() => navigate('/quotations/new')}><Plus size={16} /> New Quotation</button>
+          )}
           <ColumnPicker visible={visible} setVisible={setVisible} />
-          <button className="btn-accent text-sm flex items-center gap-1.5" onClick={exportExcel}><Download size={16} /> Export Excel</button>
+          <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={exportExcel}><Download size={16} /> Export Excel</button>
         </div>
       </div>
 

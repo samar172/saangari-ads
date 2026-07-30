@@ -35,4 +35,17 @@ export async function downloadFile(url, fallbackName) {
   URL.revokeObjectURL(link.href);
 }
 
+// Trigger a file download from an authenticated POST endpoint (JSON body).
+export async function downloadPost(url, body, fallbackName) {
+  const res = await api.post(url, body, { responseType: 'blob' });
+  const disp = res.headers['content-disposition'] || '';
+  const match = disp.match(/filename="?([^"]+)"?/);
+  const name = match ? match[1] : fallbackName;
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(res.data);
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
 export default api;

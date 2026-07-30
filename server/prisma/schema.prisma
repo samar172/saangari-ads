@@ -96,6 +96,23 @@ enum PaymentTerms {
   POSTPAID
 }
 
+// Sensitive actions a staff member may request but only an admin/manager may
+// carry out — the two-step approval queue (delete campaign/invoice, switch a
+// GST campaign to cash at billing, disable a user…).
+enum ApprovalAction {
+  DELETE_ORDER
+  DELETE_INVOICE
+  SETTLE_CASH
+  DISABLE_USER
+  OTHER
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 model User {
   id        Int      @id @default(autoincrement())
   name      String
@@ -112,6 +129,9 @@ model User {
   payments Payment[]         @relation("PaymentBy")
   shifts   SiteShift[]       @relation("ShiftedBy")
   notes    Note[]            @relation("UserNotes")
+
+  approvalsRequested ApprovalRequest[] @relation("ApprovalRequestedBy")
+  approvalsReviewed  ApprovalRequest[] @relation("ApprovalReviewedBy")
 }
 
 // Operating entity — Saangari Ads (Non-GST only) vs Saangari Company (GST mandatory)
@@ -202,6 +222,9 @@ model Site {
   printingCost Float      @default(0)
   mountingCost Float      @default(0)
   monthlyRate  Float      @default(0)
+  // Explicit per-day rate for loose media (unipole spots sold by the day). When
+  // 0 the day rate falls back to monthlyRate / 30.
+  dayRate      Float      @default(0)
   gstOnRate    Boolean    @default(true)
   latitude     Float?
   longitude    Float?
@@ -230,7 +253,23 @@ model PrintingPartner {
   notes       String?
   createdAt   DateTime @default(now())
 
-  orders Order[]
+  materials PrintingMaterial[]
+  orders    Order[]
+}
+
+// A printable material offered by a printing partner (flex, pamphlet, brochure,
+// white back, black, star…), each with its own rate. The booking form shows
+// these as a dropdown so the correct rate is applied per material.
+model PrintingMaterial {
+  id        Int             @id @default(autoincrement())
+  partner   PrintingPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  partnerId Int
+  name      String // e.g. "Flex", "Pamphlet", "White Back"
+  rate      Float           @default(0) // rate per print/sqft for this material
+  active    Boolean         @default(true)
+  createdAt DateTime        @default(now())
+
+  @@unique([partnerId, name])
 }
 
 // Order = quotation / booking order header for a single client.
@@ -255,6 +294,7 @@ model Order {
   // Printing
   printingPartner   PrintingPartner? @relation(fields: [printingPartnerId], references: [id])
   printingPartnerId Int?
+  printMaterial     String? // chosen material name (flex, pamphlet…) for the record
   noOfPrints        Int              @default(0)
   printRate         Float            @default(0)
   printingTotal     Float            @default(0)
@@ -425,6 +465,9 @@ model Invoice {
   total         Float
   status        InvoiceStatus @default(DRAFT)
   issuedAt      DateTime      @default(now())
+  // When payment is due. Defaults to the last working day of the issue month
+  // (monthly billing), editable before the invoice is finalised.
+  dueDate       DateTime?
   generatedBy   User          @relation("GeneratedBy", fields: [generatedById], references: [id])
   generatedById Int
 
@@ -458,4 +501,24 @@ model Note {
   userId    Int
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// Two-step approval: a staff member requests a sensitive action, an admin /
+// manager approves (which executes it) or rejects. Doubles as an audit log.
+model ApprovalRequest {
+  id            Int            @id @default(autoincrement())
+  action        ApprovalAction
+  status        ApprovalStatus @default(PENDING)
+  entityType    String // "order" | "invoice" | "user"
+  entityId      Int?
+  label         String? // human summary shown in the queue, e.g. "SO-00012 · Motion"
+  reason        String?
+  payload       Json? // extra data needed to execute (e.g. { taxCategory: "NON_GST" })
+  requestedBy   User           @relation("ApprovalRequestedBy", fields: [requestedById], references: [id])
+  requestedById Int
+  reviewedBy    User?          @relation("ApprovalReviewedBy", fields: [reviewedById], references: [id])
+  reviewedById  Int?
+  reviewNote    String?
+  createdAt     DateTime       @default(now())
+  reviewedAt    DateTime?
 }

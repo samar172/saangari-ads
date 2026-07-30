@@ -42,7 +42,8 @@ export default function InvoiceDetail() {
           <div className="card p-5">
             <h2 className="text-lg font-semibold text-slate-800 mb-4">Invoice Details</h2>
             <dl className="space-y-3 text-sm">
-              <Row k="Date Issued">{new Date(invoice.issuedAt).toLocaleDateString('en-IN')}</Row>
+              <Row k="Date Issued">{new Date(invoice.issuedAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</Row>
+              <Row k="Due Date">{invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('en-IN') : '—'}</Row>
               <Row k="Order Number">{invoice.order?.orderNo}</Row>
               <Row k="Client">{invoice.client.name} · {invoice.client.phone}</Row>
               <Row k="Company">{invoice.company.name}</Row>
@@ -128,7 +129,8 @@ function EditPricingModal({ invoice, onClose, onSaved }) {
     discountPct: o.discountPct || 0,
     printingTotal: o.printingTotal || 0,
     mountingCost: o.mountingCost || 0,
-    discountRemarks: o.discountRemarks || ''
+    discountRemarks: o.discountRemarks || '',
+    dueDate: invoice.dueDate ? invoice.dueDate.slice(0, 10) : '',
   });
   
   const [addOns, setAddOns] = useState(o.addOns?.map(a => ({ label: a.label, amount: a.amount, id: Math.random() })) || []);
@@ -172,6 +174,10 @@ function EditPricingModal({ invoice, onClose, onSaved }) {
           <div>
             <label className="label">Total Mounting Cost</label>
             <input type="number" min="0" className="input" value={form.mountingCost} onChange={e => setForm({...form, mountingCost: e.target.value})} />
+          </div>
+          <div>
+            <label className="label">Due Date</label>
+            <input type="date" className="input" value={form.dueDate} onChange={e => setForm({...form, dueDate: e.target.value})} />
           </div>
         </div>
 

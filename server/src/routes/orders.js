@@ -176,7 +176,7 @@ router.post('/quote', async (req, res) => {
 async function priceFromBody(body) {
   const {
     items = [], addOns = [], noOfPrints = 0, printRate = 0, mountingCost = 0,
-    discountPct = 0, taxCategory = 'NON_GST', interState = false,
+    discountPct = 0, taxCategory = 'NON_GST', interState = false, type = 'REGULAR',
   } = body;
   if (!Array.isArray(items) || items.length === 0) throw new Error('Add at least one site');
 
@@ -184,10 +184,12 @@ async function priceFromBody(body) {
   const sites = await prisma.site.findMany({ where: { id: { in: siteIds } } });
   const byId = Object.fromEntries(sites.map((s) => [s.id, s]));
 
+  // Loose media is billed by the day (site.dayRate, falling back to monthly/30).
+  const billPerDay = type === 'LOOSE';
   const pricedItems = items.map((i) => {
     const site = byId[Number(i.siteId)];
     if (!site) throw new Error(`Site ${i.siteId} not found`);
-    return { siteId: site.id, monthlyRate: site.monthlyRate, startDate: i.startDate, endDate: i.endDate, dayRateOverride: i.dayRateOverride, monthlyRateOverride: i.monthlyRateOverride };
+    return { siteId: site.id, monthlyRate: site.monthlyRate, dayRate: site.dayRate, billPerDay, startDate: i.startDate, endDate: i.endDate, dayRateOverride: i.dayRateOverride, monthlyRateOverride: i.monthlyRateOverride };
   });
 
   const result = computeOrder({
@@ -202,7 +204,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
   const body = req.body || {};
   const {
     clientId, categoryId, companyId, items = [], type = 'REGULAR', bookingDate, description,
-    printingPartnerId, noOfPrints = 0, printRate = 0, mountingCost = 0,
+    printingPartnerId, printMaterial, noOfPrints = 0, printRate = 0, mountingCost = 0,
     monitoring = false, monitorStart = false, monitorMid = false, monitorEnd = false,
     taxCategory: rawTaxCategory = 'NON_GST', interState = false, placeOfSupply,
     paymentTerms: rawPaymentTerms = 'ADVANCE',
@@ -244,7 +246,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
 
   // Price it
   let priced;
-  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, taxCategory, interState }); }
+  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, taxCategory, interState, type }); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   // Reject a request that double-books the same site against itself: two lines
@@ -301,6 +303,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
         bookingDate: bookingDate ? new Date(bookingDate) : new Date(),
         description,
         printingPartnerId: printingPartnerId ? Number(printingPartnerId) : null,
+        printMaterial: printMaterial || null,
         noOfPrints: Number(noOfPrints) || 0, printRate: Number(printRate) || 0, printingTotal: r.printingTotal,
         mountingCost: r.mountingTotal,
         monitoring: !!monitoring, monitorStart: !!monitorStart, monitorMid: !!monitorMid, monitorEnd: !!monitorEnd,

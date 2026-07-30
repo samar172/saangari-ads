@@ -17,6 +17,8 @@ export default function OrderDetail() {
   const [tab, setTab] = useState('overview');
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [request, setRequest] = useState(null); // { action, label } → approval request modal
+  const isReviewer = user.role === 'MANAGER' || user.role === 'SUPER_ADMIN';
 
   function load() { api.get(`/orders/${id}`).then((r) => setO(r.data)).catch(() => navigate('/orders')); }
   useEffect(load, [id, navigate]);
@@ -49,8 +51,16 @@ export default function OrderDetail() {
         <div className="flex-1" />
         <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/orders/${id}/proposal.pdf`, `Proposal-${o.orderNo}.pdf`)}><FileText size={16} /> Proposal Letter</button>
         <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/orders/${id}/quotation.pdf`, `Quotation-${o.orderNo}.pdf`)}><Download size={16} /> Quotation PDF</button>
-        {can(user, 'manageCategories') && (
+        {/* GST campaigns can be flagged to settle in cash — a manager approves it. */}
+        {o.taxCategory === 'GST' && o.status !== 'CANCELLED' && (
+          <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => setRequest({ action: 'SETTLE_CASH', label: `${o.orderNo} · settle in cash (Non-GST)` })}>
+            <Banknote size={16} /> Settle in cash
+          </button>
+        )}
+        {isReviewer ? (
           <button className="btn-ghost text-sm flex items-center gap-1.5 text-red-600 hover:bg-red-50" onClick={() => setConfirmDelete(true)}><Trash2 size={16} /> Delete</button>
+        ) : (
+          <button className="btn-ghost text-sm flex items-center gap-1.5 text-red-600 hover:bg-red-50" onClick={() => setRequest({ action: 'DELETE_ORDER', label: `${o.orderNo} · ${o.client.name}` })}><Trash2 size={16} /> Request delete</button>
         )}
       </div>
 
@@ -61,6 +71,60 @@ export default function OrderDetail() {
       {confirmDelete && (
         <DeleteOrderModal order={o} onClose={() => setConfirmDelete(false)} onDeleted={() => navigate('/orders')} />
       )}
+      {request && (
+        <RequestApprovalModal order={o} request={request} onClose={() => setRequest(null)} onDone={() => { setRequest(null); load(); }} />
+      )}
+    </div>
+  );
+}
+
+// Staff can't perform sensitive actions directly — they file a request that a
+// manager/admin approves from the Approvals queue.
+function RequestApprovalModal({ order, request, onClose, onDone }) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState(false);
+  const title = request.action === 'DELETE_ORDER' ? 'Request campaign deletion' : 'Request cash settlement';
+
+  async function submit() {
+    setBusy(true); setErr('');
+    try {
+      await api.post('/approvals', {
+        action: request.action, entityType: 'order', entityId: order.id,
+        label: request.label, reason,
+      });
+      setDone(true);
+    } catch (e) { setErr(e.response?.data?.error || 'Could not send request'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 flex items-start justify-center p-4 z-50 overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md my-auto p-6">
+        <h2 className="text-lg font-bold text-slate-800">{title}</h2>
+        {done ? (
+          <>
+            <p className="text-sm text-emerald-700 mt-2">Request sent. A manager will review it in the Approvals queue.</p>
+            <div className="flex justify-end mt-5"><button className="btn-primary" onClick={onDone}>Done</button></div>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-slate-600 mt-2">
+              {request.action === 'DELETE_ORDER'
+                ? `This asks an admin to delete ${order.orderNo}. Nothing is removed until they approve.`
+                : `This asks an admin to bill ${order.orderNo} as Non-GST (cash). GST is removed only once approved.`}
+            </p>
+            <label className="label mt-4">Reason (optional)</label>
+            <textarea className="input h-24" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this needed?" />
+            {err && <div className="mt-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
+            <div className="flex justify-end gap-3 mt-5">
+              <button className="btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+              <button className="btn-primary" disabled={busy} onClick={submit}>{busy ? 'Sending…' : 'Send request'}</button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -219,17 +283,29 @@ function Overview({ o, user, busy, changeStatus, onChanged }) {
           {o.category && <Row k="Category">{o.category.name}</Row>}
           {o.description && <Row k="Description">{o.description}</Row>}
           <Row k="Client">{o.client.name} · {o.client.phone}</Row>
-          {o.printingPartner && <Row k="Printing Partner">{o.printingPartner.name}</Row>}
+          {o.printingPartner && <Row k="Printing Partner">{o.printingPartner.name}{o.printMaterial ? ` · ${o.printMaterial}` : ''}</Row>}
           <Row k="Monitoring">{o.monitoring ? [o.monitorStart && 'Start', o.monitorMid && 'Mid', o.monitorEnd && 'End'].filter(Boolean).join(' · ') || 'Yes' : 'No'}</Row>
           <Row k="Created by">{o.createdBy.name}</Row>
         </dl>
 
-        {o.invoices?.length > 0 && (
-          <div className="mt-4 rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-sm flex items-center gap-2">
-            <Receipt size={16} className="text-emerald-600" />
-            <span>Invoiced: {o.invoices.map((i) => i.invoiceNo).join(', ')}</span>
-          </div>
-        )}
+        {o.invoices?.length > 0 && (() => {
+          // Latest invoice drives the "last invoice / due in N days" line.
+          const latest = [...o.invoices].sort((a, b) => new Date(b.issuedAt) - new Date(a.issuedAt))[0];
+          const due = latest.dueDate ? new Date(latest.dueDate) : null;
+          const daysToDue = due ? Math.ceil((due - new Date()) / 86400000) : null;
+          return (
+            <div className="mt-4 rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-sm">
+              <div className="flex items-center gap-2">
+                <Receipt size={16} className="text-emerald-600" />
+                <span>Invoiced: {o.invoices.map((i) => i.invoiceNo).join(', ')}</span>
+              </div>
+              <div className="text-xs text-emerald-800/80 mt-1 pl-6">
+                Last invoice {new Date(latest.issuedAt).toLocaleDateString('en-IN')}
+                {due && <> · due {due.toLocaleDateString('en-IN')} ({daysToDue >= 0 ? `in ${daysToDue} day${daysToDue === 1 ? '' : 's'}` : `${-daysToDue} day${daysToDue === -1 ? '' : 's'} overdue`})</>}
+              </div>
+            </div>
+          );
+        })()}
 
         {can(user, 'changeBookingStatus') && (
           <div className="mt-6 flex flex-wrap gap-2">
@@ -324,7 +400,7 @@ function LineCard({ order, line, onChanged }) {
             <div key={s.id} className="rounded-md bg-sky-50 border border-sky-200 px-3 py-2 text-sm text-sky-800 flex gap-2 items-start">
               <ArrowRightLeft size={16} className="text-sky-500 mt-0.5 shrink-0" />
               <span>
-                Shifted {s.fromSite.code} → {s.toSite.code} on {new Date(s.shiftedAt).toLocaleDateString('en-IN')} by {s.by.name}
+                Shifted {s.fromSite.code} → {s.toSite.code} on {new Date(s.shiftedAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })} by {s.by.name}
                 {s.reason ? ` — ${s.reason}` : ''}
               </span>
             </div>

@@ -27,7 +27,15 @@ router.post('/', requireRole(), async (req, res) => {
 });
 
 router.patch('/:id', requireRole(), async (req, res) => {
-  const { name, phone, role, active, password } = req.body || {};
+  const { name, phone, role, active, password, confirmPassword } = req.body || {};
+  // Enabling/disabling a user's access requires the acting admin to re-enter
+  // their own password — a deliberate second step for a sensitive change.
+  if (active !== undefined) {
+    if (!confirmPassword) return res.status(400).json({ error: 'Enter your password to change this user\'s access.' });
+    const me = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const ok = me && await bcrypt.compare(confirmPassword, me.password);
+    if (!ok) return res.status(403).json({ error: 'Incorrect password.' });
+  }
   const data = { name, phone, role, active };
   Object.keys(data).forEach((k) => data[k] === undefined && delete data[k]);
   if (password) data.password = await bcrypt.hash(password, 10);

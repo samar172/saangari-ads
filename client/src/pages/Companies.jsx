@@ -11,7 +11,7 @@ const EMPTY = {
   code: '', name: '', legalName: '', gstin: '', pan: '',
   address: '', phone: '', email: '',
   gstMandatory: false, gstHidden: false,
-  termsAndConditions: ''
+  brandColor: '', termsAndConditions: ''
 };
 
 export default function Companies() {
@@ -43,7 +43,7 @@ export default function Companies() {
       gstin: c.gstin || '', pan: c.pan || '', address: c.address || '',
       phone: c.phone || '', email: c.email || '',
       gstMandatory: !!c.gstMandatory, gstHidden: !!c.gstHidden,
-      termsAndConditions: c.termsAndConditions || ''
+      brandColor: c.brandColor || '', termsAndConditions: c.termsAndConditions || ''
     });
     setEditing(c.id);
     setErr('');
@@ -154,6 +154,44 @@ export default function Companies() {
                   <div className="text-xs text-slate-500">Removes the tax dropdown completely. All bookings are Non-GST.</div>
                 </div>
               </label>
+            </div>
+          </div>
+
+          <div className="card p-4 bg-slate-50 border-slate-200">
+            <div className="font-semibold text-slate-800 text-sm mb-1">Sidebar Color</div>
+            <div className="text-xs text-slate-500 mb-3">The sidebar uses this color when this business is the active company.</div>
+            <div className="flex flex-wrap items-center gap-3">
+              <input
+                type="color"
+                className="h-10 w-14 rounded border border-slate-300 cursor-pointer bg-white p-0.5"
+                value={form.brandColor || '#0f172a'}
+                onChange={(e) => set('brandColor', e.target.value)}
+              />
+              <input
+                className="input w-36"
+                placeholder="#0f172a"
+                value={form.brandColor}
+                onChange={(e) => set('brandColor', e.target.value)}
+              />
+              <div className="flex gap-2">
+                {[['#0f172a', 'Blue'], ['#9E2015', 'Maroon'], ['#065f46', 'Green'], ['#1e293b', 'Slate']].map(([hex, label]) => (
+                  <button
+                    key={hex}
+                    type="button"
+                    onClick={() => set('brandColor', hex)}
+                    className={`h-8 w-8 rounded-full border-2 transition ${form.brandColor?.toLowerCase() === hex.toLowerCase() ? 'border-slate-800 scale-110' : 'border-white shadow'}`}
+                    style={{ backgroundColor: hex }}
+                    title={label}
+                  />
+                ))}
+              </div>
+              {form.brandColor && (
+                <button type="button" className="text-xs text-slate-400 underline" onClick={() => set('brandColor', '')}>Reset to default</button>
+              )}
+            </div>
+            {/* Live preview strip */}
+            <div className="mt-3 h-8 rounded-lg flex items-center px-3 text-white text-xs font-semibold" style={{ backgroundColor: form.brandColor || '#0f172a' }}>
+              SAANGRI · sidebar preview
             </div>
           </div>
 

@@ -16,6 +16,8 @@ import Reminders from './pages/Reminders';
 import PrintingPartners from './pages/PrintingPartners';
 import Companies from './pages/Companies';
 import Users from './pages/Users';
+import Approvals from './pages/Approvals';
+import SimpleQuotation from './pages/SimpleQuotation';
 
 function Protected({ children }) {
   const { user } = useAuth();
@@ -35,6 +37,7 @@ export default function App() {
             <Route path="/new-booking" element={<Protected><NewBooking /></Protected>} />
             <Route path="/orders" element={<Protected><Orders /></Protected>} />
             <Route path="/quotations" element={<Protected><Orders /></Protected>} />
+            <Route path="/quotations/new" element={<Protected><SimpleQuotation /></Protected>} />
             <Route path="/orders/:id" element={<Protected><OrderDetail /></Protected>} />
             <Route path="/reminders" element={<Protected><Reminders /></Protected>} />
             <Route path="/clients" element={<Protected><Clients /></Protected>} />
@@ -47,6 +50,7 @@ export default function App() {
             <Route path="/payments" element={<Protected><Payments /></Protected>} />
             <Route path="/settings/companies" element={<Protected><Companies /></Protected>} />
             <Route path="/users" element={<Protected><Users /></Protected>} />
+            <Route path="/approvals" element={<Protected><Approvals /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>

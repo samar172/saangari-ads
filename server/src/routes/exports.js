@@ -33,14 +33,30 @@ function sitePhoto(site) {
   return latest ? resolveImage(latest.filePath) : null;
 }
 
+// Build a site `where` for the availability exports from the query. Supports the
+// four combinations the client asked for:
+//   • vacant        → status=AVAILABLE  (the default)
+//   • booked        → status=BOOKED
+//   • custom        → siteIds=1,2,3     (exactly the chosen sites, any status)
+//   • vacant+custom → status=AVAILABLE & siteIds=…  (free sites plus the chosen)
+function siteSelectionWhere({ type, status, siteIds }) {
+  const ids = String(siteIds || '').split(',').map((s) => Number(s.trim())).filter(Boolean);
+  const typeF = type ? { type } : {};
+  if (ids.length && status) {
+    // vacant + custom: everything free of this type, OR any explicitly picked site
+    return { active: true, OR: [{ ...typeF, status }, { id: { in: ids } }] };
+  }
+  if (ids.length) return { active: true, id: { in: ids } }; // custom only
+  if (status) return { active: true, ...typeF, status };    // vacant / booked / any status
+  return { active: true, ...typeF, status: 'AVAILABLE' };   // default
+}
+
 // Availability PDF — a visual catalogue: a red cover, then one landscape page
 // per site (photo + name + dimensions + coordinates), matching the printed deck.
 router.get('/availability/pdf', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
-  const { type } = req.query;
-  // An availability deck should only show sites that are actually free — drop
-  // anything currently booked, tentatively held or under maintenance.
+  const { type, status, siteIds } = req.query;
   const sites = await prisma.site.findMany({
-    where: { active: true, status: 'AVAILABLE', ...(type ? { type } : {}) },
+    where: siteSelectionWhere({ type, status, siteIds }),
     orderBy: { srNo: 'asc' },
     include: {
       bookings: {
@@ -83,8 +99,17 @@ router.get('/availability/pdf', requireRole('MANAGER', 'FINANCE'), async (req, r
     doc.rect(pad - 6, imgY - 6, panelW + 12, imgH + 12).fill('#ffffff');
     const img = sitePhoto(s);
     if (img) {
-      try { doc.image(img, pad, imgY, { fit: [panelW, imgH], align: 'center', valign: 'center' }); }
-      catch (e) { doc.rect(pad, imgY, panelW, imgH).fill('#f3f4f6'); }
+      // PDFKit ignores align/valign when `fit` is used — it anchors the scaled
+      // image at the top-left. So scale manually and offset to truly centre the
+      // photo inside the white frame.
+      try {
+        const src = doc.openImage(img);
+        const scale = Math.min(panelW / src.width, imgH / src.height);
+        const dw = src.width * scale, dh = src.height * scale;
+        const dx = pad + (panelW - dw) / 2;
+        const dy = imgY + (imgH - dh) / 2;
+        doc.image(img, dx, dy, { width: dw, height: dh });
+      } catch (e) { doc.rect(pad, imgY, panelW, imgH).fill('#f3f4f6'); }
     } else {
       doc.rect(pad, imgY, panelW, imgH).fill('#f3f4f6');
       doc.fillColor('#9ca3af').fontSize(14).text('Photo pending', pad, imgY + imgH / 2 - 8, { align: 'center', width: panelW });
@@ -403,6 +428,133 @@ router.get('/client/:clientId/pptx', requireRole('MANAGER', 'FINANCE'), async (r
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
   res.setHeader('Content-Disposition', `attachment; filename="${client.name.replace(/\s+/g, '_')}_proposal.pptx"`);
   res.end(buffer);
+});
+
+// PPTX deck of selected / filtered sites (vacant, booked, custom or a mix) — the
+// inventory-side counterpart to the availability PDF, driven by the same filters.
+router.get('/sites/pptx', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const { type, status, siteIds } = req.query;
+  const sites = await prisma.site.findMany({
+    where: siteSelectionWhere({ type, status, siteIds }),
+    orderBy: { srNo: 'asc' },
+    include: {
+      bookings: {
+        where: { status: { in: ['CONFIRMED', 'LIVE', 'TENTATIVE'] } },
+        include: { photos: true },
+        orderBy: { startDate: 'desc' }, take: 1,
+      },
+    },
+  });
+
+  const pptx = new PptxGenJS();
+  pptx.layout = 'LAYOUT_4x3';
+  const SW = 10;
+  const logoPath = path.join(__dirname, '../assets/logo.png');
+  const logoOnWhite = path.join(__dirname, '../assets/logo-onwhite.png');
+
+  const cover = pptx.addSlide();
+  cover.background = { color: 'FFFFFF' };
+  try {
+    if (fs.existsSync(logoOnWhite)) cover.addImage({ path: logoOnWhite, x: 2, y: 1.6, w: 6, h: 3 });
+    else if (fs.existsSync(logoPath)) cover.addImage({ path: logoPath, x: 3.25, y: 1.6, w: 3.5, h: 2.6 });
+  } catch (e) {}
+  cover.addText('Site Availability', { x: 0.5, y: 4.9, w: 9, h: 0.6, fontSize: 26, bold: true, color: '9E2015', align: 'center' });
+  cover.addText(`${sites.length} site(s)${type ? ' · ' + type : ''} · Bikaner, Rajasthan · ${new Date().toLocaleDateString('en-IN')}`,
+    { x: 0.5, y: 5.6, w: 9, h: 0.4, fontSize: 12, color: '888888', align: 'center' });
+
+  for (const s of sites) {
+    const slide = pptx.addSlide();
+    slide.background = { color: '9E2015' };
+    const img = sitePhoto(s);
+    const px = 1, py = 0.5, pw = SW - px * 2, ph = 3.7;
+    slide.addShape(pptx.ShapeType.rect, { x: px - 0.06, y: py - 0.06, w: pw + 0.12, h: ph + 0.12, fill: { color: 'FFFFFF' } });
+    if (img) {
+      try { slide.addImage({ path: img, x: px, y: py, w: pw, h: ph, sizing: { type: 'cover', w: pw, h: ph } }); }
+      catch (e) { slide.addText('Photo pending', { x: px, y: py, w: pw, h: ph, align: 'center', valign: 'middle', color: '9CA3AF', fill: { color: 'F3F4F6' } }); }
+    } else {
+      slide.addText('Photo pending', { x: px, y: py, w: pw, h: ph, align: 'center', valign: 'middle', color: '9CA3AF', fill: { color: 'F3F4F6' } });
+    }
+    const title = `${s.srNo ? s.srNo + ' - ' : ''}${(s.location || s.code).toUpperCase()}`;
+    slide.addText(title, { x: 0.5, y: py + ph + 0.25, w: SW - 1, h: 0.8, fontSize: 22, bold: true, color: 'FFFFFF', align: 'center' });
+    slide.addText(`Width: ${s.width} ft | Height: ${s.height} ft | Total Area: ${s.sqft || Math.round(s.width * s.height)} sq.ft`,
+      { x: 0.5, y: py + ph + 1.0, w: SW - 1, h: 0.35, fontSize: 13, color: 'FFE9E9', align: 'center' });
+    if (s.latitude && s.longitude) {
+      slide.addText(`Latitude: ${s.latitude} | Longitude: ${s.longitude}`,
+        { x: 0.5, y: py + ph + 1.35, w: SW - 1, h: 0.35, fontSize: 13, color: 'FFE9E9', align: 'center' });
+    }
+    slide.addText(`${s.code} · ${s.type} · ${s.zone}${s.city ? ', ' + s.city : ''}`,
+      { x: 0.5, y: py + ph + 1.7, w: SW - 1, h: 0.3, fontSize: 10, color: 'FFD0D0', align: 'center' });
+  }
+
+  const buffer = await pptx.write('nodebuffer');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  res.setHeader('Content-Disposition', 'attachment; filename="Site-Availability.pptx"');
+  res.end(buffer);
+});
+
+// Standalone "quick quotation" — a plain proposal with no site mapping and no
+// order/booking created. The client asked for a short form (name, company,
+// address, contact + free rate lines that can span any number of months) that
+// simply prints a PDF. Nothing is persisted.
+router.post('/quotation/simple', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+  const { companyName, clientName, clientCompany, address, contact, lines = [], notes } = req.body || {};
+
+  const doc = new PDFDocument({ margin: 45, size: 'A4' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="Quotation-${(clientName || 'client').replace(/\s+/g, '_')}.pdf"`);
+  doc.pipe(res);
+
+  const logoPath = path.join(__dirname, '../assets/logo.png');
+  try { doc.image(logoPath, 45, 45, { height: 35 }); }
+  catch (e) { doc.fontSize(20).fillColor(BRAND).text((companyName || 'SAANGARI ADVERTISING').toUpperCase(), 45, 45); }
+  doc.fontSize(9).fillColor('#555').text('Outdoor Media — Bikaner, Rajasthan', 45, 85);
+  doc.fontSize(16).fillColor('#000').text('QUOTATION', 0, 48, { align: 'right' });
+  doc.fontSize(10).fillColor('#333')
+    .text(companyName || 'Saangari Advertising', { align: 'right' })
+    .text(`Date: ${new Date().toLocaleDateString('en-IN')}`, { align: 'right' });
+
+  doc.moveDown(2);
+  doc.fontSize(11).fillColor('#000').text('To:', 45);
+  doc.fontSize(10).fillColor('#333');
+  if (clientName) doc.text(clientName);
+  if (clientCompany) doc.text(clientCompany);
+  if (address) doc.text(address);
+  if (contact) doc.text(`Contact: ${contact}`);
+
+  doc.moveDown();
+  const x = { desc: 45, months: 320, rate: 400, amt: 480 };
+  let y = doc.y + 6;
+  doc.rect(45, y - 2, 505, 18).fill(BRAND);
+  doc.fillColor('#fff').fontSize(9)
+    .text('Description', x.desc + 4, y).text('Months', x.months, y).text('Rate', x.rate, y)
+    .text('Amount', x.amt, y, { width: 66, align: 'right' });
+  y += 22;
+  let total = 0;
+  doc.font('Helvetica').fillColor('#333');
+  for (const l of lines) {
+    if (!l || (!l.description && !l.rate)) continue;
+    const months = Number(l.months) || 1;
+    const rate = Number(l.rate) || 0;
+    const amount = Math.round(months * rate);
+    total += amount;
+    doc.fontSize(9)
+      .text(l.description || '—', x.desc + 4, y, { width: 265 })
+      .text(String(months), x.months, y, { width: 70 })
+      .text(INR(rate), x.rate, y, { width: 70 })
+      .text(INR(amount), x.amt, y, { width: 66, align: 'right' });
+    y += Math.max(16, doc.heightOfString(l.description || '—', { width: 265, fontSize: 9 }));
+    if (y > 730) { doc.addPage(); y = 60; }
+  }
+  y += 6;
+  doc.font('Helvetica-Bold').fontSize(11).fillColor('#000')
+    .text('Total', x.rate - 40, y, { width: 100, align: 'right' })
+    .text(INR(total), x.amt, y, { width: 66, align: 'right' });
+
+  if (notes) {
+    doc.moveDown(3).font('Helvetica').fontSize(9).fillColor('#555').text('Notes / Terms:', 45).text(notes, { width: 505 });
+  }
+  doc.font('Helvetica').fontSize(8).fillColor('#888').text('This is a quotation and not a tax invoice.', 45, 790, { align: 'center', width: 505 });
+  doc.end();
 });
 
 module.exports = router;

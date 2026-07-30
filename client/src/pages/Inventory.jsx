@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import dayjs from 'dayjs';
 import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
-import { X, CheckSquare, Plus, FileText, Download, MapPin, RefreshCw, Camera, Pencil, Check } from 'lucide-react';
+import { X, CheckSquare, Plus, FileText, Download, MapPin, RefreshCw, Camera, Pencil, Check, Building2, Presentation } from 'lucide-react';
 import { Badge, Money, Modal, Spinner } from '../components/ui';
+
+const STATUS_FILTERS = ['AVAILABLE', 'BOOKED', 'TENTATIVE', 'HOLD', 'MAINTENANCE'];
 
 const TILE_COLORS = {
   AVAILABLE: 'bg-emerald-500 hover:bg-emerald-600 ring-emerald-300',
@@ -20,9 +23,14 @@ export default function Inventory() {
   const [mediaTypes, setMediaTypes] = useState([]);
   const [type, setType] = useState('');
   const [zone, setZone] = useState('');
-  const [vacantOnly, setVacantOnly] = useState(false);
+  // Which statuses to show. Empty set = show everything.
+  const [statusSel, setStatusSel] = useState([]);
+  // Date-window filters (days from today). '' = off.
+  const [startWithin, setStartWithin] = useState('');
+  const [endWithin, setEndWithin] = useState('');
   const [sites, setSites] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [addOpen, setAddOpen] = useState(false);
   const [selected, setSelected] = useState(null);
   const [hover, setHover] = useState(null); // { site, rect }
   const detailCache = useRef({});
@@ -92,10 +100,53 @@ export default function Inventory() {
     hoverTimer.current = setTimeout(() => { setHover(null); setDetail(null); }, 120);
   }
 
+  function refresh() {
+    api.get('/sites', { params: { type } }).then((r) => setSites(r.data));
+    api.get('/sites/summary').then((r) => setSummary(r.data));
+  }
+  const toggleStatus = (st) =>
+    setStatusSel((sel) => (sel.includes(st) ? sel.filter((x) => x !== st) : [...sel, st]));
+
   const zones = [...new Set(sites.map((s) => s.zone))].sort();
   const zoneFiltered = zone ? sites.filter((s) => s.zone === zone) : sites;
   const counts = zoneFiltered.reduce((a, s) => { a[s.status] = (a[s.status] || 0) + 1; return a; }, {});
-  const visible = vacantOnly ? zoneFiltered.filter((s) => s.status === 'AVAILABLE') : zoneFiltered;
+
+  // Date-window filters read the site's live/upcoming bookings: "starting within
+  // N days" catches campaigns about to begin; "ending within N days" catches
+  // sites about to free up.
+  const HOLDING = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
+  const today = dayjs().startOf('day');
+  function passesWindows(s) {
+    if (startWithin === '' && endWithin === '') return true;
+    const active = (s.bookings || []).filter((b) => HOLDING.includes(b.status));
+    let ok = false;
+    if (startWithin !== '') {
+      const n = Number(startWithin);
+      ok = ok || active.some((b) => { const d = dayjs(b.startDate).diff(today, 'day'); return d >= 0 && d <= n; });
+    }
+    if (endWithin !== '') {
+      const n = Number(endWithin);
+      ok = ok || active.some((b) => { const d = dayjs(b.endDate).diff(today, 'day'); return d >= 0 && d <= n; });
+    }
+    return ok;
+  }
+  const visible = zoneFiltered
+    .filter((s) => (statusSel.length === 0 ? true : statusSel.includes(s.status)))
+    .filter(passesWindows);
+
+  // Build an export URL for the chosen combination, then download as PDF or PPT.
+  function runExport(mode, format) {
+    const ids = picked.map((p) => p.id).join(',');
+    const qs = new URLSearchParams();
+    if (mode === 'vacant' || mode === 'vacant_selected') { qs.set('status', 'AVAILABLE'); if (type) qs.set('type', type); }
+    if (mode === 'booked') { qs.set('status', 'BOOKED'); if (type) qs.set('type', type); }
+    if ((mode === 'selected' || mode === 'vacant_selected')) {
+      if (!ids) { alert('Select some sites first (use "Select sites").'); return; }
+      qs.set('siteIds', ids);
+    }
+    const path = format === 'ppt' ? '/exports/sites/pptx' : '/exports/availability/pdf';
+    downloadFile(`${path}?${qs.toString()}`, format === 'ppt' ? 'Site-Availability.pptx' : 'Site-Availability.pdf');
+  }
 
   return (
     <div>
@@ -107,6 +158,9 @@ export default function Inventory() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {can(user, 'manageSites') && (
+            <button className="btn-ghost flex items-center gap-1.5" onClick={() => setAddOpen(true)}><Building2 size={16} /> Add Site</button>
+          )}
           {can(user, 'createBooking') && (
             <>
               <button className={`flex items-center gap-1.5 ${selectMode ? 'btn-primary' : 'btn-ghost'}`} onClick={startSelecting}>
@@ -117,10 +171,8 @@ export default function Inventory() {
             </>
           )}
           {can(user, 'exportInventory') && (
-            <>
-              <button className="btn-ghost flex items-center gap-1.5" onClick={() => downloadFile(`/exports/availability/pdf?type=${type}`, 'Site-Availability.pdf')}><Download size={16} /> Availability PDF</button>
-              <button className="btn-ghost flex items-center gap-1.5" onClick={() => downloadFile(`/exports/inventory/excel?type=${type}`, 'inventory.xlsx')}><Download size={16} /> Export Excel</button>
-            </>
+            <ExportMenu picked={picked} onExport={runExport}
+              onExcel={() => downloadFile(`/exports/inventory/excel?type=${type}`, 'inventory.xlsx')} />
           )}
         </div>
       </div>
@@ -136,20 +188,34 @@ export default function Inventory() {
       </div>
 
       {/* Filters + legend */}
-      <div className="flex flex-wrap items-center gap-4 mb-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-4">
         <select className="input w-auto" value={zone} onChange={(e) => setZone(e.target.value)}>
           <option value="">All zones</option>
           {zones.map((z) => <option key={z} value={z}>{z}</option>)}
         </select>
-        <label className="flex items-center gap-2 text-sm text-slate-600">
-          <input type="checkbox" checked={vacantOnly} onChange={(e) => setVacantOnly(e.target.checked)} />
-          Vacant only
-        </label>
-        <div className="flex flex-wrap gap-3 text-xs text-slate-600">
-          <Legend color="bg-emerald-500" label={`Available (${counts.AVAILABLE || 0})`} />
-          <Legend color="bg-red-500" label={`Booked (${counts.BOOKED || 0})`} />
-          <Legend color="bg-amber-500" label={`Tentative (${counts.TENTATIVE || 0})`} />
+        {/* Status checkboxes — none ticked shows all */}
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          {STATUS_FILTERS.map((st) => (
+            <label key={st} className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 cursor-pointer transition ${statusSel.includes(st) ? 'border-brand bg-brand/5 text-brand' : 'border-slate-200 hover:border-slate-300'}`}>
+              <input type="checkbox" className="hidden" checked={statusSel.includes(st)} onChange={() => toggleStatus(st)} />
+              {st.charAt(0) + st.slice(1).toLowerCase()} ({counts[st] || 0})
+            </label>
+          ))}
         </div>
+        {/* Date windows */}
+        <label className="flex items-center gap-1.5 text-xs text-slate-600">
+          Starting in ≤
+          <input type="number" min="0" className="input w-16 py-1" placeholder="7" value={startWithin} onChange={(e) => setStartWithin(e.target.value)} />
+          days
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-slate-600">
+          Ending in ≤
+          <input type="number" min="0" className="input w-16 py-1" placeholder="15" value={endWithin} onChange={(e) => setEndWithin(e.target.value)} />
+          days
+        </label>
+        {(statusSel.length > 0 || startWithin !== '' || endWithin !== '') && (
+          <button className="text-xs text-slate-400 underline" onClick={() => { setStatusSel([]); setStartWithin(''); setEndWithin(''); }}>Clear filters</button>
+        )}
       </div>
 
       {loading ? <Spinner /> : visible.length === 0 ? (
@@ -194,10 +260,83 @@ export default function Inventory() {
         </div>
       )}
 
-      <SiteDetail site={selected} mediaTypes={mediaTypes} onClose={() => setSelected(null)} onChanged={() => {
-        api.get('/sites', { params: { type } }).then((r) => setSites(r.data));
-      }} />
+      <SiteDetail site={selected} mediaTypes={mediaTypes} onClose={() => setSelected(null)} onChanged={refresh} />
+      {addOpen && (
+        <AddSiteModal mediaTypes={mediaTypes} defaultType={type} onClose={() => setAddOpen(false)}
+          onSaved={() => { setAddOpen(false); refresh(); }} />
+      )}
     </div>
+  );
+}
+
+// Compact export control: pick a combination (vacant / booked / selected / mix)
+// then download it as PDF or PPT. Excel is a straight passthrough.
+function ExportMenu({ picked, onExport, onExcel }) {
+  const [mode, setMode] = useState('vacant');
+  return (
+    <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2 py-1">
+      <select className="input w-auto py-1 text-sm border-0 focus:ring-0" value={mode} onChange={(e) => setMode(e.target.value)}>
+        <option value="vacant">Vacant</option>
+        <option value="booked">Booked</option>
+        <option value="selected">Selected ({picked.length})</option>
+        <option value="vacant_selected">Vacant + Selected</option>
+      </select>
+      <button className="btn-ghost text-xs flex items-center gap-1" title="Export PDF" onClick={() => onExport(mode, 'pdf')}><Download size={14} /> PDF</button>
+      <button className="btn-ghost text-xs flex items-center gap-1" title="Export PPT" onClick={() => onExport(mode, 'ppt')}><Presentation size={14} /> PPT</button>
+      <span className="w-px h-4 bg-slate-200" />
+      <button className="btn-ghost text-xs flex items-center gap-1" title="Export Excel" onClick={onExcel}><Download size={14} /> Excel</button>
+    </div>
+  );
+}
+
+// Create a brand-new site from the inventory dashboard.
+const EMPTY_NEW = { code: '', type: '', location: '', zone: '', city: '', light: 'NL', width: '', height: '', sqft: '', monthlyRate: '', dayRate: '', printingCost: '', mountingCost: '', latitude: '', longitude: '', status: 'AVAILABLE' };
+function AddSiteModal({ mediaTypes = [], defaultType, onClose, onSaved }) {
+  const [form, setForm] = useState({ ...EMPTY_NEW, type: defaultType || mediaTypes[0]?.code || '' });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  async function save() {
+    setErr('');
+    if (!form.code || !form.zone || !form.city || !form.location || !form.type)
+      return setErr('Code, media type, location, zone and city are required.');
+    setSaving(true);
+    try { await api.post('/sites', form); onSaved(); }
+    catch (e) { setErr(e.response?.data?.error || 'Failed to create site'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Add Site" wide>
+      {err && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Field label="Site Code"><input className="input" placeholder="e.g. U-201" value={form.code} onChange={(e) => set('code', e.target.value)} /></Field>
+        <Field label="Media Type">
+          <select className="input" value={form.type} onChange={(e) => set('type', e.target.value)}>
+            <option value="">Select…</option>
+            {mediaTypes.map((m) => <option key={m.code} value={m.code}>{m.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Location" span><input className="input" value={form.location} onChange={(e) => set('location', e.target.value)} /></Field>
+        <Field label="Zone"><input className="input" value={form.zone} onChange={(e) => set('zone', e.target.value)} /></Field>
+        <Field label="City"><input className="input" value={form.city} onChange={(e) => set('city', e.target.value)} /></Field>
+        <Field label="Width (ft)"><input type="number" className="input" value={form.width} onChange={(e) => set('width', e.target.value)} /></Field>
+        <Field label="Height (ft)"><input type="number" className="input" value={form.height} onChange={(e) => set('height', e.target.value)} /></Field>
+        <Field label="Sq.ft (blank = auto)"><input type="number" className="input" value={form.sqft} onChange={(e) => set('sqft', e.target.value)} /></Field>
+        <Field label="Lighting"><input className="input" placeholder="NL / FL / BL" value={form.light} onChange={(e) => set('light', e.target.value)} /></Field>
+        <Field label="Monthly Rate (₹)"><input type="number" className="input" value={form.monthlyRate} onChange={(e) => set('monthlyRate', e.target.value)} /></Field>
+        <Field label="Day Rate (₹, loose media)"><input type="number" className="input" placeholder="blank = monthly ÷ 30" value={form.dayRate} onChange={(e) => set('dayRate', e.target.value)} /></Field>
+        <Field label="Printing Cost (₹)"><input type="number" className="input" value={form.printingCost} onChange={(e) => set('printingCost', e.target.value)} /></Field>
+        <Field label="Mounting Cost (₹)"><input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} /></Field>
+        <Field label="Latitude"><input type="number" className="input" value={form.latitude} onChange={(e) => set('latitude', e.target.value)} /></Field>
+        <Field label="Longitude"><input type="number" className="input" value={form.longitude} onChange={(e) => set('longitude', e.target.value)} /></Field>
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <button className="btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn-primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Create Site'}</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -259,7 +398,7 @@ function Legend({ color, label }) {
   return <span className="flex items-center gap-1.5"><span className={`h-3 w-3 rounded ${color}`} /> {label}</span>;
 }
 
-const EMPTY_EDIT = { type: '', location: '', zone: '', city: '', light: '', width: '', height: '', sqft: '', monthlyRate: '', printingCost: '', mountingCost: '', latitude: '', longitude: '', status: 'AVAILABLE' };
+const EMPTY_EDIT = { type: '', location: '', zone: '', city: '', light: '', width: '', height: '', sqft: '', monthlyRate: '', dayRate: '', printingCost: '', mountingCost: '', latitude: '', longitude: '', status: 'AVAILABLE' };
 
 function SiteDetail({ site, mediaTypes = [], onClose, onChanged }) {
   const { user } = useAuth();
@@ -280,6 +419,7 @@ function SiteDetail({ site, mediaTypes = [], onClose, onChanged }) {
       type: full.type ?? '',
       location: full.location ?? '', zone: full.zone ?? '', city: full.city ?? '', light: full.light ?? '',
       width: full.width ?? '', height: full.height ?? '', sqft: full.sqft ?? '', monthlyRate: full.monthlyRate ?? '',
+      dayRate: full.dayRate ?? '',
       printingCost: full.printingCost ?? '', mountingCost: full.mountingCost ?? '',
       latitude: full.latitude ?? '', longitude: full.longitude ?? '', status: full.status ?? 'AVAILABLE',
     });
@@ -359,6 +499,7 @@ function SiteDetail({ site, mediaTypes = [], onClose, onChanged }) {
               <Field label="Sq.ft (blank = auto)"><input type="number" className="input" value={form.sqft} onChange={(e) => set('sqft', e.target.value)} /></Field>
               <Field label="Lighting"><input className="input" placeholder="NL / FL / BL" value={form.light} onChange={(e) => set('light', e.target.value)} /></Field>
               <Field label="Monthly Rate (₹)"><input type="number" className="input" value={form.monthlyRate} onChange={(e) => set('monthlyRate', e.target.value)} /></Field>
+              <Field label="Day Rate (₹, loose media)"><input type="number" className="input" placeholder="blank = monthly ÷ 30" value={form.dayRate} onChange={(e) => set('dayRate', e.target.value)} /></Field>
               <Field label="Printing Cost (₹)"><input type="number" className="input" value={form.printingCost} onChange={(e) => set('printingCost', e.target.value)} /></Field>
               <Field label="Mounting Cost (₹)"><input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} /></Field>
               <Field label="Latitude"><input type="number" className="input" value={form.latitude} onChange={(e) => set('latitude', e.target.value)} /></Field>
@@ -387,7 +528,7 @@ function SiteDetail({ site, mediaTypes = [], onClose, onChanged }) {
                   <Row k="Size">{full.width} × {full.height} ft ({full.sqft} sq.ft)</Row>
                   <Row k="Lighting">{full.light}</Row>
                   <Row k="Monthly Rate"><Money value={full.monthlyRate} /> {full.gstOnRate && <span className="text-xs text-slate-400">+GST</span>}</Row>
-                  <Row k="Day Rate"><Money value={Math.round(full.monthlyRate / 30)} /></Row>
+                  <Row k="Day Rate"><Money value={full.dayRate > 0 ? full.dayRate : Math.round(full.monthlyRate / 30)} />{full.dayRate > 0 && <span className="text-xs text-slate-400"> · loose</span>}</Row>
                   <Row k="Coordinates">
                     {full.latitude ? (
                       <a className="text-brand-light underline" target="_blank" rel="noreferrer" href={`https://maps.google.com/?q=${full.latitude},${full.longitude}`}>{full.latitude}, {full.longitude}</a>

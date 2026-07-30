@@ -5,7 +5,10 @@ const { requireRole } = require('../middleware/auth');
 router.get('/', async (req, res) => {
   const partners = await prisma.printingPartner.findMany({
     orderBy: { name: 'asc' },
-    include: { _count: { select: { orders: true } } },
+    include: {
+      _count: { select: { orders: true } },
+      materials: { orderBy: { name: 'asc' } },
+    },
   });
   res.json(partners);
 });
@@ -18,7 +21,10 @@ const COUNTED = ['CONFIRMED', 'LIVE', 'COMPLETED'];
 
 router.get('/:id', async (req, res) => {
   const id = Number(req.params.id);
-  const partner = await prisma.printingPartner.findUnique({ where: { id } });
+  const partner = await prisma.printingPartner.findUnique({
+    where: { id },
+    include: { materials: { orderBy: { name: 'asc' } } },
+  });
   if (!partner) return res.status(404).json({ error: 'Printing partner not found' });
 
   const orders = await prisma.order.findMany({
@@ -97,6 +103,44 @@ router.patch('/:id', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   if (active !== undefined) data.active = !!active;
   const partner = await prisma.printingPartner.update({ where: { id: Number(req.params.id) }, data });
   res.json(partner);
+});
+
+// ── Materials offered by a partner (flex, pamphlet, brochure, white back…) ──
+// Each carries its own rate; the booking form's material dropdown pulls it.
+router.post('/:id/materials', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const partnerId = Number(req.params.id);
+  if (!Number.isInteger(partnerId)) return res.status(400).json({ error: 'Invalid partner id' });
+  const { name, rate } = req.body || {};
+  const cleanName = String(name || '').trim();
+  if (!cleanName) return res.status(400).json({ error: 'Material name is required' });
+  try {
+    const material = await prisma.printingMaterial.create({
+      data: { partnerId, name: cleanName, rate: Number(rate) || 0 },
+    });
+    res.status(201).json(material);
+  } catch (e) {
+    if (e.code === 'P2002') return res.status(409).json({ error: 'That material already exists for this partner' });
+    throw e;
+  }
+});
+
+router.patch('/materials/:mid', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const mid = Number(req.params.mid);
+  if (!Number.isInteger(mid)) return res.status(400).json({ error: 'Invalid material id' });
+  const { name, rate, active } = req.body || {};
+  const data = {};
+  if (name !== undefined) data.name = String(name).trim();
+  if (rate !== undefined) data.rate = Number(rate) || 0;
+  if (active !== undefined) data.active = !!active;
+  const material = await prisma.printingMaterial.update({ where: { id: mid }, data });
+  res.json(material);
+});
+
+router.delete('/materials/:mid', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const mid = Number(req.params.mid);
+  if (!Number.isInteger(mid)) return res.status(400).json({ error: 'Invalid material id' });
+  await prisma.printingMaterial.delete({ where: { id: mid } });
+  res.json({ ok: true });
 });
 
 module.exports = router;

@@ -2,19 +2,21 @@ import { useEffect, useState } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, can } from '../auth';
 import { useCompany } from '../CompanyContext';
+import api from '../api';
 import NotificationBar from './NotificationBar';
-import { Map, ClipboardList, PlusSquare, Bell, Users, Printer, Receipt, Banknote, BarChart3, Building2, Settings, LogOut, FileText, Menu, X } from 'lucide-react';
+import { Map, ClipboardList, PlusSquare, Bell, Users, Printer, Receipt, Banknote, BarChart3, Building2, Settings, LogOut, FileText, Menu, X, ShieldCheck } from 'lucide-react';
 
 const NAV = [
   { to: '/', label: 'Inventory', icon: Map, show: () => true },
-  { to: '/orders', label: 'Campaigns', icon: ClipboardList, show: () => true },
   { to: '/quotations', label: 'Quotations', icon: FileText, show: () => true },
   { to: '/new-booking', label: 'New Booking', icon: PlusSquare, show: (u) => can(u, 'createBooking') },
+  { to: '/orders', label: 'Campaigns', icon: ClipboardList, show: () => true },
   { to: '/clients', label: 'Clients', icon: Users, show: () => true },
   { to: '/printing-partners', label: 'Printing Partners', icon: Printer, show: () => true },
   { to: '/invoices', label: 'Invoices', icon: Receipt, show: (u) => can(u, 'viewInvoices') },
   { to: '/payments', label: 'Payments', icon: Banknote, show: (u) => can(u, 'viewReports') },
   { to: '/reports', label: 'Reports', icon: BarChart3, show: (u) => can(u, 'viewReports') },
+  { to: '/approvals', label: 'Approvals', icon: ShieldCheck, show: () => true, badge: 'approvals' },
   { to: '/settings/companies', label: 'Business Setup', icon: Building2, show: (u) => can(u, 'manageCategories') },
   { to: '/users', label: 'Users', icon: Settings, show: (u) => u.role === 'SUPER_ADMIN' },
 ];
@@ -31,6 +33,15 @@ export default function Layout({ children }) {
   const location = useLocation();
   // The notification bar already polls; reuse its critical+pending tally for the badge.
   const [dueCount, setDueCount] = useState(0);
+  // Pending approvals awaiting a reviewer — drives the nav badge for managers.
+  const [pendingApprovals, setPendingApprovals] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const poll = () => api.get('/approvals/count').then((r) => { if (alive) setPendingApprovals(r.data.pending || 0); }).catch(() => {});
+    poll();
+    const t = setInterval(poll, 60000);
+    return () => { alive = false; clearInterval(t); };
+  }, [location.pathname]);
   // On phones the sidebar is an off-canvas drawer; on lg+ it is always docked
   // and this flag is ignored.
   const [navOpen, setNavOpen] = useState(false);
@@ -113,7 +124,10 @@ export default function Layout({ children }) {
               >
                 <Icon size={18} />
                 <span className="flex-1">{n.label}</span>
-                {n.badge && dueCount > 0 && (
+                {n.badge === 'approvals' && pendingApprovals > 0 && (
+                  <span className="rounded-full bg-brand-accent text-brand text-[10px] font-bold px-1.5 py-0.5 min-w-[18px] text-center">{pendingApprovals}</span>
+                )}
+                {n.badge && n.badge !== 'approvals' && dueCount > 0 && (
                   <span className="rounded-full bg-brand-accent text-brand text-[10px] font-bold px-1.5 py-0.5 min-w-[18px] text-center">{dueCount}</span>
                 )}
               </NavLink>

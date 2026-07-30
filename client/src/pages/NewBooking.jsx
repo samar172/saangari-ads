@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
-import { Save, CheckCircle, Plus, Check } from 'lucide-react';
+import { Save, CheckCircle, Plus, Check, X } from 'lucide-react';
 import api from '../api';
 import { useCompany } from '../CompanyContext';
 import { Money, Badge } from '../components/ui';
@@ -83,6 +83,7 @@ export default function NewBooking() {
     defaultStart: defStart,
     defaultEnd: defEnd,
     printingPartnerId: '',
+    printMaterial: '',
     noOfPrints: 0,
     printRate: 0,
     mountingCost: 0,
@@ -103,6 +104,23 @@ export default function NewBooking() {
   const [clientForm, setClientForm] = useState(emptyClient);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  // #9 — the default start/end should auto-map onto every site line, not just
+  // the ones added afterwards. Changing a default here re-dates all sites at once.
+  function setDefaultStart(v) {
+    setForm((f) => ({ ...f, defaultStart: v }));
+    setLines((ls) => ls.map((l) => ({ ...l, startDate: v })));
+  }
+  function setDefaultEnd(v) {
+    setForm((f) => ({ ...f, defaultEnd: v }));
+    setLines((ls) => ls.map((l) => ({ ...l, endDate: v })));
+  }
+  function applyDurationPreset(preset) {
+    if (!preset) return;
+    const end = presetEnd(form.defaultStart, preset);
+    setForm((f) => ({ ...f, defaultEnd: end }));
+    setLines((ls) => ls.map((l) => ({ ...l, endDate: end })));
+  }
 
   // Fetch every site, not just the bookable ones — a line seeded from the grid may
   // point at a booked site, and we still need its code/rate to render the row.
@@ -174,6 +192,7 @@ export default function NewBooking() {
     const t = setTimeout(() => {
       api.post('/orders/quote', {
         items,
+        type: form.bookingType,
         addOns: addOns.filter((a) => a.label),
         noOfPrints: Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
@@ -184,7 +203,7 @@ export default function NewBooking() {
       }).then((r) => setQuote(r.data)).catch(() => setQuote(null));
     }, 250);
     return () => clearTimeout(t);
-  }, [lines, addOns, form.noOfPrints, form.printRate, form.mountingCost, form.discountPct, form.taxCategory, form.interState]);
+  }, [lines, addOns, form.bookingType, form.noOfPrints, form.printRate, form.mountingCost, form.discountPct, form.taxCategory, form.interState]);
 
   // Validate the essentials, then open the review modal instead of posting
   // straight away — the client asked for a fill → review → confirm flow.
@@ -226,6 +245,7 @@ export default function NewBooking() {
         bookingDate: form.bookingDate,
         description: form.description,
         printingPartnerId: form.printingPartnerId ? Number(form.printingPartnerId) : undefined,
+        printMaterial: form.printMaterial || undefined,
         noOfPrints: Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
         mountingCost: (Number(form.mountingCost) || 0) * lines.length,
@@ -342,22 +362,21 @@ export default function NewBooking() {
               </div>
               <div>
                 <label className="label">Default Start</label>
-                <input type="date" className="input" value={form.defaultStart} onChange={(e) => set('defaultStart', e.target.value)} />
+                <input type="date" className="input" value={form.defaultStart} onChange={(e) => setDefaultStart(e.target.value)} />
               </div>
               <div>
                 <label className="label">Duration</label>
-                <select className="input" onChange={(e) => {
-                  if (e.target.value) set('defaultEnd', presetEnd(form.defaultStart, e.target.value));
-                }}>
+                <select className="input" onChange={(e) => applyDurationPreset(e.target.value)}>
                   <option value="">Custom...</option>
                   {DURATIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </div>
               <div>
                 <label className="label">Default End</label>
-                <input type="date" className="input" value={form.defaultEnd} onChange={(e) => set('defaultEnd', e.target.value)} />
+                <input type="date" className="input" value={form.defaultEnd} onChange={(e) => setDefaultEnd(e.target.value)} />
               </div>
             </div>
+            <p className="text-xs text-slate-400 -mt-2">Changing a default date re-maps the dates of all added sites automatically.</p>
             <div>
               <div>
                 <label className="label">Description</label>
@@ -438,10 +457,30 @@ export default function NewBooking() {
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
                 <label className="label">Printing Partner</label>
-                <select className="input" value={form.printingPartnerId} onChange={(e) => set('printingPartnerId', e.target.value)}>
+                <select className="input" value={form.printingPartnerId}
+                  onChange={(e) => setForm((f) => ({ ...f, printingPartnerId: e.target.value, printMaterial: '' }))}>
                   <option value="">None</option>
                   {partners.map((p) => <option key={p.id} value={p.id}>{p.name}{p.ratePerSqft ? ` (₹${p.ratePerSqft}/sqft)` : ''}</option>)}
                 </select>
+              </div>
+              <div>
+                <label className="label">Material</label>
+                {(() => {
+                  const partner = partners.find((p) => String(p.id) === String(form.printingPartnerId));
+                  const materials = (partner?.materials || []).filter((m) => m.active);
+                  return (
+                    <select className="input" value={form.printMaterial}
+                      disabled={!form.printingPartnerId || materials.length === 0}
+                      onChange={(e) => {
+                        const m = materials.find((x) => x.name === e.target.value);
+                        // Picking a material auto-fills its rate.
+                        setForm((f) => ({ ...f, printMaterial: e.target.value, printRate: m ? m.rate : f.printRate }));
+                      }}>
+                      <option value="">{form.printingPartnerId ? (materials.length ? 'Select material…' : 'No materials set') : 'Pick a partner first'}</option>
+                      {materials.map((m) => <option key={m.id} value={m.name}>{m.name} (₹{m.rate})</option>)}
+                    </select>
+                  );
+                })()}
               </div>
               <div>
                 <label className="label">Mounting Cost (per site)</label>
@@ -847,43 +886,57 @@ function AddSitePicker({ sites, onPickMultiple }) {
     setOpen(false);
   };
 
+  const shownWide = matches.slice(0, 120);
+
   return (
-    <div className="relative" ref={ref}>
-      <button type="button" onClick={() => setOpen((o) => !o)} className="btn-accent text-sm py-1.5 px-3 flex items-center gap-1">
-        <Plus size={16} /> Add sites <span className="opacity-70 ml-0.5">▾</span>
+    <>
+      <button type="button" onClick={() => setOpen(true)} className="btn-accent text-sm py-1.5 px-3 flex items-center gap-1">
+        <Plus size={16} /> Add sites
       </button>
-      {/* 20rem is wider than a phone's content column, so cap the panel to the viewport. */}
+      {/* A large, roomy dialog so the sites are clearly visible (not a cramped
+          dropdown) — search on top, a multi-column grid of site cards below. */}
       {open && (
-        <div className="absolute right-0 z-30 mt-1 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white shadow-xl overflow-hidden flex flex-col">
-          <div className="p-2 border-b border-slate-100 shrink-0">
-            <input autoFocus className="input py-1.5 text-sm" placeholder="Search code, location or zone…"
-              value={q} onChange={(e) => setQ(e.target.value)} />
-          </div>
-          <div className="max-h-72 overflow-y-auto py-1">
-            {shown.length === 0 ? (
-              <div className="px-3 py-6 text-center text-sm text-slate-400">{sites.length === 0 ? 'All sites added' : 'No matching sites'}</div>
-            ) : shown.map((s) => (
-              <label key={s.id} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={picked.has(s.id)} onChange={() => toggle(s.id)} className="shrink-0" />
-                <span className={`h-2 w-2 rounded-full shrink-0 ${DOT[s.status] || 'bg-slate-400'}`} />
-                <span className="font-semibold text-sm text-slate-800 shrink-0 w-12">{s.code}</span>
-                <span className="text-xs text-slate-500 truncate flex-1">{s.location}</span>
-              </label>
-            ))}
-          </div>
-          {matches.length > shown.length && (
-            <div className="px-3 py-1.5 text-[11px] text-slate-400 border-t border-slate-100 shrink-0">
-              Showing {shown.length} of {matches.length} — keep typing to narrow
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-start justify-center p-4 overflow-y-auto" onMouseDown={() => setOpen(false)}>
+          <div ref={ref} className="bg-white rounded-xl shadow-2xl w-full max-w-4xl my-8 flex flex-col max-h-[85vh]" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="p-4 border-b border-slate-100 shrink-0 flex items-center gap-3">
+              <div className="flex-1">
+                <div className="font-bold text-slate-800">Add sites</div>
+                <div className="text-xs text-slate-500">{matches.length} available · {picked.size} selected</div>
+              </div>
+              <input autoFocus className="input py-1.5 text-sm w-64" placeholder="Search code, location or zone…"
+                value={q} onChange={(e) => setQ(e.target.value)} />
+              <button type="button" className="text-slate-400 hover:text-slate-700" onClick={() => setOpen(false)}><X size={20} /></button>
             </div>
-          )}
-          <div className="p-2 border-t border-slate-100 bg-slate-50 shrink-0 flex justify-end gap-2">
-            <button type="button" className="btn-ghost text-xs py-1" onClick={() => setOpen(false)}>Cancel</button>
-            <button type="button" className="btn-primary text-xs py-1" disabled={picked.size === 0} onClick={confirm}>
-              Add {picked.size} site{picked.size !== 1 ? 's' : ''}
-            </button>
+            <div className="flex-1 overflow-y-auto p-4">
+              {shownWide.length === 0 ? (
+                <div className="px-3 py-16 text-center text-sm text-slate-400">{sites.length === 0 ? 'All sites added' : 'No matching sites'}</div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {shownWide.map((s) => (
+                    <label key={s.id} className={`text-left px-3 py-2.5 rounded-lg border flex items-center gap-2.5 cursor-pointer transition ${picked.has(s.id) ? 'border-brand bg-brand/5' : 'border-slate-200 hover:border-slate-300'}`}>
+                      <input type="checkbox" checked={picked.has(s.id)} onChange={() => toggle(s.id)} className="shrink-0" />
+                      <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${DOT[s.status] || 'bg-slate-400'}`} />
+                      <span className="min-w-0">
+                        <span className="block font-semibold text-sm text-slate-800">{s.code} <span className="font-normal text-slate-400 text-xs">· {s.zone}</span></span>
+                        <span className="block text-xs text-slate-500 truncate">{s.location}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {matches.length > shownWide.length && (
+                <div className="px-1 py-2 text-[11px] text-slate-400">Showing {shownWide.length} of {matches.length} — keep typing to narrow</div>
+              )}
+            </div>
+            <div className="p-3 border-t border-slate-100 bg-slate-50 shrink-0 flex justify-end gap-2">
+              <button type="button" className="btn-ghost text-sm" onClick={() => setOpen(false)}>Cancel</button>
+              <button type="button" className="btn-primary text-sm" disabled={picked.size === 0} onClick={confirm}>
+                Add {picked.size} site{picked.size !== 1 ? 's' : ''}
+              </button>
+            </div>
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
