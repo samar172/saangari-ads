@@ -86,7 +86,7 @@ export default function PrintingPartners() {
         </div>
       )}
 
-      <Modal open={open} onClose={() => setOpen(false)} title={editId ? 'Edit Partner' : 'New Printing Partner'}>
+      <Modal open={open} onClose={() => setOpen(false)} title={editId ? 'Edit Partner' : 'New Printing Partner'} wide>
         <form onSubmit={save} className="space-y-3">
           {err && <div className="text-sm text-red-600">{err}</div>}
           <input className="input" placeholder="Name *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
@@ -100,6 +100,21 @@ export default function PrintingPartners() {
           <input className="input" placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
           <button className="btn-primary w-full" disabled={busy}>{busy ? 'Saving…' : 'Save Partner'}</button>
         </form>
+
+        {/* Materials: manageable right here in the edit flow. New partners must be saved first. */}
+        <div className="mt-4 border-t border-slate-200 pt-4">
+          {editId ? (
+            <MaterialsPanel
+              partner={partners.find((p) => p.id === editId) || form}
+              editable={can(user, 'managePartners')}
+              onChanged={load}
+            />
+          ) : (
+            <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2.5 text-xs text-slate-500">
+              Save the partner first, then reopen <span className="font-medium text-slate-600">Edit</span> to add its printing materials &amp; rates.
+            </div>
+          )}
+        </div>
       </Modal>
 
       {detailId && <PartnerDetail id={detailId} onClose={() => setDetailId(null)} />}

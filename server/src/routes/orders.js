@@ -5,6 +5,7 @@ const { Prisma } = require('@prisma/client');
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
 const { computeOrder, computeLine, recomputeOrderTotals } = require('../utils/pricing');
+const { settleInCash } = require('../utils/settle');
 const { nextOrderNo, nextBookingNo } = require('../utils/counters');
 const { writeLineNotes } = require('../utils/pdf');
 
@@ -150,15 +151,22 @@ router.get('/', async (req, res) => {
         },
       },
       payments: { select: { amount: true } },
-      invoices: { select: { id: true, invoiceNo: true, status: true } },
+      invoices: { select: { id: true, invoiceNo: true, status: true, issuedAt: true } },
     },
   });
   res.json(orders.map(withDerived));
 });
 
+// SALES may only see/act on campaigns they created; MANAGER/FINANCE/SUPER_ADMIN
+// are unrestricted. Mirrors the list route's own-orders scoping (line ~136).
+function salesForbidden(req, order) {
+  return req.user.role === 'SALES' && order.createdById !== req.user.id;
+}
+
 router.get('/:id', async (req, res) => {
   const order = await prisma.order.findUnique({ where: { id: Number(req.params.id) }, include: orderInclude });
   if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (salesForbidden(req, order)) return res.status(404).json({ error: 'Order not found' });
   res.json(withDerived(order));
 });
 
@@ -192,9 +200,12 @@ async function priceFromBody(body) {
     return { siteId: site.id, monthlyRate: site.monthlyRate, dayRate: site.dayRate, billPerDay, startDate: i.startDate, endDate: i.endDate, dayRateOverride: i.dayRateOverride, monthlyRateOverride: i.monthlyRateOverride };
   });
 
+  // Discount is a percentage — clamp to [0,100] so a stray value can't drive
+  // taxable/GST/grand-total negative.
+  const discPct = Math.min(100, Math.max(0, Number(discountPct) || 0));
   const result = computeOrder({
     items: pricedItems, addOns, noOfPrints, printRate, mountingCost,
-    discountPct, taxCategory, interState,
+    discountPct: discPct, taxCategory, interState,
   });
   return { result, sites: byId };
 }
@@ -283,12 +294,15 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
     // Lock the involved sites, then re-check conflicts inside the transaction so
     // a concurrent booking on the same site can't slip between check and insert.
     await lockSites(tx, items.map((i) => i.siteId));
-    const lineStatus = {};
+    // Status is tracked per line index, not per site: one order can legitimately
+    // carry the same site twice (back-to-back dates), and keying by siteId would
+    // let the second line clobber the first.
+    const lineStatus = [];
     for (const it of items) {
       const conflict = await findConflict(tx, Number(it.siteId), it.startDate, it.endDate);
       if (conflict && type === 'REGULAR')
         throw new BookingConflict(`${priced.sites[Number(it.siteId)]?.code || 'Site'} is already booked for these dates by ${conflict.order.client.name}. Use a Loose booking to waitlist.`);
-      lineStatus[it.siteId] = conflict && type === 'LOOSE' ? 'WAITLIST' : (status === 'CONFIRMED' ? 'CONFIRMED' : 'TENTATIVE');
+      lineStatus.push(conflict && type === 'LOOSE' ? 'WAITLIST' : (status === 'CONFIRMED' ? 'CONFIRMED' : 'TENTATIVE'));
     }
 
     // Allocate the order number only after the checks pass, so a rejected
@@ -309,7 +323,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
         monitoring: !!monitoring, monitorStart: !!monitorStart, monitorMid: !!monitorMid, monitorEnd: !!monitorEnd,
         taxCategory, interState: !!interState, placeOfSupply: placeOfSupply || 'Rajasthan',
         paymentTerms,
-        discountPct: Number(discountPct) || 0, discountRemarks,
+        discountPct: Math.min(100, Math.max(0, Number(discountPct) || 0)), discountRemarks,
         rentalSubtotal: r.rentalSubtotal, addOnTotal: r.addOnTotal, discountAmount: r.discountAmount,
         taxableAmount: r.taxableAmount, cgst: r.cgst, sgst: r.sgst, igst: r.igst,
         gstAmount: r.gstAmount, grandTotal: r.grandTotal, notes,
@@ -318,10 +332,13 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
       },
     });
 
-    for (const line of r.lines) {
+    // r.lines is index-aligned with items (computeOrder maps items 1:1), so pair
+    // each priced line with its own source item and status by position.
+    for (let i = 0; i < r.lines.length; i++) {
+      const line = r.lines[i];
       const bookingNo = await nextBookingNo();
-      const st = lineStatus[line.siteId];
-      const src = items.find((i) => Number(i.siteId) === line.siteId);
+      const st = lineStatus[i];
+      const src = items[i];
       await tx.booking.create({
         data: {
           bookingNo, orderId: created.id, siteId: line.siteId, type,
@@ -353,6 +370,13 @@ router.post('/:id/status', requireRole('SALES', 'MANAGER', 'FINANCE'), async (re
   const id = Number(req.params.id);
   const order = await prisma.order.findUnique({ where: { id }, include: { items: true } });
   if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (salesForbidden(req, order)) return res.status(403).json({ error: 'This campaign belongs to another user' });
+
+  // Cancelling a campaign is sensitive: Sales cannot do it directly — it must go
+  // through the approval queue for a manager/super-admin to sign off.
+  if (status === 'CANCELLED' && req.user.role === 'SALES') {
+    return res.status(403).json({ error: 'Sales cannot cancel a campaign directly. File a cancellation request for approval.', needsApproval: true });
+  }
 
   const lineFor = { CONFIRMED: 'CONFIRMED', LIVE: 'LIVE', COMPLETED: 'COMPLETED', CANCELLED: 'CANCELLED' };
   const siteFor = { CONFIRMED: 'BOOKED', LIVE: 'BOOKED', COMPLETED: 'AVAILABLE', CANCELLED: 'AVAILABLE' };
@@ -388,6 +412,7 @@ router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (
   const { amount, mode = 'CASH', reference, notes, tdsApplicable = false, tdsPct = 0 } = req.body || {};
   const order = await prisma.order.findUnique({ where: { id } });
   if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (salesForbidden(req, order)) return res.status(403).json({ error: 'This campaign belongs to another user' });
 
   // Money must not be collected against a proposal: the credit would land on the
   // client's ledger with no matching debit and skew their balance. Confirm the
@@ -442,6 +467,7 @@ router.post('/:id/addons', requireRole('MANAGER', 'FINANCE', 'SALES'), async (re
 
   const order = await prisma.order.findUnique({ where: { id } });
   if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (salesForbidden(req, order)) return res.status(403).json({ error: 'This campaign belongs to another user' });
   if (order.status === 'CANCELLED') return res.status(400).json({ error: 'Cannot add charges to a cancelled order' });
 
   // Tag the line with its kind so print vs mount is legible on the invoice.
@@ -461,19 +487,34 @@ router.post('/:id/addons', requireRole('MANAGER', 'FINANCE', 'SALES'), async (re
 // time. Re-prices so CGST/SGST/IGST and the grand total update.
 router.patch('/:id/tax', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid order id' });
   const { taxCategory } = req.body || {};
   if (!['GST', 'NON_GST'].includes(taxCategory)) return res.status(400).json({ error: 'taxCategory must be GST or NON_GST' });
 
-  const order = await prisma.order.findUnique({ where: { id }, include: { company: true } });
+  const order = await prisma.order.findUnique({ where: { id }, include: { company: true, invoices: { select: { id: true } } } });
   if (!order) return res.status(404).json({ error: 'Order not found' });
-  // A Non-GST-only entity has no GST registration to bill under.
-  if (taxCategory === 'GST' && order.company?.gstHidden)
-    return res.status(400).json({ error: `${order.company.name} does not bill GST.` });
+  // An issued invoice is a hard record — changing the tax now would desync the
+  // campaign from the bill and the client ledger. Void the invoice first.
+  if (order.invoices.length)
+    return res.status(400).json({ error: `${order.orderNo} has been invoiced — void the invoice before changing its tax treatment.` });
 
-  await prisma.$transaction(async (tx) => {
-    await tx.order.update({ where: { id }, data: { taxCategory } });
-    await repriceOrder(tx, id);
-  });
+  try {
+    if (taxCategory === 'NON_GST') {
+      // Settle in cash: strips GST and moves the campaign (and its money) to the
+      // Non-GST business.
+      await settleInCash(id);
+    } else {
+      // Re-apply GST in place. A GST-hidden entity has no registration to bill under.
+      if (order.company?.gstHidden)
+        return res.status(400).json({ error: `${order.company.name} does not bill GST — move the campaign to a GST business first.` });
+      await prisma.$transaction(async (tx) => {
+        await tx.order.update({ where: { id }, data: { taxCategory: 'GST' } });
+        await repriceOrder(tx, id);
+      });
+    }
+  } catch (e) {
+    return res.status(400).json({ error: e.message || 'Could not change the tax treatment' });
+  }
 
   const full = await prisma.order.findUnique({ where: { id }, include: orderInclude });
   res.json(withDerived(full));
@@ -510,6 +551,10 @@ router.patch('/:id/items/:lineId', requireRole('MANAGER', 'FINANCE', 'SALES'), a
   const { displayNotes } = req.body || {};
   const line = await prisma.booking.findUnique({ where: { id: Number(req.params.lineId) } });
   if (!line || line.orderId !== Number(req.params.id)) return res.status(404).json({ error: 'Line not found on this order' });
+  if (req.user.role === 'SALES') {
+    const ord = await prisma.order.findUnique({ where: { id: line.orderId }, select: { createdById: true } });
+    if (!ord || ord.createdById !== req.user.id) return res.status(403).json({ error: 'This campaign belongs to another user' });
+  }
 
   await prisma.booking.update({
     where: { id: line.id },
@@ -605,9 +650,10 @@ router.post('/:id/items/:lineId/stop', requireRole('MANAGER', 'FINANCE'), async 
 });
 
 // Quotation PDF for the client
-router.get('/:id/quotation.pdf', async (req, res) => {
+router.get('/:id/quotation.pdf', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const order = await prisma.order.findUnique({ where: { id: Number(req.params.id) }, include: orderInclude });
   if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (salesForbidden(req, order)) return res.status(404).json({ error: 'Order not found' });
 
   const doc = new PDFDocument({ margin: 45, size: 'A4' });
   res.setHeader('Content-Type', 'application/pdf');
@@ -708,9 +754,10 @@ const LETTER = {
   contact: 'saangariads@gmail.com, +91 988-988-1751, 988-988-2751',
 };
 
-router.get('/:id/proposal.pdf', async (req, res) => {
+router.get('/:id/proposal.pdf', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const order = await prisma.order.findUnique({ where: { id: Number(req.params.id) }, include: orderInclude });
   if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (salesForbidden(req, order)) return res.status(404).json({ error: 'Order not found' });
 
   const path = require('path');
   const doc = new PDFDocument({ margin: 0, size: 'A4' });

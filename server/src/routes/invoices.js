@@ -91,14 +91,18 @@ router.patch('/:id/commercials', requireRole('FINANCE', 'MANAGER'), async (req, 
   const testOrder = {
     ...order,
     addOnTotal,
-    printingTotal: Number(printingTotal) || 0,
-    mountingCost: Number(mountingCost) || 0,
-    discountPct: Number(discountPct) || 0
+    // Fall back to the order's existing values when a field is omitted, so a
+    // partial PATCH (e.g. only discountPct) doesn't zero out real production charges.
+    printingTotal: printingTotal !== undefined ? Number(printingTotal) || 0 : order.printingTotal,
+    mountingCost: mountingCost !== undefined ? Number(mountingCost) || 0 : order.mountingCost,
+    discountPct: discountPct !== undefined ? Math.min(100, Math.max(0, Number(discountPct) || 0)) : order.discountPct,
   };
 
   const newTotals = recomputeOrderTotals(testOrder, order.items);
 
-  // 3. Update Order
+  // 3. Update Order. Persist explicit columns only — recomputeOrderTotals returns
+  // `mountingTotal`/`gstRate`, which are NOT columns on Order (it has mountingCost,
+  // and no gstRate), so spreading the whole result would make Prisma throw.
   await prisma.order.update({
     where: { id: order.id },
     data: {
@@ -107,7 +111,11 @@ router.patch('/:id/commercials', requireRole('FINANCE', 'MANAGER'), async (req, 
       discountPct: testOrder.discountPct,
       discountRemarks: discountRemarks || order.discountRemarks,
       addOnTotal,
-      ...newTotals
+      rentalSubtotal: newTotals.rentalSubtotal,
+      discountAmount: newTotals.discountAmount,
+      taxableAmount: newTotals.taxableAmount,
+      cgst: newTotals.cgst, sgst: newTotals.sgst, igst: newTotals.igst,
+      gstAmount: newTotals.gstAmount, grandTotal: newTotals.grandTotal,
     }
   });
 
@@ -146,12 +154,18 @@ router.patch('/:id/commercials', requireRole('FINANCE', 'MANAGER'), async (req, 
 // photo exists on any line (proof-of-display gate) — but purely loose orders
 // are 1–2 day displays with no monitoring cycle, so they invoice straight away.
 router.post('/', requireRole('FINANCE'), async (req, res) => {
-  const { orderId, force, taxCategory: taxOverride, interState: interStateOverride, dueDate } = req.body || {};
+  const { orderId, force, dueDate } = req.body || {};
   const order = await prisma.order.findUnique({
     where: { id: Number(orderId) },
     include: { client: true, company: true, items: { include: { photos: true } } },
   });
   if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  // One invoice per campaign. Issuing a second full-value bill would double-count
+  // the receivable; to change the tax, settle the campaign in cash first, and to
+  // re-bill, void the existing invoice.
+  const existing = await prisma.invoice.findFirst({ where: { orderId: order.id, status: { not: 'CANCELLED' } } });
+  if (existing) return res.status(409).json({ error: `${order.orderNo} already has an invoice (${existing.invoiceNo}). Void it before issuing a new one.` });
 
   // Proof-of-display gate is now a soft check: Finance can override it (force)
   // when a bill must go out before the monitoring photo is uploaded/mounted.
@@ -160,15 +174,12 @@ router.post('/', requireRole('FINANCE'), async (req, res) => {
   if (hasRegularLine && photoCount === 0 && !force)
     return res.status(422).json({ error: 'No monitoring photo uploaded yet (proof-of-display). You can invoice anyway.', canForce: true });
 
-  // Bill-time GST choice: default to the campaign's tax category, but allow
-  // Finance to override (e.g. a GST campaign settled in cash / Non-GST).
-  let taxCategory = order.taxCategory;
-  if (taxOverride === 'GST' || taxOverride === 'NON_GST') {
-    if (taxOverride === 'GST' && order.company?.gstHidden)
-      return res.status(400).json({ error: 'This entity cannot issue GST invoices.' });
-    taxCategory = taxOverride;
-  }
-  const interState = interStateOverride != null ? !!interStateOverride : order.interState;
+  // The invoice always follows the campaign's own tax treatment — no bill-time
+  // override, so the order, the invoice and the ledger can never disagree. A GST
+  // campaign that must be billed in cash is settled in cash first (which moves it
+  // to the Non-GST business and re-prices it).
+  const taxCategory = order.taxCategory;
+  const interState = order.interState;
 
   const amount = order.taxableAmount;
   const split = gstSplit(taxCategory, interState, amount);
@@ -181,7 +192,9 @@ router.post('/', requireRole('FINANCE'), async (req, res) => {
       gstRate: split.gstApplicable ? GST_RATE : 0,
       cgst: split.cgst, sgst: split.sgst, igst: split.igst, gstAmount: split.gstAmount,
       total: split.total, status: 'SENT', generatedById: req.user.id,
-      dueDate: dueDate ? new Date(dueDate) : lastWorkingDayOfMonth(order.bookingDate),
+      // Default due = last working day of the ISSUE month (not the booking month,
+      // which could make a late invoice arrive already overdue).
+      dueDate: dueDate ? new Date(dueDate) : lastWorkingDayOfMonth(new Date()),
     },
   });
 
@@ -193,11 +206,35 @@ router.post('/', requireRole('FINANCE'), async (req, res) => {
 });
 
 router.post('/:id/mark-paid', requireRole('FINANCE'), async (req, res) => {
-  const invoice = await prisma.invoice.update({ where: { id: Number(req.params.id) }, data: { status: 'PAID' }, include: { order: true } });
-  await prisma.ledgerEntry.create({
-    data: { clientId: invoice.clientId, companyId: invoice.companyId, invoiceId: invoice.id, type: 'CREDIT', amount: invoice.total, narration: `Payment for ${invoice.invoiceNo}` },
+  const id = Number(req.params.id);
+  const invoice = await prisma.invoice.findUnique({ where: { id } });
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+  if (invoice.status === 'PAID') return res.json(invoice); // idempotent — no replayed credit
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const inv = await tx.invoice.update({ where: { id }, data: { status: 'PAID' } });
+    // Settle the order's OUTSTANDING balance (not blindly the full invoice total)
+    // so this can't double-count money already recorded via the payments route.
+    // Mirrors that route: one Payment row (clears order balance) + one ledger
+    // CREDIT (clears the client ledger).
+    const order = await tx.order.findUnique({ where: { id: invoice.orderId }, include: { payments: { select: { amount: true } } } });
+    const paid = (order?.payments || []).reduce((s, p) => s + p.amount, 0);
+    const remaining = Math.max(0, Math.round((order?.grandTotal || 0) - paid));
+    if (remaining > 0) {
+      await tx.payment.create({
+        data: {
+          orderId: invoice.orderId, clientId: invoice.clientId, companyId: invoice.companyId,
+          amount: remaining, netReceived: remaining, mode: 'BANK',
+          reference: `Invoice ${invoice.invoiceNo}`, recordedById: req.user.id,
+        },
+      });
+      await tx.ledgerEntry.create({
+        data: { clientId: invoice.clientId, companyId: invoice.companyId, invoiceId: invoice.id, type: 'CREDIT', amount: remaining, narration: `Payment for ${invoice.invoiceNo}` },
+      });
+    }
+    return inv;
   });
-  res.json(invoice);
+  res.json(updated);
 });
 
 // Downloadable PDF tax invoice

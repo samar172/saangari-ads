@@ -6,7 +6,7 @@ import api from '../api';
 import { useCompany } from '../CompanyContext';
 import { Money, Badge } from '../components/ui';
 
-const emptyClient = { name: '', phone: '', email: '', company: '', taxCategory: 'NON_GST', gstNumber: '', state: 'Rajasthan', categoryId: '' };
+const emptyClient = { name: '', phone: '', email: '', company: '', taxCategory: 'NON_GST', gstNumber: '', state: 'Rajasthan', address: '', categoryId: '' };
 
 // Duration presets. Value encodes the tenure; the label is what the user picks.
 const DURATIONS = [
@@ -224,7 +224,14 @@ export default function NewBooking() {
     try {
       let clientId = form.clientId;
       if (newClient) {
-        const { data } = await api.post('/clients', clientForm);
+        // The client's tax treatment follows the business, not a manual toggle:
+        // a GST-mandatory business files the client as GST, a GST-hidden business
+        // as Non-GST; an unrestricted business mirrors the tax chosen for this
+        // booking.
+        const clientTax = activeCompany?.gstMandatory ? 'GST'
+          : activeCompany?.gstHidden ? 'NON_GST'
+          : (form.taxCategory || 'NON_GST');
+        const { data } = await api.post('/clients', { ...clientForm, taxCategory: clientTax });
         clientId = data.id;
       }
       if (!clientId) throw { response: { data: { error: 'Select or create a client' } } };
@@ -318,7 +325,7 @@ export default function NewBooking() {
               <>
                 <select className="input" value={form.clientId} onChange={(e) => set('clientId', e.target.value)}>
                   <option value="">Select client…</option>
-                  {clients.map((c) => <option key={c.id} value={c.id}>{c.name} — {c.phone}</option>)}
+                  {clients.map((c) => <option key={c.id} value={c.id}>{c.company || c.name}{c.company && c.name ? ` (${c.name})` : ''} — {c.phone}</option>)}
                 </select>
                 {selectedClient && (
                   <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -344,11 +351,16 @@ export default function NewBooking() {
                 </div>
                 <input className="input" placeholder="Company" value={clientForm.company} onChange={(e) => setClientForm({ ...clientForm, company: e.target.value })} />
                 <input className="input" placeholder="Email" value={clientForm.email} onChange={(e) => setClientForm({ ...clientForm, email: e.target.value })} />
-                <select className="input" value={clientForm.taxCategory} onChange={(e) => setClientForm({ ...clientForm, taxCategory: e.target.value })}>
-                  <option value="NON_GST">Non-GST</option>
-                  <option value="GST">GST</option>
-                </select>
                 <input className="input" placeholder="GSTIN" value={clientForm.gstNumber} onChange={(e) => setClientForm({ ...clientForm, gstNumber: e.target.value })} />
+                <input className="input" placeholder="State" value={clientForm.state} onChange={(e) => setClientForm({ ...clientForm, state: e.target.value })} />
+                <input className="input sm:col-span-2" placeholder="Address" value={clientForm.address} onChange={(e) => setClientForm({ ...clientForm, address: e.target.value })} />
+                {/* No per-client GST toggle: the tax treatment follows the selected business. */}
+                <p className="sm:col-span-2 text-xs text-slate-500">
+                  GST is decided by the business{activeCompany ? ` (${activeCompany.name})` : ''}:
+                  {activeCompany?.gstMandatory ? ' this business bills GST, so the client is filed as GST.'
+                    : activeCompany?.gstHidden ? ' this business is Non-GST, so the client is filed as Non-GST.'
+                    : ' it follows the tax you pick for this booking below.'}
+                </p>
               </div>
             )}
           </div>
@@ -483,16 +495,16 @@ export default function NewBooking() {
                 })()}
               </div>
               <div>
-                <label className="label">Mounting Cost (per site)</label>
-                <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
-              </div>
-              <div>
                 <label className="label">No. of Prints</label>
                 <input type="number" min="0" className="input" value={form.noOfPrints} onChange={(e) => set('noOfPrints', e.target.value)} />
               </div>
               <div>
                 <label className="label">Rate per Print</label>
                 <input type="number" min="0" className="input" value={form.printRate} onChange={(e) => set('printRate', e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Mounting Cost (per site)</label>
+                <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
               </div>
             </div>
           </div>

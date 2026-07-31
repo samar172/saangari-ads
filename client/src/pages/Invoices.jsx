@@ -77,7 +77,6 @@ export default function Invoices() {
 function GenerateModal({ onClose, onDone }) {
   const [orders, setOrders] = useState([]);
   const [orderId, setOrderId] = useState('');
-  const [taxChoice, setTaxChoice] = useState(''); // '' = as per campaign
   const [dueDate, setDueDate] = useState('');
   const [err, setErr] = useState('');
   const [warn, setWarn] = useState(''); // soft photo-gate warning → offer "invoice anyway"
@@ -96,7 +95,6 @@ function GenerateModal({ onClose, onDone }) {
       await api.post('/invoices', {
         orderId: Number(orderId),
         force: !!force,
-        taxCategory: taxChoice || undefined,
         dueDate: dueDate || undefined,
       });
       onDone();
@@ -119,20 +117,10 @@ function GenerateModal({ onClose, onDone }) {
         })}
       </select>
 
-      <div className="grid grid-cols-2 gap-3 mt-3">
-        <div>
-          <label className="label">Tax</label>
-          <select className="input" value={taxChoice} onChange={(e) => setTaxChoice(e.target.value)}>
-            <option value="">As per campaign{selectedOrder ? ` (${selectedOrder.taxCategory === 'GST' ? 'GST' : 'Non-GST'})` : ''}</option>
-            <option value="GST">GST 18%</option>
-            <option value="NON_GST">Non-GST (settle in cash)</option>
-          </select>
-        </div>
-        <div>
-          <label className="label">Due date</label>
-          <input type="date" className="input" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-          <p className="text-[11px] text-slate-400 mt-1">Blank = last working day of the month.</p>
-        </div>
+      <div className="mt-3">
+        <label className="label">Due date</label>
+        <input type="date" className="input" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+        <p className="text-[11px] text-slate-400 mt-1">Blank = last working day of this month. The invoice follows the campaign's tax{selectedOrder ? ` (${selectedOrder.taxCategory === 'GST' ? 'GST' : 'Non-GST'})` : ''} — to bill in cash, settle the campaign in cash first.</p>
       </div>
 
       {warn ? (

@@ -26,6 +26,7 @@ export default function OrderDetail() {
   async function changeStatus(s) {
     setBusy(true);
     try { await api.post(`/orders/${id}/status`, { status: s }); load(); }
+    catch (e) { alert(e.response?.data?.error || 'Could not update the campaign status'); }
     finally { setBusy(false); }
   }
 
@@ -49,8 +50,9 @@ export default function OrderDetail() {
           </span>
         </div>
         <div className="flex-1" />
-        <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/orders/${id}/proposal.pdf`, `Proposal-${o.orderNo}.pdf`)}><FileText size={16} /> Proposal Letter</button>
-        <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/orders/${id}/quotation.pdf`, `Quotation-${o.orderNo}.pdf`)}><Download size={16} /> Quotation PDF</button>
+        {/* Monitoring proofs as a shareable deck / document */}
+        <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/exports/orders/${id}/photos.pdf`, `Monitoring-${o.orderNo}.pdf`)}><Camera size={16} /> Photos PDF</button>
+        <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/exports/orders/${id}/photos.pptx`, `Monitoring-${o.orderNo}.pptx`)}><Camera size={16} /> Photos PPT</button>
         {/* GST campaigns can be flagged to settle in cash — a manager approves it. */}
         {o.taxCategory === 'GST' && o.status !== 'CANCELLED' && (
           <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => setRequest({ action: 'SETTLE_CASH', label: `${o.orderNo} · settle in cash (Non-GST)` })}>
@@ -85,7 +87,9 @@ function RequestApprovalModal({ order, request, onClose, onDone }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [done, setDone] = useState(false);
-  const title = request.action === 'DELETE_ORDER' ? 'Request campaign deletion' : 'Request cash settlement';
+  const title = request.action === 'DELETE_ORDER' ? 'Request campaign deletion'
+    : request.action === 'CANCEL_ORDER' ? 'Request campaign cancellation'
+    : 'Request cash settlement';
 
   async function submit() {
     setBusy(true); setErr('');
@@ -113,7 +117,9 @@ function RequestApprovalModal({ order, request, onClose, onDone }) {
             <p className="text-sm text-slate-600 mt-2">
               {request.action === 'DELETE_ORDER'
                 ? `This asks an admin to delete ${order.orderNo}. Nothing is removed until they approve.`
-                : `This asks an admin to bill ${order.orderNo} as Non-GST (cash). GST is removed only once approved.`}
+                : request.action === 'CANCEL_ORDER'
+                ? `This asks an admin to cancel ${order.orderNo} and free its sites. Nothing changes until they approve.`
+                : `This asks an admin to settle ${order.orderNo} in cash: GST is removed and the campaign moves to the Non-GST business. Nothing changes until they approve.`}
             </p>
             <label className="label mt-4">Reason (optional)</label>
             <textarea className="input h-24" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this needed?" />
@@ -175,7 +181,7 @@ export function OrderTabs({ o, user, busy, changeStatus, onChanged, tab, setTab,
   return (
     <>
       <div className={`flex gap-1 overflow-x-auto border-b border-slate-200 px-2 pt-2 bg-slate-50/50 ${compact ? '' : 'rounded-t-xl'}`}>
-        {[['overview', 'Overview'], ['sites', `Sites (${o.items.length})`], ['payments', 'Payments']].map(([k, l]) => (
+        {[['overview', 'Overview'], ['sites', `Sites (${o.items.length})`], ['invoices', `Invoices (${o.invoices?.length || 0})`], ['payments', 'Payments']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`shrink-0 px-4 ${compact ? 'py-2 text-xs' : 'py-3 text-sm'} font-medium border-b-2 -mb-px transition ${tab === k ? 'border-brand text-brand bg-white rounded-t-lg' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{l}</button>
         ))}
@@ -188,6 +194,7 @@ export function OrderTabs({ o, user, busy, changeStatus, onChanged, tab, setTab,
             {o.items.map((it) => <LineCard key={it.id} order={o} line={it} onChanged={onChanged} />)}
           </div>
         )}
+        {tab === 'invoices' && <InvoicesPanel o={o} user={user} onChanged={onChanged} />}
         {tab === 'payments' && <Payments o={o} user={user} onChanged={onChanged} />}
       </div>
     </>
@@ -252,6 +259,9 @@ function TaxToggle({ order, onChanged }) {
   const toGst = order.taxCategory !== 'GST';
 
   async function switchTax() {
+    // Settling in cash strips GST and moves the campaign to the Non-GST business,
+    // so make it a deliberate action.
+    if (!toGst && !window.confirm(`Settle ${order.orderNo} in cash?\n\nGST is removed and the campaign — with the money booked against it — moves to your Non-GST business. This can't be done once an invoice exists.`)) return;
     setBusy(true); setErr('');
     try {
       await api.patch(`/orders/${order.id}/tax`, { taxCategory: toGst ? 'GST' : 'NON_GST' });
@@ -275,6 +285,18 @@ function TaxToggle({ order, onChanged }) {
 }
 
 function Overview({ o, user, busy, changeStatus, onChanged }) {
+  const [cancelReq, setCancelReq] = useState(false);
+  const isSales = user.role === 'SALES';
+
+  // Cancelling frees every held site and cannot be undone. Sales must get an
+  // approval; everyone else confirms (the "double verification" step) first.
+  function onCancel() {
+    if (isSales) { setCancelReq(true); return; }
+    if (!window.confirm(`Cancel ${o.orderNo}? This frees all its sites and cannot be undone.`)) return;
+    if (!window.confirm('Please confirm again — this permanently cancels the campaign.')) return;
+    changeStatus('CANCELLED');
+  }
+
   return (
     <div className="grid md:grid-cols-2 gap-8">
       <div>
@@ -310,8 +332,18 @@ function Overview({ o, user, busy, changeStatus, onChanged }) {
         {can(user, 'changeBookingStatus') && (
           <div className="mt-6 flex flex-wrap gap-2">
             {o.status === 'QUOTATION' && <button className="btn-primary" disabled={busy} onClick={() => changeStatus('CONFIRMED')}>Confirm order</button>}
-            {!['CANCELLED', 'COMPLETED'].includes(o.status) && <button className="btn-danger" disabled={busy} onClick={() => changeStatus('CANCELLED')}>Cancel</button>}
+            {!['CANCELLED', 'COMPLETED'].includes(o.status) && (
+              <button className="btn-danger" disabled={busy} onClick={onCancel}>{isSales ? 'Request cancellation' : 'Cancel'}</button>
+            )}
           </div>
+        )}
+        {cancelReq && (
+          <RequestApprovalModal
+            order={o}
+            request={{ action: 'CANCEL_ORDER', label: `${o.orderNo} · ${o.client.name} · cancel campaign` }}
+            onClose={() => setCancelReq(false)}
+            onDone={() => { setCancelReq(false); onChanged(); }}
+          />
         )}
       </div>
 
@@ -619,6 +651,126 @@ function PhotoSection({ booking, monitoring, onUploaded }) {
         <p className="text-sm text-slate-400 mt-2">Only Ops uploads monitoring photos. A phase reminder clears once all 3 proofs are in.</p>
       )}
       {busy && <div className="text-sm text-brand-accent animate-pulse">Uploading photo...</div>}
+    </div>
+  );
+}
+
+// Per-campaign invoice history + a generate control, so a bill can be raised
+// straight from the order it belongs to. Every generated PDF is listed line by
+// line; Finance can generate again (e.g. a monthly bill) and download any of them.
+function InvoicesPanel({ o, user, onChanged }) {
+  const invoices = [...(o.invoices || [])].sort((a, b) => new Date(b.issuedAt) - new Date(a.issuedAt));
+  const canGenerate = can(user, 'generateInvoice');
+  const hasInvoice = invoices.some((i) => i.status !== 'CANCELLED');
+  const [dueDate, setDueDate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [warn, setWarn] = useState(''); // soft photo-gate → offer "invoice anyway"
+
+  async function markPaid(id) {
+    if (busy) return;
+    setBusy(true); setErr('');
+    try { await api.post(`/invoices/${id}/mark-paid`); onChanged(); }
+    catch (e) { setErr(e.response?.data?.error || 'Could not mark this invoice paid'); }
+    finally { setBusy(false); }
+  }
+
+  async function generate(force) {
+    setBusy(true); setErr(''); if (force) setWarn('');
+    try {
+      await api.post('/invoices', {
+        orderId: o.id, force: !!force,
+        dueDate: dueDate || undefined,
+      });
+      setDueDate('');
+      onChanged();
+    } catch (e) {
+      const d = e.response?.data;
+      if (e.response?.status === 422 && d?.canForce) setWarn(d.error || 'Proof-of-display missing.');
+      else setErr(d?.error || 'Failed to generate invoice');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Generated PDF history — one row per invoice */}
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Generated invoices ({invoices.length})</div>
+        {invoices.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">No invoices generated for this campaign yet.</div>
+        ) : (
+          <div className="card overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
+                <tr>
+                  <th className="px-3 py-2 text-left">Invoice No</th>
+                  <th className="px-3 py-2 text-left">Date</th>
+                  <th className="px-3 py-2 text-left">Due</th>
+                  <th className="px-3 py-2 text-left">Type</th>
+                  <th className="px-3 py-2 text-right">Total</th>
+                  <th className="px-3 py-2 text-left">Status</th>
+                  <th className="px-3 py-2 text-right">PDF</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoices.map((i) => (
+                  <tr key={i.id} className="border-t border-slate-100">
+                    <td className="px-3 py-2 font-medium text-slate-800">{i.invoiceNo}</td>
+                    <td className="px-3 py-2 text-slate-500">{new Date(i.issuedAt).toLocaleDateString('en-IN')}</td>
+                    <td className="px-3 py-2 text-slate-500">{i.dueDate ? new Date(i.dueDate).toLocaleDateString('en-IN') : '—'}</td>
+                    <td className="px-3 py-2">{i.taxCategory === 'GST' ? <Badge status="LIVE">{i.interState ? 'IGST' : 'CGST+SGST'}</Badge> : <span className="text-slate-400">Non-GST</span>}</td>
+                    <td className="px-3 py-2 text-right font-medium"><Money value={i.total} /></td>
+                    <td className="px-3 py-2"><Badge status={i.status} /></td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap space-x-2">
+                      <button className="text-brand-light underline text-xs" onClick={() => downloadFile(`/invoices/${i.id}/pdf`, `${i.invoiceNo}.pdf`)}>Download</button>
+                      {canGenerate && i.status !== 'PAID' && (
+                        <button className="text-emerald-600 underline text-xs" onClick={() => markPaid(i.id)}>Mark paid</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Generate the campaign's invoice — one per campaign; to re-bill, void the
+          existing one; to bill in cash, settle the campaign in cash first. */}
+      {canGenerate && (
+        !o.receivable ? (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700">
+            {o.status === 'QUOTATION' ? 'Confirm this quotation before invoicing.' : 'This campaign is cancelled — nothing to invoice.'}
+          </div>
+        ) : hasInvoice ? (
+          <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2.5 text-xs text-slate-500">
+            This campaign is already invoiced. To re-issue, void the existing invoice first; to bill it in cash, settle the campaign in cash (Overview) before invoicing.
+          </div>
+        ) : (
+          <div className="rounded-xl border border-slate-200 p-5 bg-slate-50">
+            <div className="flex items-center gap-2 text-base font-semibold text-slate-800 mb-3"><Receipt size={18} /> Generate invoice for {o.orderNo}</div>
+            {err && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
+            <div className="sm:max-w-xs">
+              <label className="label">Due date</label>
+              <input type="date" className="input" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+              <p className="text-[11px] text-slate-400 mt-1">Blank = last working day of this month. Tax follows the campaign ({o.taxCategory === 'GST' ? 'GST' : 'Non-GST'}).</p>
+            </div>
+            {warn ? (
+              <div className="mt-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
+                {warn}
+                <div className="mt-2 flex gap-2">
+                  <button className="btn-ghost text-xs" onClick={() => setWarn('')}>Cancel</button>
+                  <button className="btn-primary text-xs" disabled={busy} onClick={() => generate(true)}>{busy ? 'Generating…' : 'Invoice anyway'}</button>
+                </div>
+              </div>
+            ) : (
+              <button className="btn-primary mt-3 flex items-center gap-1.5" disabled={busy} onClick={() => generate(false)}>
+                <Plus size={16} /> {busy ? 'Generating…' : 'Generate invoice'}
+              </button>
+            )}
+          </div>
+        )
+      )}
     </div>
   );
 }

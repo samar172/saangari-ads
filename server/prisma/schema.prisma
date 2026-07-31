@@ -101,6 +101,7 @@ enum PaymentTerms {
 // GST campaign to cash at billing, disable a user…).
 enum ApprovalAction {
   DELETE_ORDER
+  CANCEL_ORDER
   DELETE_INVOICE
   SETTLE_CASH
   DISABLE_USER

@@ -60,3 +60,16 @@ app.get('*', (req, res) => {
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`Saangri API listening on http://localhost:${PORT}`));
+
+// Keep campaign statuses in step with the calendar: confirmed campaigns go LIVE
+// on their start date and COMPLETED after their end date, freeing sites. Runs on
+// boot and hourly (dates only change daily, so hourly is plenty and cheap).
+const { advanceCampaignLifecycle } = require('./utils/lifecycle');
+async function runLifecycle() {
+  try {
+    const n = await advanceCampaignLifecycle();
+    if (n) console.log(`[lifecycle] advanced ${n} campaign(s) by date`);
+  } catch (e) { console.error('[lifecycle] failed:', e.message); }
+}
+runLifecycle();
+setInterval(runLifecycle, 60 * 60 * 1000);

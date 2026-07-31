@@ -45,7 +45,7 @@ export function can(user, action) {
     managePartners: ['MANAGER', 'FINANCE'],
     manageCategories: ['MANAGER'],
     shiftOrStopBooking: ['MANAGER', 'FINANCE'],
-    exportInventory: ['MANAGER', 'FINANCE'],
+    exportInventory: ['SALES', 'MANAGER', 'FINANCE'],
     viewReports: ['MANAGER', 'FINANCE'],
     manageUsers: [],
     manageSites: ['MANAGER'],

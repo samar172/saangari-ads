@@ -2,7 +2,7 @@ const router = require('express').Router();
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
 
-router.get('/', async (req, res) => {
+router.get('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const { q } = req.query;
   const where = q
     ? {
@@ -21,7 +21,7 @@ router.get('/', async (req, res) => {
   res.json(clients);
 });
 
-router.get('/:id', async (req, res) => {
+router.get('/:id', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const client = await prisma.client.findUnique({
     where: { id: Number(req.params.id) },
     include: {
@@ -39,7 +39,7 @@ router.get('/:id', async (req, res) => {
   res.json({ ...client, balance: debit - credit });
 });
 
-router.post('/', async (req, res) => {
+router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const { name, phone, email, company, gstNumber, taxCategory, address, state, categoryId } = req.body || {};
   if (!name || !phone) return res.status(400).json({ error: 'Name and phone are required' });
   try {

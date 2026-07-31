@@ -6,6 +6,7 @@ import { Spinner } from '../components/ui';
 
 const ACTION_LABEL = {
   DELETE_ORDER: 'Delete campaign',
+  CANCEL_ORDER: 'Cancel campaign',
   DELETE_INVOICE: 'Delete invoice',
   SETTLE_CASH: 'Settle in cash (Non-GST)',
   DISABLE_USER: 'Disable user',

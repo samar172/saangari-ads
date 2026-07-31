@@ -16,6 +16,17 @@ const TILE_COLORS = {
   MAINTENANCE: 'bg-slate-400 hover:bg-slate-500 ring-slate-300',
 };
 
+// Status-filter chips, colour-matched to the tiles: a coloured dot + coloured
+// outline when off, filled with that colour when ticked. (Full literal class
+// strings so Tailwind keeps them.)
+const STATUS_CHIP = {
+  AVAILABLE:   { dot: 'bg-emerald-500', on: 'bg-emerald-500 border-emerald-500 text-white', off: 'border-emerald-300 text-emerald-700 hover:border-emerald-500' },
+  BOOKED:      { dot: 'bg-red-500',     on: 'bg-red-500 border-red-500 text-white',         off: 'border-red-300 text-red-700 hover:border-red-500' },
+  TENTATIVE:   { dot: 'bg-amber-500',   on: 'bg-amber-500 border-amber-500 text-white',     off: 'border-amber-300 text-amber-700 hover:border-amber-500' },
+  HOLD:        { dot: 'bg-indigo-500',  on: 'bg-indigo-500 border-indigo-500 text-white',   off: 'border-indigo-300 text-indigo-700 hover:border-indigo-500' },
+  MAINTENANCE: { dot: 'bg-slate-400',   on: 'bg-slate-500 border-slate-500 text-white',     off: 'border-slate-300 text-slate-600 hover:border-slate-500' },
+};
+
 export default function Inventory() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -158,17 +169,10 @@ export default function Inventory() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {can(user, 'manageSites') && (
-            <button className="btn-ghost flex items-center gap-1.5" onClick={() => setAddOpen(true)}><Building2 size={16} /> Add Site</button>
-          )}
           {can(user, 'createBooking') && (
-            <>
-              <button className={`flex items-center gap-1.5 ${selectMode ? 'btn-primary' : 'btn-ghost'}`} onClick={startSelecting}>
-                {selectMode ? <><X size={16} /> Done selecting</> : <><CheckSquare size={16} /> Select sites</>}
-              </button>
-              <button className="btn-accent flex items-center gap-1.5" onClick={() => navigate('/new-booking')}><Plus size={16} /> New Booking</button>
-              <button className="btn-ghost flex items-center gap-1.5" onClick={() => navigate('/new-booking?mode=quotation')}><FileText size={16} /> Quotation</button>
-            </>
+            <button className={`flex items-center gap-1.5 ${selectMode ? 'btn-primary' : 'btn-ghost'}`} onClick={startSelecting}>
+              {selectMode ? <><X size={16} /> Done selecting</> : <><CheckSquare size={16} /> Select sites</>}
+            </button>
           )}
           {can(user, 'exportInventory') && (
             <ExportMenu picked={picked} onExport={runExport}
@@ -177,8 +181,12 @@ export default function Inventory() {
         </div>
       </div>
 
-      {/* Category tabs */}
+      {/* Category tabs — "All" first, then each media type */}
       <div className="flex flex-wrap gap-2 mb-4">
+        <button onClick={() => setType('')}
+          className={`rounded-lg px-4 py-2 text-sm font-medium border transition ${type === '' ? 'bg-brand text-white border-brand' : 'bg-white text-slate-600 border-slate-200 hover:border-brand'}`}>
+          All media <span className="opacity-70">({mediaTypes.reduce((a, m) => a + (summary[m.code]?.total || 0), 0)})</span>
+        </button>
         {mediaTypes.map((m) => (
           <button key={m.code} onClick={() => setType(m.code)}
             className={`rounded-lg px-4 py-2 text-sm font-medium border transition ${type === m.code ? 'bg-brand text-white border-brand' : 'bg-white text-slate-600 border-slate-200 hover:border-brand'}`}>
@@ -194,23 +202,28 @@ export default function Inventory() {
           {zones.map((z) => <option key={z} value={z}>{z}</option>)}
         </select>
         {/* Status checkboxes — none ticked shows all */}
-        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-          {STATUS_FILTERS.map((st) => (
-            <label key={st} className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 cursor-pointer transition ${statusSel.includes(st) ? 'border-brand bg-brand/5 text-brand' : 'border-slate-200 hover:border-slate-300'}`}>
-              <input type="checkbox" className="hidden" checked={statusSel.includes(st)} onChange={() => toggleStatus(st)} />
-              {st.charAt(0) + st.slice(1).toLowerCase()} ({counts[st] || 0})
-            </label>
-          ))}
+        <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+          {STATUS_FILTERS.map((st) => {
+            const c = STATUS_CHIP[st];
+            const active = statusSel.includes(st);
+            return (
+              <label key={st} className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 cursor-pointer transition ${active ? c.on : c.off}`}>
+                <input type="checkbox" className="hidden" checked={active} onChange={() => toggleStatus(st)} />
+                <span className={`h-2 w-2 rounded-full ${active ? 'bg-white/90' : c.dot}`} />
+                {st.charAt(0) + st.slice(1).toLowerCase()} ({counts[st] || 0})
+              </label>
+            );
+          })}
         </div>
         {/* Date windows */}
-        <label className="flex items-center gap-1.5 text-xs text-slate-600">
+        <label className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
           Starting in ≤
-          <input type="number" min="0" className="input w-16 py-1" placeholder="7" value={startWithin} onChange={(e) => setStartWithin(e.target.value)} />
+          <input type="number" min="0" className="input w-16 py-1 font-normal text-slate-700" placeholder="7" value={startWithin} onChange={(e) => setStartWithin(e.target.value)} />
           days
         </label>
-        <label className="flex items-center gap-1.5 text-xs text-slate-600">
+        <label className="flex items-center gap-1.5 text-xs font-semibold text-amber-700">
           Ending in ≤
-          <input type="number" min="0" className="input w-16 py-1" placeholder="15" value={endWithin} onChange={(e) => setEndWithin(e.target.value)} />
+          <input type="number" min="0" className="input w-16 py-1 font-normal text-slate-700" placeholder="15" value={endWithin} onChange={(e) => setEndWithin(e.target.value)} />
           days
         </label>
         {(statusSel.length > 0 || startWithin !== '' || endWithin !== '') && (
@@ -218,28 +231,39 @@ export default function Inventory() {
         )}
       </div>
 
-      {loading ? <Spinner /> : visible.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-300 p-12 text-center text-slate-400">No sites match these filters</div>
-      ) : (
-        <div className={`grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2 ${picked.length ? 'pb-20' : ''}`}>
-          {visible.map((s) => {
-            const isPicked = picked.some((p) => p.id === s.id);
-            return (
-              <button key={s.id} onClick={() => onTileClick(s)}
-                onMouseEnter={(e) => onEnter(s, e)} onMouseLeave={onLeave}
-                className={`relative aspect-square rounded-lg text-white p-1.5 flex flex-col justify-between text-left transition hover:ring-2 hover:ring-offset-1 ${TILE_COLORS[s.status]} ${isPicked ? 'ring-2 ring-offset-2 ring-brand' : 'ring-0'}`}>
-                {selectMode && (
-                  <span className={`absolute top-1 right-1 h-4 w-4 rounded border flex items-center justify-center text-[10px] font-bold ${isPicked ? 'bg-white text-brand border-white' : 'border-white/70 bg-black/10'}`}>
-                    {isPicked ? '✓' : ''}
-                  </span>
-                )}
-                <span className="font-bold text-xs">{s.code}</span>
-                <span className="text-[9px] leading-tight opacity-90 line-clamp-2">{s.location}</span>
-                <span className="text-[9px] font-semibold uppercase opacity-80">{s.status}</span>
+      {loading ? <Spinner /> : (
+        <>
+          {visible.length === 0 && (
+            <div className="rounded-lg border border-dashed border-slate-300 p-12 text-center text-slate-400 mb-2">No sites match these filters</div>
+          )}
+          <div className={`grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2 ${picked.length ? 'pb-20' : ''}`}>
+            {visible.map((s) => {
+              const isPicked = picked.some((p) => p.id === s.id);
+              return (
+                <button key={s.id} onClick={() => onTileClick(s)}
+                  onMouseEnter={(e) => onEnter(s, e)} onMouseLeave={onLeave}
+                  className={`relative aspect-square rounded-lg text-white p-1.5 flex flex-col justify-between text-left transition hover:ring-2 hover:ring-offset-1 ${TILE_COLORS[s.status]} ${isPicked ? 'ring-2 ring-offset-2 ring-brand' : 'ring-0'}`}>
+                  {selectMode && (
+                    <span className={`absolute top-1 right-1 h-4 w-4 rounded border flex items-center justify-center text-[10px] font-bold ${isPicked ? 'bg-white text-brand border-white' : 'border-white/70 bg-black/10'}`}>
+                      {isPicked ? '✓' : ''}
+                    </span>
+                  )}
+                  <span className="font-bold text-xs">{s.code}</span>
+                  <span className="text-[9px] leading-tight opacity-90 line-clamp-2">{s.location}</span>
+                  <span className="text-[9px] font-semibold uppercase opacity-80">{s.status}</span>
+                </button>
+              );
+            })}
+            {/* Add-site tile sits at the end of the grid, where the sites run out. */}
+            {can(user, 'manageSites') && !selectMode && (
+              <button onClick={() => setAddOpen(true)} title="Add a new site"
+                className="aspect-square rounded-lg border-2 border-dashed border-slate-300 text-slate-400 flex flex-col items-center justify-center gap-1 transition hover:border-brand hover:text-brand hover:bg-brand/5">
+                <Plus size={22} />
+                <span className="text-[10px] font-semibold uppercase tracking-wide">Add site</span>
               </button>
-            );
-          })}
-        </div>
+            )}
+          </div>
+        </>
       )}
 
       {hover && !selectMode && <HoverCard hover={hover} detail={detail} />}

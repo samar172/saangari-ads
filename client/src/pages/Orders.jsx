@@ -55,6 +55,19 @@ const COLUMNS = [
       {o.paymentTerms === 'POSTPAID' ? 'Postpaid' : 'Advance'}
     </span>
   ) },
+  { key: 'lastInvoice', label: 'Last Invoice', align: 'left',
+    cell: (o) => {
+      const invs = o.invoices || [];
+      if (!invs.length) return <span className="text-slate-300">—</span>;
+      // Most recent by issue date (fall back to id order if dates are missing).
+      const last = [...invs].sort((a, b) => new Date(b.issuedAt || 0) - new Date(a.issuedAt || 0) || b.id - a.id)[0];
+      return (
+        <span className="whitespace-nowrap">
+          <span className="font-medium text-slate-700">{last.invoiceNo}</span>
+          <div className="text-xs text-slate-500 mt-0.5">{last.issuedAt ? fmt(last.issuedAt) : '—'}{invs.length > 1 ? ` · ${invs.length} total` : ''}</div>
+        </span>
+      );
+    } },
   { key: 'status', label: 'Status', align: 'left', cell: (o) => <Badge status={o.status} /> },
   { key: 'photos', label: 'Photos', align: 'left',
     cell: (o) => {
@@ -63,8 +76,8 @@ const COLUMNS = [
     } },
 ];
 
-const DEFAULT_VISIBLE = ['order', 'client', 'sites', 'start', 'end', 'total', 'balance', 'terms', 'status', 'photos'];
-const STORAGE_KEY = 'orders.columns.v1';
+const DEFAULT_VISIBLE = ['order', 'client', 'sites', 'start', 'end', 'total', 'balance', 'lastInvoice', 'terms', 'status', 'photos'];
+const STORAGE_KEY = 'orders.columns.v2';
 
 function loadVisible() {
   try {
@@ -255,6 +268,7 @@ function ExpandedOrder({ id, onGo, onChangedList }) {
   async function changeStatus(s) {
     setBusy(true);
     try { await api.post(`/orders/${id}/status`, { status: s }); reload(); }
+    catch (e) { alert(e.response?.data?.error || 'Could not update the campaign status'); }
     finally { setBusy(false); }
   }
 

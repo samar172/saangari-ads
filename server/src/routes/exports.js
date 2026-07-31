@@ -24,6 +24,24 @@ function resolveImage(filePath) {
   return fs.existsSync(abs) ? abs : null;
 }
 
+// PDFKit (unlike pptxgenjs) cannot read a remote URL — it needs a local path or
+// a Buffer. Site images and monitoring photos are stored as Cloudinary URLs in
+// production, so for the PDF routes we fetch the bytes into a Buffer. Local
+// /uploads files are read straight off disk. Returns null on any failure so the
+// caller falls back to its placeholder.
+async function imageBuffer(src) {
+  if (!src) return null;
+  try {
+    if (/^https?:\/\//.test(src)) {
+      const resp = await fetch(src);
+      if (!resp.ok) return null;
+      return Buffer.from(await resp.arrayBuffer());
+    }
+    const abs = path.join(uploadDir, path.basename(src));
+    return fs.existsSync(abs) ? fs.readFileSync(abs) : null;
+  } catch (e) { return null; }
+}
+
 // Best photo to represent a site in a catalogue: its own image, else the most
 // recent monitoring photo from any booking on it.
 function sitePhoto(site) {
@@ -53,7 +71,7 @@ function siteSelectionWhere({ type, status, siteIds }) {
 
 // Availability PDF — a visual catalogue: a red cover, then one landscape page
 // per site (photo + name + dimensions + coordinates), matching the printed deck.
-router.get('/availability/pdf', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/availability/pdf', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const { type, status, siteIds } = req.query;
   const sites = await prisma.site.findMany({
     where: siteSelectionWhere({ type, status, siteIds }),
@@ -97,7 +115,7 @@ router.get('/availability/pdf', requireRole('MANAGER', 'FINANCE'), async (req, r
     // White-framed photo panel
     const pad = 60, panelW = W - pad * 2, imgH = 300, imgY = 40;
     doc.rect(pad - 6, imgY - 6, panelW + 12, imgH + 12).fill('#ffffff');
-    const img = sitePhoto(s);
+    const img = await imageBuffer(sitePhoto(s));
     if (img) {
       // PDFKit ignores align/valign when `fit` is used — it anchors the scaled
       // image at the top-left. So scale manually and offset to truly centre the
@@ -139,7 +157,7 @@ router.get('/availability/pdf', requireRole('MANAGER', 'FINANCE'), async (req, r
 });
 
 // Excel export of inventory (optionally filtered by type)
-router.get('/inventory/excel', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/inventory/excel', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const { type } = req.query;
   const sites = await prisma.site.findMany({
     where: { active: true, ...(type ? { type } : {}) },
@@ -363,7 +381,7 @@ router.get('/reports/excel', requireRole('MANAGER', 'FINANCE'), async (req, res)
 });
 
 // PPTX client deck: one slide per booked site with photos + details
-router.get('/client/:clientId/pptx', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/client/:clientId/pptx', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const client = await prisma.client.findUnique({
     where: { id: Number(req.params.clientId) },
     include: {
@@ -432,7 +450,7 @@ router.get('/client/:clientId/pptx', requireRole('MANAGER', 'FINANCE'), async (r
 
 // PPTX deck of selected / filtered sites (vacant, booked, custom or a mix) — the
 // inventory-side counterpart to the availability PDF, driven by the same filters.
-router.get('/sites/pptx', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/sites/pptx', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const { type, status, siteIds } = req.query;
   const sites = await prisma.site.findMany({
     where: siteSelectionWhere({ type, status, siteIds }),
@@ -555,6 +573,129 @@ router.post('/quotation/simple', requireRole('SALES', 'MANAGER', 'FINANCE'), asy
   }
   doc.font('Helvetica').fontSize(8).fillColor('#888').text('This is a quotation and not a tax invoice.', 45, 790, { align: 'center', width: 505 });
   doc.end();
+});
+
+// ── Monitoring photos export ───────────────────────────────────────────────
+// Bundle a campaign's monitoring proofs into a shareable deck/document. One
+// entry per uploaded photo, captioned with the site, phase (Start/Mid/End),
+// kind and the date/geo it was taken. Ordered by site, then phase, then kind.
+const PHASE_ORDER = { START: 0, MID: 1, END: 2 };
+async function loadOrderPhotos(orderId) {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: {
+      client: { select: { name: true, company: true } },
+      company: { select: { name: true, legalName: true } },
+      items: { include: { site: true, photos: true } },
+    },
+  });
+  if (!order) return null;
+  const shots = [];
+  for (const it of order.items) {
+    for (const p of it.photos || []) shots.push({ ...p, site: it.site });
+  }
+  shots.sort((a, b) =>
+    (a.site.srNo || 0) - (b.site.srNo || 0) ||
+    (PHASE_ORDER[a.phase] ?? 9) - (PHASE_ORDER[b.phase] ?? 9) ||
+    String(a.kind).localeCompare(String(b.kind)));
+  return { order, shots };
+}
+
+router.get('/orders/:id/photos.pdf', requireRole('SALES', 'MANAGER', 'FINANCE', 'OPS'), async (req, res) => {
+  const data = await loadOrderPhotos(Number(req.params.id));
+  if (!data) return res.status(404).json({ error: 'Order not found' });
+  const { order, shots } = data;
+
+  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0 });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="Monitoring-${order.orderNo}.pdf"`);
+  doc.pipe(res);
+  const W = doc.page.width, H = doc.page.height;
+  const logoPath = path.join(__dirname, '../assets/logo.png');
+
+  // Cover
+  doc.rect(0, 0, W, H).fill(BRAND);
+  try { doc.image(logoPath, (W - 300) / 2, H / 2 - 150, { width: 300 }); }
+  catch (e) { doc.fontSize(44).fillColor('#fff').text('SAANGARI', 0, H / 2 - 60, { align: 'center', width: W }); }
+  doc.fontSize(18).fillColor('#fff').text('Monitoring Report', 0, H - 130, { align: 'center', width: W });
+  doc.fontSize(12).fillColor('#ffe9e9').text(
+    `${order.orderNo} · ${order.client?.company || order.client?.name || ''} · ${shots.length} photo${shots.length === 1 ? '' : 's'} · ${new Date().toLocaleDateString('en-IN')}`,
+    0, H - 100, { align: 'center', width: W });
+
+  for (const s of shots) {
+    doc.addPage({ layout: 'landscape', margin: 0 });
+    doc.rect(0, 0, W, H).fill(BRAND);
+    const pad = 60, panelW = W - pad * 2, imgH = 330, imgY = 34;
+    doc.rect(pad - 6, imgY - 6, panelW + 12, imgH + 12).fill('#ffffff');
+    const img = await imageBuffer(s.filePath);
+    if (img) {
+      try {
+        const src = doc.openImage(img);
+        const scale = Math.min(panelW / src.width, imgH / src.height);
+        const dw = src.width * scale, dh = src.height * scale;
+        doc.image(img, pad + (panelW - dw) / 2, imgY + (imgH - dh) / 2, { width: dw, height: dh });
+      } catch (e) { doc.rect(pad, imgY, panelW, imgH).fill('#f3f4f6'); }
+    } else {
+      doc.rect(pad, imgY, panelW, imgH).fill('#f3f4f6');
+      doc.fillColor('#9ca3af').fontSize(14).text('Image unavailable', pad, imgY + imgH / 2 - 8, { align: 'center', width: panelW });
+    }
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(20)
+      .text(`${s.site.code} · ${(s.site.location || '').toUpperCase()}`, pad, imgY + imgH + 22, { align: 'center', width: panelW });
+    doc.font('Helvetica').fontSize(13).fillColor('#ffe9e9')
+      .text(`${s.phase} · ${s.kind}${s.latitude ? `  ·  ${s.latitude}, ${s.longitude}` : ''}  ·  ${new Date(s.takenAt).toLocaleDateString('en-IN')}`,
+        pad, doc.y + 8, { align: 'center', width: panelW });
+  }
+
+  if (shots.length === 0) {
+    doc.addPage({ layout: 'landscape', margin: 0 });
+    doc.rect(0, 0, W, H).fill('#ffffff');
+    doc.fillColor('#888').fontSize(16).text('No monitoring photos uploaded for this campaign yet.', 0, H / 2, { align: 'center', width: W });
+  }
+  doc.end();
+});
+
+router.get('/orders/:id/photos.pptx', requireRole('SALES', 'MANAGER', 'FINANCE', 'OPS'), async (req, res) => {
+  const data = await loadOrderPhotos(Number(req.params.id));
+  if (!data) return res.status(404).json({ error: 'Order not found' });
+  const { order, shots } = data;
+
+  const pptx = new PptxGenJS();
+  pptx.layout = 'LAYOUT_4x3';
+  const SW = 10;
+  const logoOnWhite = path.join(__dirname, '../assets/logo-onwhite.png');
+  const logoPath = path.join(__dirname, '../assets/logo.png');
+
+  const cover = pptx.addSlide();
+  cover.background = { color: 'FFFFFF' };
+  try {
+    if (fs.existsSync(logoOnWhite)) cover.addImage({ path: logoOnWhite, x: 2, y: 1.6, w: 6, h: 3 });
+    else if (fs.existsSync(logoPath)) cover.addImage({ path: logoPath, x: 3.25, y: 1.6, w: 3.5, h: 2.6 });
+  } catch (e) {}
+  cover.addText('Monitoring Report', { x: 0.5, y: 4.9, w: 9, h: 0.6, fontSize: 26, bold: true, color: '9E2015', align: 'center' });
+  cover.addText(`${order.orderNo} · ${order.client?.company || order.client?.name || ''}`, { x: 0.5, y: 5.5, w: 9, h: 0.5, fontSize: 16, color: '333333', align: 'center' });
+  cover.addText(`${shots.length} photo(s) · ${new Date().toLocaleDateString('en-IN')}`, { x: 0.5, y: 6.1, w: 9, h: 0.4, fontSize: 12, color: '888888', align: 'center' });
+
+  for (const s of shots) {
+    const slide = pptx.addSlide();
+    slide.background = { color: '9E2015' };
+    const img = resolveImage(s.filePath);
+    const px = 1, py = 0.5, pw = SW - px * 2, ph = 3.9;
+    slide.addShape(pptx.ShapeType.rect, { x: px - 0.06, y: py - 0.06, w: pw + 0.12, h: ph + 0.12, fill: { color: 'FFFFFF' } });
+    if (img) {
+      try { slide.addImage({ path: img, x: px, y: py, w: pw, h: ph, sizing: { type: 'cover', w: pw, h: ph } }); }
+      catch (e) { slide.addText('Image unavailable', { x: px, y: py, w: pw, h: ph, align: 'center', valign: 'middle', color: '9CA3AF', fill: { color: 'F3F4F6' } }); }
+    } else {
+      slide.addText('Image unavailable', { x: px, y: py, w: pw, h: ph, align: 'center', valign: 'middle', color: '9CA3AF', fill: { color: 'F3F4F6' } });
+    }
+    slide.addText(`${s.site.code} · ${(s.site.location || '').toUpperCase()}`, { x: 0.5, y: py + ph + 0.2, w: SW - 1, h: 0.6, fontSize: 20, bold: true, color: 'FFFFFF', align: 'center' });
+    slide.addText(`${s.phase} · ${s.kind}${s.latitude ? `  ·  ${s.latitude}, ${s.longitude}` : ''}  ·  ${new Date(s.takenAt).toLocaleDateString('en-IN')}`,
+      { x: 0.5, y: py + ph + 0.85, w: SW - 1, h: 0.35, fontSize: 13, color: 'FFE9E9', align: 'center' });
+  }
+
+  const buffer = await pptx.write('nodebuffer');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  res.setHeader('Content-Disposition', `attachment; filename="Monitoring-${order.orderNo}.pptx"`);
+  res.end(buffer);
 });
 
 module.exports = router;

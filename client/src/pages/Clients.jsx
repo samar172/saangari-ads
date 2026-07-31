@@ -45,10 +45,11 @@ export default function Clients() {
           <table className="w-full min-w-[720px] text-sm">
             <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
               <tr>
-                <th className="px-4 py-2 text-left">Name</th>
-                <th className="px-4 py-2 text-left">Category</th>
-                <th className="px-4 py-2 text-left">Phone</th>
                 <th className="px-4 py-2 text-left">Company</th>
+                <th className="px-4 py-2 text-left">Category</th>
+                <th className="px-4 py-2 text-left">Owner / Manager</th>
+                <th className="px-4 py-2 text-left">Contact</th>
+                <th className="px-4 py-2 text-left">GST</th>
                 <th className="px-4 py-2 text-left">Tax</th>
                 <th className="px-4 py-2 text-right">Orders</th>
                 <th className="px-4 py-2 text-right">Edit</th>
@@ -57,14 +58,15 @@ export default function Clients() {
             <tbody>
               {clients.map((c) => (
                 <tr key={c.id} onClick={() => setOpenId(c.id)} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer">
-                  <td className="px-4 py-2 font-medium">{c.name}</td>
+                  <td className="px-4 py-2 font-semibold text-slate-800">{c.company || <span className="font-normal text-slate-400">{c.name}</span>}</td>
                   <td className="px-4 py-2">
                     {c.category
                       ? <span className="badge bg-teal-100 text-teal-800">{c.category.name}</span>
                       : <span className="text-slate-300">Uncategorised</span>}
                   </td>
+                  <td className="px-4 py-2">{c.name}</td>
                   <td className="px-4 py-2">{c.phone}</td>
-                  <td className="px-4 py-2 text-slate-500">{c.company || '—'}</td>
+                  <td className="px-4 py-2 text-slate-500">{c.gstNumber || '—'}</td>
                   <td className="px-4 py-2">{c.taxCategory === 'GST' ? <Badge status="LIVE">GST</Badge> : <span className="text-slate-400">Non-GST</span>}</td>
                   <td className="px-4 py-2 text-right">{c._count?.orders ?? 0}</td>
                   <td className="px-4 py-2 text-right">
@@ -78,7 +80,7 @@ export default function Clients() {
                   </td>
                 </tr>
               ))}
-              {clients.length === 0 && <tr><td colSpan="7" className="px-4 py-10 text-center text-slate-400">No clients</td></tr>}
+              {clients.length === 0 && <tr><td colSpan="8" className="px-4 py-10 text-center text-slate-400">No clients</td></tr>}
             </tbody>
           </table>
         </div>

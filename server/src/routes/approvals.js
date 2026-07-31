@@ -1,9 +1,9 @@
 const router = require('express').Router();
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
-const { recomputeOrderTotals } = require('../utils/pricing');
+const { settleInCash } = require('../utils/settle');
 
-const ACTIONS = ['DELETE_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'OTHER'];
+const ACTIONS = ['DELETE_ORDER', 'CANCEL_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'OTHER'];
 const ACTIVE = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
 
 // Release a site back to AVAILABLE unless another live booking still holds it.
@@ -79,6 +79,22 @@ async function execute(request) {
       });
       return;
     }
+    case 'CANCEL_ORDER': {
+      // Cancel the campaign, cancel its still-active lines and free those sites.
+      // Mirrors the direct cancel path in orders.js /:id/status.
+      await prisma.$transaction(async (tx) => {
+        const order = await tx.order.findUnique({ where: { id }, include: { items: true } });
+        if (!order) throw new Error('Order no longer exists');
+        if (order.status === 'CANCELLED') throw new Error('Order is already cancelled');
+        await tx.order.update({ where: { id }, data: { status: 'CANCELLED' } });
+        for (const line of order.items) {
+          if (line.status === 'STOPPED') continue;
+          await tx.booking.update({ where: { id: line.id }, data: { status: 'CANCELLED' } });
+          await releaseSite(tx, line.siteId);
+        }
+      });
+      return;
+    }
     case 'DELETE_INVOICE': {
       const invoice = await prisma.invoice.findUnique({ where: { id } });
       if (!invoice) throw new Error('Invoice no longer exists');
@@ -89,14 +105,9 @@ async function execute(request) {
       return;
     }
     case 'SETTLE_CASH': {
-      // Switch a GST campaign to Non-GST (cash) at billing time and re-price it.
-      await prisma.$transaction(async (tx) => {
-        const order = await tx.order.findUnique({ where: { id }, include: { items: true } });
-        if (!order) throw new Error('Order no longer exists');
-        const patched = { ...order, taxCategory: 'NON_GST', interState: false };
-        const totals = recomputeOrderTotals(patched, order.items);
-        await tx.order.update({ where: { id }, data: { taxCategory: 'NON_GST', interState: false, ...totals } });
-      });
+      // Strip GST and move the campaign (and its money) to the Non-GST business.
+      // Refuses if already invoiced. Shared with the direct /orders/:id/tax path.
+      await settleInCash(id);
       return;
     }
     case 'DISABLE_USER': {
@@ -108,11 +119,28 @@ async function execute(request) {
   }
 }
 
+// The most destructive actions need a Super-Admin to approve, not just any
+// manager — these delete hard financial records or lock people out.
+const SUPER_ADMIN_ONLY_ACTIONS = ['DISABLE_USER', 'DELETE_INVOICE'];
+
 router.post('/:id/approve', requireRole('MANAGER'), async (req, res) => {
   const id = Number(req.params.id);
   const request = await prisma.approvalRequest.findUnique({ where: { id } });
   if (!request) return res.status(404).json({ error: 'Request not found' });
   if (request.status !== 'PENDING') return res.status(400).json({ error: 'This request has already been reviewed' });
+
+  // Segregation of duties: the person who filed a request can't sign it off.
+  if (request.requestedById === req.user.id)
+    return res.status(403).json({ error: 'You cannot approve your own request — a different reviewer must sign off.' });
+  // The most sensitive actions require a Super-Admin approver.
+  if (SUPER_ADMIN_ONLY_ACTIONS.includes(request.action) && req.user.role !== 'SUPER_ADMIN')
+    return res.status(403).json({ error: 'Only a Super-Admin can approve this action.' });
+  // Never disable a Super-Admin through the queue (would allow locking out admins).
+  if (request.action === 'DISABLE_USER') {
+    const target = await prisma.user.findUnique({ where: { id: request.entityId }, select: { role: true } });
+    if (target?.role === 'SUPER_ADMIN')
+      return res.status(403).json({ error: 'A Super-Admin account cannot be disabled from the approval queue.' });
+  }
 
   try {
     await execute(request);
