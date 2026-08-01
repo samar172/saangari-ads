@@ -6,7 +6,7 @@ import { useAuth, can } from '../auth';
 import { X, CheckSquare, Plus, FileText, Download, MapPin, RefreshCw, Camera, Pencil, Check, Building2, Presentation } from 'lucide-react';
 import { Badge, Money, Modal, Spinner } from '../components/ui';
 
-const STATUS_FILTERS = ['AVAILABLE', 'BOOKED', 'TENTATIVE', 'HOLD', 'MAINTENANCE'];
+const STATUS_FILTERS = ['AVAILABLE', 'BOOKED', 'HOLD', 'MAINTENANCE'];
 
 const TILE_COLORS = {
   AVAILABLE: 'bg-emerald-500 hover:bg-emerald-600 ring-emerald-300',
@@ -86,6 +86,26 @@ export default function Inventory() {
     setSelectMode((on) => {
       if (on) setPicked([]); // leaving select mode clears the basket
       return !on;
+    });
+  }
+
+  // Tick every visible vacant (green) tile at once, so for a "vacant + selected"
+  // export the user only has to click the few booked (red) sites to add.
+  function selectAllVacant() {
+    setPicked((prev) => {
+      const ids = new Set(prev.map((p) => p.id));
+      const add = visible.filter((s) => s.status === 'AVAILABLE' && !ids.has(s.id)).map((s) => ({ id: s.id, code: s.code }));
+      return [...prev, ...add];
+    });
+  }
+
+  // Tick every visible tile, booked (red) included — lets an admin pull a booked
+  // site into a "selected" export without hunting for each one.
+  function selectAllVisible() {
+    setPicked((prev) => {
+      const ids = new Set(prev.map((p) => p.id));
+      const add = visible.filter((s) => !ids.has(s.id)).map((s) => ({ id: s.id, code: s.code }));
+      return [...prev, ...add];
     });
   }
 
@@ -173,6 +193,16 @@ export default function Inventory() {
             <button className={`flex items-center gap-1.5 ${selectMode ? 'btn-primary' : 'btn-ghost'}`} onClick={startSelecting}>
               {selectMode ? <><X size={16} /> Done selecting</> : <><CheckSquare size={16} /> Select sites</>}
             </button>
+          )}
+          {selectMode && (
+            <>
+              <button className="btn-ghost flex items-center gap-1.5" onClick={selectAllVacant} title="Tick all vacant (green) sites">
+                <CheckSquare size={16} /> Select all vacant
+              </button>
+              <button className="btn-ghost flex items-center gap-1.5" onClick={selectAllVisible} title="Tick every site in view, booked ones included">
+                <CheckSquare size={16} /> Select all (incl. booked)
+              </button>
+            </>
           )}
           {can(user, 'exportInventory') && (
             <ExportMenu picked={picked} onExport={runExport}

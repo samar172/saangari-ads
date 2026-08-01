@@ -40,8 +40,8 @@ async function phaseIsComplete(orderId, phase) {
 
 // Ops uploads one of the three monitoring proofs for a phase, with geo-tag.
 // Re-uploading the same (line, phase, kind) replaces the previous file.
-router.post('/', requireRole('OPS'), upload.single('photo'), async (req, res) => {
-  const { bookingId, phase, kind = 'NORMAL', latitude, longitude, remarks } = req.body || {};
+router.post('/', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), upload.single('photo'), async (req, res) => {
+  const { bookingId, phase, kind = 'NORMAL', latitude, longitude, remarks, takenAt } = req.body || {};
   if (!req.file) return res.status(400).json({ error: 'Photo file is required' });
   if (!bookingId || !phase) return res.status(400).json({ error: 'bookingId and phase are required' });
   if (!PHASES.includes(phase)) return res.status(400).json({ error: `phase must be one of ${PHASES.join(', ')}` });
@@ -71,7 +71,7 @@ router.post('/', requireRole('OPS'), upload.single('photo'), async (req, res) =>
     longitude: longitude ? Number(longitude) : null,
     remarks,
     uploadedById: req.user.id,
-    takenAt: new Date(),
+    takenAt: takenAt && !isNaN(new Date(takenAt)) ? new Date(takenAt) : new Date(),
   };
 
   let photo;
@@ -99,7 +99,19 @@ router.post('/', requireRole('OPS'), upload.single('photo'), async (req, res) =>
   res.status(201).json(photo);
 });
 
-router.delete('/:id', requireRole('OPS'), async (req, res) => {
+// Set the monitoring date for a whole phase of a line at once, so the exported
+// START / MID / END slides carry the real survey dates instead of upload time.
+router.patch('/date', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+  const { bookingId, phase, takenAt } = req.body || {};
+  if (!bookingId || !phase) return res.status(400).json({ error: 'bookingId and phase are required' });
+  if (!PHASES.includes(phase)) return res.status(400).json({ error: `phase must be one of ${PHASES.join(', ')}` });
+  const d = new Date(takenAt);
+  if (isNaN(d)) return res.status(400).json({ error: 'takenAt must be a valid date' });
+  await prisma.monitoringPhoto.updateMany({ where: { bookingId: Number(bookingId), phase }, data: { takenAt: d } });
+  res.json({ ok: true });
+});
+
+router.delete('/:id', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const photo = await prisma.monitoringPhoto.findUnique({ where: { id: Number(req.params.id) } });
   if (photo) {
     await removeFile(photo.filePath);

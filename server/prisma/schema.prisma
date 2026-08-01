@@ -105,6 +105,7 @@ enum ApprovalAction {
   DELETE_INVOICE
   SETTLE_CASH
   DISABLE_USER
+  EDIT_PAYMENT
   OTHER
 }
 
@@ -258,9 +259,7 @@ model PrintingPartner {
   orders    Order[]
 }
 
-// A printable material offered by a printing partner (flex, pamphlet, brochure,
-// white back, black, star…), each with its own rate. The booking form shows
-// these as a dropdown so the correct rate is applied per material.
+
 model PrintingMaterial {
   id        Int             @id @default(autoincrement())
   partner   PrintingPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
@@ -444,6 +443,9 @@ model Payment {
   receivedAt   DateTime @default(now())
   recordedBy   User     @relation("PaymentBy", fields: [recordedById], references: [id])
   recordedById Int
+  // The client-ledger credit(s) this payment posted, so an edit can adjust the
+  // exact matching entry instead of guessing by narration.
+  ledgerEntries LedgerEntry[]
 }
 
 model Invoice {
@@ -483,6 +485,8 @@ model LedgerEntry {
   companyId Int        @default(1)
   invoice   Invoice?   @relation(fields: [invoiceId], references: [id])
   invoiceId Int?
+  payment   Payment?   @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  paymentId Int?
   type      LedgerType
   amount    Float
   narration String

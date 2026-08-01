@@ -38,7 +38,7 @@ export default function OrderDetail() {
         <button className="btn-ghost" onClick={() => navigate('/orders')}>← Back</button>
         <div>
           <h1 className="text-2xl font-bold text-slate-800">{o.orderNo}</h1>
-          <p className="text-sm text-slate-500">{o.client.name}</p>
+          <p className="text-sm text-slate-500">{o.client.company ? `${o.client.company} · ${o.client.name}` : o.client.name}</p>
         </div>
         <div className="flex flex-wrap gap-2 sm:ml-4">
           <Badge status={o.status} />
@@ -304,7 +304,7 @@ function Overview({ o, user, busy, changeStatus, onChanged }) {
           <Row k="Booking Date">{new Date(o.bookingDate).toLocaleDateString('en-IN')}</Row>
           {o.category && <Row k="Category">{o.category.name}</Row>}
           {o.description && <Row k="Description">{o.description}</Row>}
-          <Row k="Client">{o.client.name} · {o.client.phone}</Row>
+          <Row k="Client">{o.client.company ? `${o.client.company} · ` : ''}{o.client.name} · {o.client.phone}</Row>
           {o.printingPartner && <Row k="Printing Partner">{o.printingPartner.name}{o.printMaterial ? ` · ${o.printMaterial}` : ''}</Row>}
           <Row k="Monitoring">{o.monitoring ? [o.monitorStart && 'Start', o.monitorMid && 'Mid', o.monitorEnd && 'End'].filter(Boolean).join(' · ') || 'Yes' : 'No'}</Row>
           <Row k="Created by">{o.createdBy.name}</Row>
@@ -553,6 +553,29 @@ function PhotoSection({ booking, monitoring, onUploaded }) {
   const at = (ph, k) => booking.photos.find((p) => p.phase === ph && p.kind === k);
   const have = booking.photos.length;
 
+  // Local date (YYYY-MM-DD) for an <input type="date">, avoiding UTC day-shift.
+  const toDateInput = (v) => {
+    const d = new Date(v);
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  };
+  // One monitoring date per phase — seeded from any photo already uploaded for it.
+  const [phaseDates, setPhaseDates] = useState(() => {
+    const d = {};
+    for (const ph of PHASES) {
+      const p = booking.photos.find((x) => x.phase === ph);
+      d[ph] = p ? toDateInput(p.takenAt) : '';
+    }
+    return d;
+  });
+
+  async function setPhaseDate(ph, val) {
+    setPhaseDates((d) => ({ ...d, [ph]: val }));
+    // If proofs already exist for this phase, back-date them so exports pick it up.
+    if (val && booking.photos.some((p) => p.phase === ph)) {
+      try { await api.patch('/photos/date', { bookingId: booking.id, phase: ph, takenAt: `${val}T12:00:00` }); onUploaded(); } catch {}
+    }
+  }
+
   function triggerUpload(phase, kind) {
     if (!can(user, 'uploadPhoto')) return;
     setUploadTarget({ phase, kind });
@@ -569,6 +592,7 @@ function PhotoSection({ booking, monitoring, onUploaded }) {
     fd.append('bookingId', booking.id);
     fd.append('phase', uploadTarget.phase);
     fd.append('kind', uploadTarget.kind);
+    if (phaseDates[uploadTarget.phase]) fd.append('takenAt', `${phaseDates[uploadTarget.phase]}T12:00:00`);
     try {
       const pos = await new Promise((res) => navigator.geolocation.getCurrentPosition(res, () => res(null), { timeout: 3000 }));
       if (pos) { fd.append('latitude', pos.coords.latitude); fd.append('longitude', pos.coords.longitude); }
@@ -595,18 +619,30 @@ function PhotoSection({ booking, monitoring, onUploaded }) {
       
       {err && <div className="text-sm text-red-600 mb-2">{err}</div>}
       
-      <input 
-        type="file" 
-        accept="image/*" 
-        capture="environment" 
-        className="hidden" 
+      <input
+        type="file"
+        accept="image/*"
+        className="hidden"
         ref={fileInputRef}
         onChange={handleFileSelect} 
       />
 
       <div className={`grid grid-cols-[68px_repeat(3,minmax(0,1fr))] sm:grid-cols-[100px_repeat(3,minmax(0,1fr))] gap-2 mb-4 max-w-2xl ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
         <div />
-        {PHASES.map((ph) => <div key={ph} className="text-xs font-semibold text-slate-500 text-center">{ph}</div>)}
+        {PHASES.map((ph) => (
+          <div key={ph} className="text-center">
+            <div className="text-xs font-semibold text-slate-500">{ph}</div>
+            {can(user, 'uploadPhoto') && (
+              <input
+                type="date"
+                value={phaseDates[ph] || ''}
+                onChange={(e) => setPhaseDate(ph, e.target.value)}
+                title="Monitoring date for this phase (used on the exported slide)"
+                className="mt-1 w-full min-w-0 text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-600 cursor-pointer"
+              />
+            )}
+          </div>
+        ))}
         {KINDS.map(([k, label]) => (
           <Fragment key={k}>
             <div className="text-xs text-slate-500 self-center">{label}</div>
@@ -775,10 +811,89 @@ function InvoicesPanel({ o, user, onChanged }) {
   );
 }
 
+// Edit a recorded payment. A reviewer (manager/admin) saves it directly; anyone
+// else files an EDIT_PAYMENT approval that an admin signs off before it applies.
+function PaymentEditModal({ order, payment, isReviewer, onClose, onDone }) {
+  const [amount, setAmount] = useState(String(payment.amount));
+  const [mode, setMode] = useState(payment.mode || 'CASH');
+  const [reference, setReference] = useState(payment.reference || '');
+  const [tdsApplicable, setTdsApplicable] = useState(!!payment.tdsApplicable);
+  const [tdsPct, setTdsPct] = useState(payment.tdsPct || 2);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState(false);
+
+  const gross = Number(amount) || 0;
+  const tds = tdsApplicable ? Math.round(gross * (Number(tdsPct) || 0) / 100) : 0;
+
+  async function submit() {
+    if (!(gross > 0)) { setErr('Amount must be greater than zero'); return; }
+    setBusy(true); setErr('');
+    const payload = { amount: gross, mode, reference, tdsApplicable, tdsPct: tdsApplicable ? Number(tdsPct) : 0 };
+    try {
+      if (isReviewer) {
+        await api.patch(`/orders/${order.id}/payments/${payment.id}`, payload);
+        onDone();
+      } else {
+        await api.post('/approvals', {
+          action: 'EDIT_PAYMENT', entityType: 'payment', entityId: payment.id,
+          label: `${order.orderNo} · edit payment ₹${payment.amount.toLocaleString('en-IN')} → ₹${gross.toLocaleString('en-IN')}`,
+          reason, payload,
+        });
+        setDone(true);
+      }
+    } catch (e) { setErr(e.response?.data?.error || 'Could not submit the edit'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 flex items-start justify-center p-4 z-50 overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md my-auto p-6">
+        <h2 className="text-lg font-bold text-slate-800">{isReviewer ? 'Edit payment' : 'Request payment edit'}</h2>
+        {done ? (
+          <>
+            <p className="text-sm text-emerald-700 mt-2">Request sent. A manager will review it in the Approvals queue.</p>
+            <div className="flex justify-end mt-5"><button className="btn-primary" onClick={onDone}>Done</button></div>
+          </>
+        ) : (
+          <>
+            {!isReviewer && <p className="text-sm text-slate-600 mt-2">Changes take effect only once an admin approves.</p>}
+            <div className="grid grid-cols-2 gap-3 mt-4">
+              <div><label className="label">Amount (₹)</label><input type="number" min="1" className="input" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
+              <div><label className="label">Mode</label><select className="input" value={mode} onChange={(e) => setMode(e.target.value)}>{['CASH', 'UPI', 'BANK', 'CHEQUE', 'CARD'].map((m) => <option key={m} value={m}>{m}</option>)}</select></div>
+            </div>
+            <div className="mt-3"><label className="label">Reference (optional)</label><input className="input" value={reference} onChange={(e) => setReference(e.target.value)} /></div>
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mt-3">
+              <input type="checkbox" checked={tdsApplicable} onChange={(e) => setTdsApplicable(e.target.checked)} /> TDS applicable
+            </label>
+            {tdsApplicable && (
+              <div className="mt-2 flex items-center gap-3">
+                <select className="input py-2 text-sm w-32" value={tdsPct} onChange={(e) => setTdsPct(e.target.value)}>{[1, 2, 5, 10].map((r) => <option key={r} value={r}>{r}% TDS</option>)}</select>
+                <span className="text-xs text-slate-500">−<Money value={tds} /> · net <Money value={gross - tds} /></span>
+              </div>
+            )}
+            {!isReviewer && (
+              <div className="mt-3"><label className="label">Reason (optional)</label><textarea className="input h-16" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
+            )}
+            {err && <div className="mt-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
+            <div className="flex justify-end gap-3 mt-5">
+              <button className="btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+              <button className="btn-primary" disabled={busy} onClick={submit}>{busy ? 'Saving…' : (isReviewer ? 'Save changes' : 'Send request')}</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Payments({ o, user, onChanged }) {
   const [form, setForm] = useState({ amount: '', mode: 'CASH', reference: '', tdsApplicable: false, tdsPct: 2 });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [editPay, setEditPay] = useState(null); // payment being edited
+  const isReviewer = user.role === 'MANAGER' || user.role === 'SUPER_ADMIN';
 
   const gross = Number(form.amount) || 0;
   const tds = form.tdsApplicable ? Math.round(gross * Number(form.tdsPct) / 100) : 0;
@@ -832,10 +947,24 @@ function Payments({ o, user, onChanged }) {
                     <Money value={p.tdsAmount} /> deducted at source · <Money value={p.netReceived} /> received in bank
                   </div>
                 )}
-                <div className="text-xs text-slate-500">{new Date(p.receivedAt).toLocaleDateString('en-IN')} · {p.recordedBy?.name}{p.reference ? ` · Ref: ${p.reference}` : ''}</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs text-slate-500">{new Date(p.receivedAt).toLocaleDateString('en-IN')} · {p.recordedBy?.name}{p.reference ? ` · Ref: ${p.reference}` : ''}</div>
+                  {can(user, 'recordPayment') && (
+                    <button className="text-xs text-brand hover:underline shrink-0" onClick={() => setEditPay(p)}>
+                      {isReviewer ? 'Edit' : 'Request edit'}
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
+        )}
+        {editPay && (
+          <PaymentEditModal
+            order={o} payment={editPay} isReviewer={isReviewer}
+            onClose={() => setEditPay(null)}
+            onDone={() => { setEditPay(null); onChanged(); }}
+          />
         )}
       </div>
 

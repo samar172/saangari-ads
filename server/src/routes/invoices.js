@@ -221,7 +221,7 @@ router.post('/:id/mark-paid', requireRole('FINANCE'), async (req, res) => {
     const paid = (order?.payments || []).reduce((s, p) => s + p.amount, 0);
     const remaining = Math.max(0, Math.round((order?.grandTotal || 0) - paid));
     if (remaining > 0) {
-      await tx.payment.create({
+      const payment = await tx.payment.create({
         data: {
           orderId: invoice.orderId, clientId: invoice.clientId, companyId: invoice.companyId,
           amount: remaining, netReceived: remaining, mode: 'BANK',
@@ -229,7 +229,7 @@ router.post('/:id/mark-paid', requireRole('FINANCE'), async (req, res) => {
         },
       });
       await tx.ledgerEntry.create({
-        data: { clientId: invoice.clientId, companyId: invoice.companyId, invoiceId: invoice.id, type: 'CREDIT', amount: remaining, narration: `Payment for ${invoice.invoiceNo}` },
+        data: { clientId: invoice.clientId, companyId: invoice.companyId, invoiceId: invoice.id, paymentId: payment.id, type: 'CREDIT', amount: remaining, narration: `Payment for ${invoice.invoiceNo}` },
       });
     }
     return inv;

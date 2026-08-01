@@ -32,7 +32,12 @@ const COLUMNS = [
         <div className="text-xs text-slate-400 font-normal pl-[22px]">{new Date(o.bookingDate).toLocaleDateString('en-IN')}</div>
       </>
     ) },
-  { key: 'client', label: 'Client', align: 'left', cell: (o) => <span className="font-medium text-slate-800">{o.client.name}</span> },
+  { key: 'client', label: 'Client', align: 'left', cell: (o) => (
+    <>
+      <span className="font-medium text-slate-800">{o.client.company || o.client.name}</span>
+      {o.client.company && <div className="text-[11px] text-slate-400">{o.client.name}</div>}
+    </>
+  ) },
   { key: 'category', label: 'Category', align: 'left', cell: (o) => o.category ? <span className="badge bg-teal-100 text-teal-800">{o.category.name}</span> : <span className="text-slate-300">—</span> },
   { key: 'business', label: 'Business', align: 'left', cell: (o) => <span className="text-slate-500">{o.company?.name || '—'}</span> },
   { key: 'sites', label: 'Sites', align: 'left',
@@ -142,7 +147,7 @@ export default function Orders() {
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">{isQuotations ? 'Quotations' : 'Campaigns'}</h1>
-          <p className="text-sm text-slate-500">{user.role === 'SALES' ? `Your ${isQuotations ? 'quotations' : 'campaigns'}` : `All ${isQuotations ? 'quotations' : 'campaigns'}`}</p>
+          <p className="text-sm text-slate-500">All {isQuotations ? 'quotations' : 'campaigns'}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {!isQuotations && (
@@ -279,7 +284,7 @@ function ExpandedOrder({ id, onGo, onChangedList }) {
     <div className="rounded-xl border border-slate-200 bg-white overflow-hidden" onClick={(e) => e.stopPropagation()}>
       <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
         <span className="font-semibold text-slate-800">{o.orderNo}</span>
-        <span className="text-sm text-slate-500">{o.client.name}</span>
+        <span className="text-sm text-slate-500">{o.client.company ? `${o.client.company} · ${o.client.name}` : o.client.name}</span>
         <Badge status={o.status} />
         {o.category && <span className="badge bg-teal-100 text-teal-800">{o.category.name}</span>}
         <div className="flex-1" />

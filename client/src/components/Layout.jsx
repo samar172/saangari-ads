@@ -70,10 +70,12 @@ export default function Layout({ children }) {
           navOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="px-5 py-5 border-b border-white/10 flex items-start justify-between gap-2">
-          <div>
-            <div className="text-lg font-bold tracking-tight">SAANGRI</div>
-            <div className="text-[11px] uppercase tracking-widest text-brand-accent">Advertising CRM</div>
+        <div className="px-4 py-4 border-b border-white/10 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <img src="/icon-192.png" alt="Saangari Ads" className="h-11 w-11 shrink-0 rounded-lg object-cover shadow-sm" />
+            <div className="min-w-0">
+              <div className="text-base font-bold tracking-tight leading-tight truncate">Saangari Ads</div>
+            </div>
           </div>
           <button
             onClick={() => setNavOpen(false)}
@@ -156,7 +158,10 @@ export default function Layout({ children }) {
           >
             <Menu size={22} />
           </button>
-          <div className="lg:hidden font-bold tracking-tight text-slate-800">SAANGRI</div>
+          <div className="lg:hidden flex items-center gap-2">
+            <img src="/icon-192.png" alt="Saangari Ads" className="h-7 w-7 rounded-md object-cover" />
+            <span className="font-bold tracking-tight text-slate-800">Saangari Ads</span>
+          </div>
           <div className="flex-1" />
           <NotificationBar onCount={setDueCount} />
         </header>

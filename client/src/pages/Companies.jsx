@@ -191,7 +191,7 @@ export default function Companies() {
             </div>
             {/* Live preview strip */}
             <div className="mt-3 h-8 rounded-lg flex items-center px-3 text-white text-xs font-semibold" style={{ backgroundColor: form.brandColor || '#0f172a' }}>
-              SAANGRI · sidebar preview
+              Saangari Ads · sidebar preview
             </div>
           </div>
 

@@ -193,18 +193,41 @@ function ClientForm({ client, categories, canEdit, onClose, onSaved }) {
   );
 }
 
+const RECEIVABLE_STATUSES = ['CONFIRMED', 'LIVE', 'COMPLETED'];
+
 function ClientDetail({ id, onClose }) {
   const { user } = useAuth();
   const [c, setC] = useState(null);
   const [pay, setPay] = useState('');
+  const [payOrderId, setPayOrderId] = useState('');
+  const [payBusy, setPayBusy] = useState(false);
+  const [payErr, setPayErr] = useState('');
 
   function load() { api.get(`/clients/${id}`).then((r) => setC(r.data)); }
   useEffect(load, [id]);
 
+  // Orders that still owe money — the payment can be applied to one so it shows
+  // on the order/invoice, or left "General" as an on-account advance.
+  const orderBalance = (o) => Math.round((o.grandTotal || 0) - (o.payments || []).reduce((s, p) => s + p.amount, 0));
+  const openOrders = (c?.orders || []).filter((o) => RECEIVABLE_STATUSES.includes(o.status) && orderBalance(o) > 0);
+  // Default to the single open order if there's exactly one.
+  useEffect(() => { setPayOrderId(openOrders.length === 1 ? String(openOrders[0].id) : ''); }, [c]);
+
   async function addPayment() {
-    if (!pay) return;
-    await api.post(`/clients/${id}/payments`, { amount: Number(pay), narration: 'Payment received' });
-    setPay(''); load();
+    const amt = Number(pay);
+    if (!(amt > 0)) { setPayErr('Enter a valid amount'); return; }
+    setPayBusy(true); setPayErr('');
+    try {
+      if (payOrderId) {
+        // Against an order → a real payment that shows on the order/invoice and
+        // reduces its balance (not just a bare ledger credit).
+        await api.post(`/orders/${payOrderId}/payments`, { amount: amt, mode: 'CASH' });
+      } else {
+        await api.post(`/clients/${id}/payments`, { amount: amt, narration: 'Payment received' });
+      }
+      setPay(''); load();
+    } catch (e) { setPayErr(e.response?.data?.error || 'Could not record payment'); }
+    finally { setPayBusy(false); }
   }
 
   return (
@@ -247,15 +270,22 @@ function ClientDetail({ id, onClose }) {
           </div>
 
           <div>
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
               <div className="text-xs font-semibold uppercase text-slate-500">Ledger</div>
               {can(user, 'manageLedger') && (
-                <div className="flex gap-2">
-                  <input className="input w-32 py-1" placeholder="Amount" value={pay} onChange={(e) => setPay(e.target.value)} />
-                  <button className="btn-ghost py-1 flex items-center gap-1" onClick={addPayment}><Plus size={14} /> Record payment</button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select className="input w-auto py-1 text-sm" value={payOrderId} onChange={(e) => setPayOrderId(e.target.value)}>
+                    <option value="">General (on-account)</option>
+                    {openOrders.map((o) => (
+                      <option key={o.id} value={o.id}>{o.orderNo} · bal ₹{Math.max(0, orderBalance(o)).toLocaleString('en-IN')}</option>
+                    ))}
+                  </select>
+                  <input className="input w-28 py-1" placeholder="Amount" value={pay} onChange={(e) => setPay(e.target.value)} />
+                  <button className="btn-ghost py-1 flex items-center gap-1" disabled={payBusy} onClick={addPayment}><Plus size={14} /> {payBusy ? 'Saving…' : 'Record payment'}</button>
                 </div>
               )}
             </div>
+            {payErr && <div className="mb-2 rounded-lg bg-red-50 border border-red-200 px-3 py-1.5 text-xs text-red-700">{payErr}</div>}
             <div className="card overflow-x-auto">
               <table className="w-full min-w-[640px] text-sm">
                 <thead className="bg-slate-50 text-xs text-slate-500 uppercase">

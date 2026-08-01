@@ -579,7 +579,13 @@ router.post('/quotation/simple', requireRole('SALES', 'MANAGER', 'FINANCE'), asy
 // Bundle a campaign's monitoring proofs into a shareable deck/document. One
 // entry per uploaded photo, captioned with the site, phase (Start/Mid/End),
 // kind and the date/geo it was taken. Ordered by site, then phase, then kind.
+// One slide/page per (site, monitoring round) — a collage of that site's photos
+// for that round, titled with "srNo - LOCATION" + the date, footed with the
+// dimensions and geo. Matches the client's reference deck (SENCO format).
 const PHASE_ORDER = { START: 0, MID: 1, END: 2 };
+const KIND_ORDER = { GPS: 0, NORMAL: 1, NEWSPAPER: 2 };
+const ddmmyyyy = (d) => new Date(d).toLocaleDateString('en-GB').replace(/\//g, '.');
+
 async function loadOrderPhotos(orderId) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
@@ -590,23 +596,61 @@ async function loadOrderPhotos(orderId) {
     },
   });
   if (!order) return null;
-  const shots = [];
+
+  // Group photos by (site, phase). Each group becomes one slide/page.
+  const map = new Map();
   for (const it of order.items) {
-    for (const p of it.photos || []) shots.push({ ...p, site: it.site });
+    for (const p of it.photos || []) {
+      const key = `${it.siteId}|${p.phase}`;
+      if (!map.has(key)) map.set(key, { site: it.site, phase: p.phase, photos: [] });
+      map.get(key).photos.push(p);
+    }
   }
-  shots.sort((a, b) =>
-    (a.site.srNo || 0) - (b.site.srNo || 0) ||
+  const groups = [...map.values()];
+  for (const g of groups) {
+    g.photos.sort((a, b) => (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9));
+    g.date = g.photos.map((p) => p.takenAt).sort((a, b) => new Date(a) - new Date(b))[0];
+    const geo = g.photos.find((p) => p.latitude);
+    g.latitude = geo ? geo.latitude : g.site.latitude;
+    g.longitude = geo ? geo.longitude : g.site.longitude;
+  }
+  // Order by monitoring round (date), then by site — same as the reference deck.
+  groups.sort((a, b) =>
     (PHASE_ORDER[a.phase] ?? 9) - (PHASE_ORDER[b.phase] ?? 9) ||
-    String(a.kind).localeCompare(String(b.kind)));
-  return { order, shots };
+    (a.site.srNo || 0) - (b.site.srNo || 0));
+
+  const photoCount = groups.reduce((n, g) => n + g.photos.length, 0);
+  return { order, groups, photoCount };
 }
+
+// Collage slots (inches, on a 10 x 7.5 canvas) for a given photo count. Three
+// photos use the reference layout: two stacked left + one tall right.
+function photoSlots(n) {
+  if (n <= 1) return [{ x: 1.6, y: 1.35, w: 6.8, h: 5.0 }];
+  if (n === 2) return [{ x: 0.5, y: 1.4, w: 4.45, h: 4.9 }, { x: 5.05, y: 1.4, w: 4.45, h: 4.9 }];
+  if (n === 3) return [
+    { x: 0.5, y: 1.25, w: 4.35, h: 2.6 },
+    { x: 0.5, y: 3.95, w: 4.35, h: 2.6 },
+    { x: 5.0, y: 1.25, w: 4.5, h: 5.3 },
+  ];
+  const cols = 3, rows = Math.ceil(n / cols), top = 1.25, side = 0.5, gap = 0.15;
+  const w = (10 - side * 2 - (cols - 1) * gap) / cols;
+  const h = (6.55 - top - (rows - 1) * gap) / rows, slots = [];
+  for (let i = 0; i < n; i++) { const r = Math.floor(i / cols), c = i % cols; slots.push({ x: side + c * (w + gap), y: top + r * (h + gap), w, h }); }
+  return slots;
+}
+const groupTitle = (g) => `${g.site.srNo ? g.site.srNo + ' - ' : ''}${(g.site.location || g.site.code || '').toUpperCase()}`;
+const groupDims = (s) => `Width: ${s.width || '-'} ft | Height: ${s.height || '-'} ft | Total Area: ${s.sqft || Math.round((s.width || 0) * (s.height || 0)) || '-'} sq.ft`;
 
 router.get('/orders/:id/photos.pdf', requireRole('SALES', 'MANAGER', 'FINANCE', 'OPS'), async (req, res) => {
   const data = await loadOrderPhotos(Number(req.params.id));
   if (!data) return res.status(404).json({ error: 'Order not found' });
-  const { order, shots } = data;
+  const { order, groups, photoCount } = data;
 
-  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0 });
+  // 10 x 7.5in page (720 x 540pt) so slot inches map to points at 72/in — the
+  // same collage geometry as the PPTX and the reference deck.
+  const IN = 72;
+  const doc = new PDFDocument({ size: [10 * IN, 7.5 * IN], margin: 0 });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="Monitoring-${order.orderNo}.pdf"`);
   doc.pipe(res);
@@ -615,41 +659,46 @@ router.get('/orders/:id/photos.pdf', requireRole('SALES', 'MANAGER', 'FINANCE', 
 
   // Cover
   doc.rect(0, 0, W, H).fill(BRAND);
-  try { doc.image(logoPath, (W - 300) / 2, H / 2 - 150, { width: 300 }); }
-  catch (e) { doc.fontSize(44).fillColor('#fff').text('SAANGARI', 0, H / 2 - 60, { align: 'center', width: W }); }
-  doc.fontSize(18).fillColor('#fff').text('Monitoring Report', 0, H - 130, { align: 'center', width: W });
-  doc.fontSize(12).fillColor('#ffe9e9').text(
-    `${order.orderNo} · ${order.client?.company || order.client?.name || ''} · ${shots.length} photo${shots.length === 1 ? '' : 's'} · ${new Date().toLocaleDateString('en-IN')}`,
-    0, H - 100, { align: 'center', width: W });
+  try { doc.image(logoPath, (W - 260) / 2, H / 2 - 140, { width: 260 }); }
+  catch (e) { doc.fontSize(40).fillColor('#fff').text('SAANGARI', 0, H / 2 - 50, { align: 'center', width: W }); }
+  doc.fontSize(18).fillColor('#fff').font('Helvetica-Bold').text('Monitoring Report', 0, H - 120, { align: 'center', width: W });
+  doc.font('Helvetica').fontSize(12).fillColor('#ffe9e9').text(
+    `${order.orderNo} · ${order.client?.company || order.client?.name || ''} · ${new Date().toLocaleDateString('en-IN')}`,
+    0, H - 90, { align: 'center', width: W });
 
-  for (const s of shots) {
-    doc.addPage({ layout: 'landscape', margin: 0 });
+  for (const g of groups) {
+    doc.addPage({ size: [10 * IN, 7.5 * IN], margin: 0 });
     doc.rect(0, 0, W, H).fill(BRAND);
-    const pad = 60, panelW = W - pad * 2, imgH = 330, imgY = 34;
-    doc.rect(pad - 6, imgY - 6, panelW + 12, imgH + 12).fill('#ffffff');
-    const img = await imageBuffer(s.filePath);
-    if (img) {
-      try {
-        const src = doc.openImage(img);
-        const scale = Math.min(panelW / src.width, imgH / src.height);
-        const dw = src.width * scale, dh = src.height * scale;
-        doc.image(img, pad + (panelW - dw) / 2, imgY + (imgH - dh) / 2, { width: dw, height: dh });
-      } catch (e) { doc.rect(pad, imgY, panelW, imgH).fill('#f3f4f6'); }
-    } else {
-      doc.rect(pad, imgY, panelW, imgH).fill('#f3f4f6');
-      doc.fillColor('#9ca3af').fontSize(14).text('Image unavailable', pad, imgY + imgH / 2 - 8, { align: 'center', width: panelW });
+    // Title (site) + date
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(18).text(groupTitle(g), 0.5 * IN, 0.28 * IN, { align: 'center', width: 9 * IN });
+    doc.fillColor('#ffe9e9').font('Helvetica-Bold').fontSize(13).text(ddmmyyyy(g.date), 0.5 * IN, 0.78 * IN, { align: 'center', width: 9 * IN });
+
+    const slots = photoSlots(g.photos.length);
+    for (let i = 0; i < g.photos.length; i++) {
+      const s = slots[i], sx = s.x * IN, sy = s.y * IN, sw = s.w * IN, sh = s.h * IN;
+      doc.rect(sx, sy, sw, sh).fill('#ffffff'); // white mat — whole photo fits inside, nothing cropped
+      const buf = await imageBuffer(g.photos[i].filePath);
+      if (buf) {
+        try {
+          // fit (not cover) keeps the full image; portrait shots letterbox on the white mat
+          doc.image(buf, sx + 4, sy + 4, { fit: [sw - 8, sh - 8], align: 'center', valign: 'center' });
+        } catch (e) {}
+      } else {
+        doc.fillColor('#9ca3af').fontSize(11).text('Image unavailable', sx, sy + sh / 2 - 6, { align: 'center', width: sw });
+      }
+      doc.lineWidth(1).strokeColor('#e5e7eb').rect(sx, sy, sw, sh).stroke();
     }
-    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(20)
-      .text(`${s.site.code} · ${(s.site.location || '').toUpperCase()}`, pad, imgY + imgH + 22, { align: 'center', width: panelW });
-    doc.font('Helvetica').fontSize(13).fillColor('#ffe9e9')
-      .text(`${s.phase} · ${s.kind}${s.latitude ? `  ·  ${s.latitude}, ${s.longitude}` : ''}  ·  ${new Date(s.takenAt).toLocaleDateString('en-IN')}`,
-        pad, doc.y + 8, { align: 'center', width: panelW });
+    // Footer: dimensions + geo
+    doc.fillColor('#ffffff').font('Helvetica').fontSize(11).text(groupDims(g.site), 0.5 * IN, 6.72 * IN, { align: 'center', width: 9 * IN });
+    if (g.latitude && g.longitude) {
+      doc.fillColor('#ffd9d9').fontSize(10).text(`Latitude: ${g.latitude} | Longitude: ${g.longitude}`, 0.5 * IN, 7.0 * IN, { align: 'center', width: 9 * IN });
+    }
   }
 
-  if (shots.length === 0) {
-    doc.addPage({ layout: 'landscape', margin: 0 });
-    doc.rect(0, 0, W, H).fill('#ffffff');
-    doc.fillColor('#888').fontSize(16).text('No monitoring photos uploaded for this campaign yet.', 0, H / 2, { align: 'center', width: W });
+  if (photoCount === 0) {
+    doc.addPage({ size: [10 * IN, 7.5 * IN], margin: 0 });
+    doc.rect(0, 0, W, H).fill(BRAND);
+    doc.fillColor('#ffe9e9').fontSize(15).text('No monitoring photos uploaded for this campaign yet.', 0, H / 2, { align: 'center', width: W });
   }
   doc.end();
 });
@@ -657,39 +706,43 @@ router.get('/orders/:id/photos.pdf', requireRole('SALES', 'MANAGER', 'FINANCE', 
 router.get('/orders/:id/photos.pptx', requireRole('SALES', 'MANAGER', 'FINANCE', 'OPS'), async (req, res) => {
   const data = await loadOrderPhotos(Number(req.params.id));
   if (!data) return res.status(404).json({ error: 'Order not found' });
-  const { order, shots } = data;
+  const { order, groups } = data;
 
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_4x3';
-  const SW = 10;
   const logoOnWhite = path.join(__dirname, '../assets/logo-onwhite.png');
   const logoPath = path.join(__dirname, '../assets/logo.png');
 
   const cover = pptx.addSlide();
-  cover.background = { color: 'FFFFFF' };
+  cover.background = { color: '9E2015' };
   try {
-    if (fs.existsSync(logoOnWhite)) cover.addImage({ path: logoOnWhite, x: 2, y: 1.6, w: 6, h: 3 });
-    else if (fs.existsSync(logoPath)) cover.addImage({ path: logoPath, x: 3.25, y: 1.6, w: 3.5, h: 2.6 });
+    if (fs.existsSync(logoPath)) cover.addImage({ path: logoPath, x: 3.25, y: 1.6, w: 3.5, h: 2.6 });
+    else if (fs.existsSync(logoOnWhite)) cover.addImage({ path: logoOnWhite, x: 2, y: 1.6, w: 6, h: 3 });
   } catch (e) {}
-  cover.addText('Monitoring Report', { x: 0.5, y: 4.9, w: 9, h: 0.6, fontSize: 26, bold: true, color: '9E2015', align: 'center' });
-  cover.addText(`${order.orderNo} · ${order.client?.company || order.client?.name || ''}`, { x: 0.5, y: 5.5, w: 9, h: 0.5, fontSize: 16, color: '333333', align: 'center' });
-  cover.addText(`${shots.length} photo(s) · ${new Date().toLocaleDateString('en-IN')}`, { x: 0.5, y: 6.1, w: 9, h: 0.4, fontSize: 12, color: '888888', align: 'center' });
+  cover.addText('Monitoring Report', { x: 0.5, y: 4.9, w: 9, h: 0.6, fontSize: 26, bold: true, color: 'FFFFFF', align: 'center' });
+  cover.addText(`${order.orderNo} · ${order.client?.company || order.client?.name || ''}`, { x: 0.5, y: 5.5, w: 9, h: 0.5, fontSize: 16, color: 'FFE9E9', align: 'center' });
+  cover.addText(`${new Date().toLocaleDateString('en-IN')}`, { x: 0.5, y: 6.1, w: 9, h: 0.4, fontSize: 12, color: 'FFD9D9', align: 'center' });
 
-  for (const s of shots) {
+  for (const g of groups) {
     const slide = pptx.addSlide();
     slide.background = { color: '9E2015' };
-    const img = resolveImage(s.filePath);
-    const px = 1, py = 0.5, pw = SW - px * 2, ph = 3.9;
-    slide.addShape(pptx.ShapeType.rect, { x: px - 0.06, y: py - 0.06, w: pw + 0.12, h: ph + 0.12, fill: { color: 'FFFFFF' } });
-    if (img) {
-      try { slide.addImage({ path: img, x: px, y: py, w: pw, h: ph, sizing: { type: 'cover', w: pw, h: ph } }); }
-      catch (e) { slide.addText('Image unavailable', { x: px, y: py, w: pw, h: ph, align: 'center', valign: 'middle', color: '9CA3AF', fill: { color: 'F3F4F6' } }); }
-    } else {
-      slide.addText('Image unavailable', { x: px, y: py, w: pw, h: ph, align: 'center', valign: 'middle', color: '9CA3AF', fill: { color: 'F3F4F6' } });
+    slide.addText(groupTitle(g), { x: 0.4, y: 0.18, w: 9.2, h: 0.55, fontSize: 18, bold: true, color: 'FFFFFF', align: 'center' });
+    slide.addText(ddmmyyyy(g.date), { x: 0.4, y: 0.72, w: 9.2, h: 0.4, fontSize: 13, bold: true, color: 'FFE9E9', align: 'center' });
+
+    const slots = photoSlots(g.photos.length);
+    for (let i = 0; i < g.photos.length; i++) {
+      const s = slots[i];
+      const img = resolveImage(g.photos[i].filePath);
+      slide.addShape(pptx.ShapeType.rect, { x: s.x, y: s.y, w: s.w, h: s.h, fill: { color: 'FFFFFF' }, line: { color: 'E5E7EB', width: 1 } });
+      if (img) {
+        try { slide.addImage({ path: img, x: s.x, y: s.y, w: s.w, h: s.h, sizing: { type: 'contain', w: s.w, h: s.h } }); }
+        catch (e) { slide.addText('Image unavailable', { x: s.x, y: s.y, w: s.w, h: s.h, align: 'center', valign: 'middle', color: '9CA3AF' }); }
+      }
     }
-    slide.addText(`${s.site.code} · ${(s.site.location || '').toUpperCase()}`, { x: 0.5, y: py + ph + 0.2, w: SW - 1, h: 0.6, fontSize: 20, bold: true, color: 'FFFFFF', align: 'center' });
-    slide.addText(`${s.phase} · ${s.kind}${s.latitude ? `  ·  ${s.latitude}, ${s.longitude}` : ''}  ·  ${new Date(s.takenAt).toLocaleDateString('en-IN')}`,
-      { x: 0.5, y: py + ph + 0.85, w: SW - 1, h: 0.35, fontSize: 13, color: 'FFE9E9', align: 'center' });
+    slide.addText(groupDims(g.site), { x: 0.4, y: 6.66, w: 9.2, h: 0.35, fontSize: 11, color: 'FFFFFF', align: 'center' });
+    if (g.latitude && g.longitude) {
+      slide.addText(`Latitude: ${g.latitude} | Longitude: ${g.longitude}`, { x: 0.4, y: 6.98, w: 9.2, h: 0.32, fontSize: 10, color: 'FFD9D9', align: 'center' });
+    }
   }
 
   const buffer = await pptx.write('nodebuffer');

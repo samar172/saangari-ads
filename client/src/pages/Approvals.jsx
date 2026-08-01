@@ -10,6 +10,7 @@ const ACTION_LABEL = {
   DELETE_INVOICE: 'Delete invoice',
   SETTLE_CASH: 'Settle in cash (Non-GST)',
   DISABLE_USER: 'Disable user',
+  EDIT_PAYMENT: 'Edit payment',
   OTHER: 'Other',
 };
 

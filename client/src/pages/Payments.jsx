@@ -274,8 +274,8 @@ function RecordPaymentModal({ onClose, onSaved }) {
                 <div className="mt-2 border border-slate-200 rounded-lg max-h-40 overflow-y-auto">
                   {clients.map((c) => (
                     <div key={c.id} className="p-2 border-b last:border-b-0 border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={() => { setClient(c); setSearch(''); }}>
-                      <div className="font-medium text-sm">{c.name}</div>
-                      <div className="text-xs text-slate-500">{c.phone}</div>
+                      <div className="font-medium text-sm">{c.company || c.name}</div>
+                      <div className="text-xs text-slate-500">{c.company ? `${c.name} · ` : ''}{c.phone}</div>
                     </div>
                   ))}
                 </div>
@@ -287,7 +287,10 @@ function RecordPaymentModal({ onClose, onSaved }) {
                 <label className="label mb-0">Client</label>
                 <button type="button" className="text-xs text-brand hover:underline" onClick={() => { setClient(null); setOrderId(''); }}>Change</button>
               </div>
-              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-sm">{client.name} ({client.phone})</div>
+              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-sm">
+                <div className="font-medium text-slate-800">{client.company || client.name}</div>
+                <div className="text-xs text-slate-500">{client.company ? `${client.name} · ` : ''}{client.phone}</div>
+              </div>
             </div>
           )}
 

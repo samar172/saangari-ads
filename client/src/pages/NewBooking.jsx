@@ -187,7 +187,7 @@ export default function NewBooking() {
   // Live order quote
   useEffect(() => {
     const items = lines.filter((l) => l.siteId && l.startDate && l.endDate)
-      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, monthlyRateOverride: l.monthlyRateOverride || undefined }));
+      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, monthlyRateOverride: l.monthlyRateOverride || undefined, dayRateOverride: l.dayRateOverride || undefined }));
     if (items.length === 0) { setQuote(null); return; }
     const t = setTimeout(() => {
       api.post('/orders/quote', {
@@ -271,6 +271,7 @@ export default function NewBooking() {
         items: lines.map((l) => ({
           siteId: l.siteId, startDate: l.startDate, endDate: l.endDate,
           monthlyRateOverride: l.monthlyRateOverride || undefined,
+          dayRateOverride: l.dayRateOverride || undefined,
           displayNotes: l.displayNotes || undefined,
         })),
       });
@@ -435,7 +436,11 @@ export default function NewBooking() {
                           </select>
                         </div>
                         <div><div className="text-[10px] text-slate-400 mb-0.5">End</div><input type="date" className="input py-1 text-xs" value={l.endDate} onChange={(e) => { updateLine(i, 'endDate', e.target.value); updateLine(i, 'customDays', undefined); }} /></div>
-                        <div><div className="text-[10px] text-slate-400 mb-0.5">Rate/Month</div><input type="number" className="input py-1 text-xs" placeholder={s ? String(s.monthlyRate) : ''} value={l.monthlyRateOverride || ''} onChange={(e) => updateLine(i, 'monthlyRateOverride', e.target.value)} /></div>
+                        {form.bookingType === 'LOOSE' ? (
+                          <div><div className="text-[10px] text-slate-400 mb-0.5">Rate/Day</div><input type="number" className="input py-1 text-xs" placeholder={s ? String(s.dayRate > 0 ? s.dayRate : Math.round(s.monthlyRate / 30)) : ''} value={l.dayRateOverride || ''} onChange={(e) => updateLine(i, 'dayRateOverride', e.target.value)} /></div>
+                        ) : (
+                          <div><div className="text-[10px] text-slate-400 mb-0.5">Rate/Month</div><input type="number" className="input py-1 text-xs" placeholder={s ? String(s.monthlyRate) : ''} value={l.monthlyRateOverride || ''} onChange={(e) => updateLine(i, 'monthlyRateOverride', e.target.value)} /></div>
+                        )}
                         <div>
                           <div className="text-[10px] text-slate-400 mb-0.5">Days</div>
                           <input type="text" className="input py-1 text-xs" value={l.customDays !== undefined ? l.customDays : (days > 0 ? days : '')} onChange={(e) => {
@@ -701,7 +706,7 @@ function BookingReview({ status, form, lines, addOns, quote, siteById, client, i
         <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
           <div className="grid sm:grid-cols-2 gap-3 text-sm">
             <RvRow k="Client">
-              {client?.name || '—'}{client?.phone ? ` · ${client.phone}` : ''}{isNewClient && <span className="badge bg-emerald-100 text-emerald-700 ml-1.5 text-[10px]">New</span>}
+              {client?.company ? <><span className="font-semibold">{client.company}</span>{client?.name ? ` · ${client.name}` : ''}</> : (client?.name || '—')}{client?.phone ? ` · ${client.phone}` : ''}{isNewClient && <span className="badge bg-emerald-100 text-emerald-700 ml-1.5 text-[10px]">New</span>}
             </RvRow>
             <RvRow k="Category">{category?.name || 'Uncategorised'}</RvRow>
             <RvRow k="Company">{company?.name || '—'}</RvRow>
@@ -716,7 +721,7 @@ function BookingReview({ status, form, lines, addOns, quote, siteById, client, i
             <div className="rounded-lg border border-slate-200 overflow-x-auto">
               <table className="w-full text-sm min-w-[440px]">
                 <thead className="bg-slate-50 text-slate-500 text-xs">
-                  <tr><th className="px-3 py-2 text-left">Site</th><th className="px-3 py-2 text-left">Period</th><th className="px-3 py-2 text-right">Days</th><th className="px-3 py-2 text-right">Rate/mo</th></tr>
+                  <tr><th className="px-3 py-2 text-left">Site</th><th className="px-3 py-2 text-left">Period</th><th className="px-3 py-2 text-right">Days</th><th className="px-3 py-2 text-right">{form.bookingType === 'LOOSE' ? 'Rate/day' : 'Rate/mo'}</th></tr>
                 </thead>
                 <tbody>
                   {lines.map((l, i) => {
@@ -726,7 +731,9 @@ function BookingReview({ status, form, lines, addOns, quote, siteById, client, i
                         <td className="px-3 py-2"><span className="font-semibold text-slate-800">{s?.code}</span> <span className="text-slate-400 text-xs">{s?.location}</span></td>
                         <td className="px-3 py-2 text-xs text-slate-600">{dayjs(l.startDate).format('DD MMM YY')} – {dayjs(l.endDate).format('DD MMM YY')}</td>
                         <td className="px-3 py-2 text-right">{billedDays(l.startDate, l.endDate)}</td>
-                        <td className="px-3 py-2 text-right"><Money value={Number(l.monthlyRateOverride) || s?.monthlyRate || 0} /></td>
+                        <td className="px-3 py-2 text-right"><Money value={form.bookingType === 'LOOSE'
+                          ? (Number(l.dayRateOverride) || (s?.dayRate > 0 ? s.dayRate : Math.round((s?.monthlyRate || 0) / 30)))
+                          : (Number(l.monthlyRateOverride) || s?.monthlyRate || 0)} /></td>
                       </tr>
                     );
                   })}

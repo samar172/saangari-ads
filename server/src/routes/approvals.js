@@ -2,8 +2,9 @@ const router = require('express').Router();
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
 const { settleInCash } = require('../utils/settle');
+const { applyPaymentEdit } = require('../utils/payments');
 
-const ACTIONS = ['DELETE_ORDER', 'CANCEL_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'OTHER'];
+const ACTIONS = ['DELETE_ORDER', 'CANCEL_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'EDIT_PAYMENT', 'OTHER'];
 const ACTIVE = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
 
 // Release a site back to AVAILABLE unless another live booking still holds it.
@@ -108,6 +109,13 @@ async function execute(request) {
       // Strip GST and move the campaign (and its money) to the Non-GST business.
       // Refuses if already invoiced. Shared with the direct /orders/:id/tax path.
       await settleInCash(id);
+      return;
+    }
+    case 'EDIT_PAYMENT': {
+      // Apply the requested payment edit (amount/mode/reference/TDS) from the
+      // payload. Same helper the direct manager edit uses.
+      const payload = request.payload || {};
+      await applyPaymentEdit(request.entityId, payload);
       return;
     }
     case 'DISABLE_USER': {
