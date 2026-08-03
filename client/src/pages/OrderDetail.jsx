@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Tag, Download, Receipt, FileText, StopCircle, ArrowRightLeft, Camera, MapPin, Image as ImageIcon, Newspaper, Banknote, Check, Plus, Trash2 } from 'lucide-react';
+import { Tag, Download, Receipt, FileText, StopCircle, ArrowRightLeft, Camera, MapPin, Image as ImageIcon, Newspaper, Banknote, Check, Plus, Trash2, Pencil } from 'lucide-react';
 import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
 import { Badge, Money, Spinner } from '../components/ui';
@@ -58,6 +58,9 @@ export default function OrderDetail() {
           <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => setRequest({ action: 'SETTLE_CASH', label: `${o.orderNo} · settle in cash (Non-GST)` })}>
             <Banknote size={16} /> Settle in cash
           </button>
+        )}
+        {can(user, 'editCampaign') && (
+          <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => navigate(`/orders/${id}/edit`)}><Pencil size={16} /> Edit</button>
         )}
         {isReviewer ? (
           <button className="btn-ghost text-sm flex items-center gap-1.5 text-red-600 hover:bg-red-50" onClick={() => setConfirmDelete(true)}><Trash2 size={16} /> Delete</button>

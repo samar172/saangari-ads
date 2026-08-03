@@ -9,7 +9,7 @@ import { Money, Badge } from '../components/ui';
 const emptyClient = { name: '', phone: '', email: '', company: '', taxCategory: 'NON_GST', gstNumber: '', state: 'Rajasthan', address: '', categoryId: '' };
 
 // Duration presets. Value encodes the tenure; the label is what the user picks.
-const DURATIONS = [
+export const DURATIONS = [
   ['7D', '1 Week'], ['15D', '15 Days'],
   ['1M', '1 Month'], ['2M', '2 Months'], ['3M', '3 Months'],
   ['6M', '6 Months'], ['9M', '9 Months'], ['12M', '12 Months'],
@@ -18,7 +18,7 @@ const DURATIONS = [
 // End date for a preset, using the inclusive last-active-day convention: a month
 // tenure from the 23rd runs to the 22nd of the target month (start + N months − 1
 // day); a day tenure of N days ends on start + N − 1.
-function presetEnd(startDate, val) {
+export function presetEnd(startDate, val) {
   const start = dayjs(startDate);
   if (val.endsWith('M')) return start.add(Number(val.replace('M', '')), 'month').subtract(1, 'day').format('YYYY-MM-DD');
   return start.add(Number(val.replace('D', '')) - 1, 'day').format('YYYY-MM-DD');
@@ -31,7 +31,7 @@ const HOLDING = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
 // the date-blind `status` flag — so a site whose live campaign ends before the
 // range (or whose only booking is a later one) is correctly offered. Inclusive
 // overlap: existing.start <= new.end AND existing.end >= new.start.
-function siteFreeForRange(site, start, end) {
+export function siteFreeForRange(site, start, end) {
   if (!start || !end) return site.status === 'AVAILABLE';
   const s = new Date(start);
   const e = new Date(end);
@@ -42,7 +42,7 @@ function siteFreeForRange(site, start, end) {
 
 // Billed days for an inclusive [start, end] span — mirrors the server's
 // computeLine (flat 30-day months). Returns 0 for an invalid span.
-function billedDays(startDate, endDate) {
+export function billedDays(startDate, endDate) {
   const start = dayjs(startDate).startOf('day');
   const end = dayjs(endDate).startOf('day');
   if (!startDate || !endDate || end.isBefore(start)) return 0;
@@ -196,7 +196,9 @@ export default function NewBooking() {
         addOns: addOns.filter((a) => a.label),
         noOfPrints: Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
-        mountingCost: (Number(form.mountingCost) || 0) * lines.length,
+        // Mounting is charged per print (one mount per flex), not per site. Fall
+        // back to the site count when no print quantity is entered.
+        mountingCost: (Number(form.mountingCost) || 0) * (Number(form.noOfPrints) > 0 ? Number(form.noOfPrints) : lines.length),
         discountPct: Number(form.discountPct) || 0,
         taxCategory: form.taxCategory,
         interState: form.interState,
@@ -255,7 +257,9 @@ export default function NewBooking() {
         printMaterial: form.printMaterial || undefined,
         noOfPrints: Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
-        mountingCost: (Number(form.mountingCost) || 0) * lines.length,
+        // Mounting is charged per print (one mount per flex), not per site. Fall
+        // back to the site count when no print quantity is entered.
+        mountingCost: (Number(form.mountingCost) || 0) * (Number(form.noOfPrints) > 0 ? Number(form.noOfPrints) : lines.length),
         monitoring: form.monitoring,
         monitorStart: form.monitoring && form.monitorStart,
         monitorMid: form.monitoring && form.monitorMid,
@@ -508,7 +512,7 @@ export default function NewBooking() {
                 <input type="number" min="0" className="input" value={form.printRate} onChange={(e) => set('printRate', e.target.value)} />
               </div>
               <div>
-                <label className="label">Mounting Cost (per site)</label>
+                <label className="label">Mounting Cost (per print)</label>
                 <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
               </div>
             </div>
@@ -869,7 +873,7 @@ function Line({ k, v }) {
 const DOT = { AVAILABLE: 'bg-emerald-500', BOOKED: 'bg-red-500', TENTATIVE: 'bg-amber-500', HOLD: 'bg-indigo-500', MAINTENANCE: 'bg-slate-400' };
 
 // Compact searchable dropdown for adding sites to the order
-function AddSitePicker({ sites, onPickMultiple }) {
+export function AddSitePicker({ sites, onPickMultiple }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState(new Set());
@@ -937,7 +941,7 @@ function AddSitePicker({ sites, onPickMultiple }) {
                       <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${DOT[s.status] || 'bg-slate-400'}`} />
                       <span className="min-w-0">
                         <span className="block font-semibold text-sm text-slate-800">{s.code} <span className="font-normal text-slate-400 text-xs">· {s.zone}</span></span>
-                        <span className="block text-xs text-slate-500 truncate">{s.location}</span>
+                        <span className="block text-xs text-slate-500 break-words">{s.location}</span>
                       </span>
                     </label>
                   ))}

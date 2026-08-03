@@ -7,6 +7,7 @@ import Inventory from './pages/Inventory';
 import NewBooking from './pages/NewBooking';
 import Orders from './pages/Orders';
 import OrderDetail from './pages/OrderDetail';
+import EditCampaign from './pages/EditCampaign';
 import Clients from './pages/Clients';
 import Invoices from './pages/Invoices';
 import InvoiceDetail from './pages/InvoiceDetail';
@@ -39,6 +40,7 @@ export default function App() {
             <Route path="/quotations" element={<Protected><Orders /></Protected>} />
             <Route path="/quotations/new" element={<Protected><SimpleQuotation /></Protected>} />
             <Route path="/orders/:id" element={<Protected><OrderDetail /></Protected>} />
+            <Route path="/orders/:id/edit" element={<Protected><EditCampaign /></Protected>} />
             <Route path="/reminders" element={<Protected><Reminders /></Protected>} />
             <Route path="/clients" element={<Protected><Clients /></Protected>} />
             <Route path="/printing-partners" element={<Protected><PrintingPartners /></Protected>} />

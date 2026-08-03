@@ -7,6 +7,7 @@ const { requireRole } = require('../middleware/auth');
 const { computeOrder, computeLine, recomputeOrderTotals } = require('../utils/pricing');
 const { settleInCash } = require('../utils/settle');
 const { applyPaymentEdit } = require('../utils/payments');
+const { advanceCampaignLifecycle } = require('../utils/lifecycle');
 const { nextOrderNo, nextBookingNo } = require('../utils/counters');
 const { writeLineNotes } = require('../utils/pdf');
 
@@ -365,7 +366,201 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
     throw e;
   }
 
+  // A confirmed campaign entered with past dates should settle right away — go
+  // LIVE/COMPLETED and free its sites now, instead of waiting for the hourly sweep.
+  if (order.status === 'CONFIRMED') {
+    try {
+      await advanceCampaignLifecycle();
+      order = await prisma.order.findUnique({ where: { id: order.id }, include: orderInclude });
+    } catch (e) { console.error('[lifecycle] post-create failed:', e.message); }
+  }
+
   res.status(201).json(withDerived(order));
+});
+
+// Full campaign edit — SUPER_ADMIN only. Rewrites order-level fields, printing,
+// discount, add-ons and the whole site line-up in one shot. Line items are
+// diffed by their existing booking id so kept lines (and their monitoring photos
+// / shift history) survive; only sites dropped from the campaign are deleted.
+// Refuses once an invoice exists — editing amounts would desync the bill.
+router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
+  const id = Number(req.params.id);
+  const existing = await prisma.order.findUnique({
+    where: { id },
+    include: { items: true, invoices: true },
+  });
+  if (!existing) return res.status(404).json({ error: 'Order not found' });
+  if (existing.invoices.length) {
+    return res.status(409).json({ error: 'This campaign already has an invoice. Void the invoice before editing it.' });
+  }
+
+  const body = req.body || {};
+  const {
+    clientId = existing.clientId, categoryId, companyId = existing.companyId,
+    items = [], type = existing.type, bookingDate, description,
+    printingPartnerId, printMaterial, noOfPrints = 0, printRate = 0, mountingCost = 0,
+    monitoring = false, monitorStart = false, monitorMid = false, monitorEnd = false,
+    taxCategory: rawTaxCategory = 'NON_GST', interState = false, placeOfSupply,
+    paymentTerms: rawPaymentTerms = 'ADVANCE',
+    discountPct = 0, discountRemarks, addOns = [], notes,
+  } = body;
+
+  const paymentTerms = rawPaymentTerms === 'POSTPAID' ? 'POSTPAID' : 'ADVANCE';
+
+  const company = await prisma.company.findUnique({ where: { id: Number(companyId) } });
+  if (!company) return res.status(400).json({ error: 'Invalid company' });
+  let taxCategory = rawTaxCategory;
+  if (company.gstHidden) taxCategory = 'NON_GST';
+  if (company.gstMandatory) taxCategory = 'GST';
+
+  if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'Add at least one site' });
+  for (const it of items) {
+    if (!it.siteId || !it.startDate || !it.endDate) return res.status(400).json({ error: 'Each site needs a start and end date' });
+  }
+
+  // Category falls back to the client's, matching create.
+  let effectiveCategoryId = categoryId ? Number(categoryId) : null;
+  if (!effectiveCategoryId) {
+    const client = await prisma.client.findUnique({ where: { id: Number(clientId) }, select: { categoryId: true } });
+    if (!client) return res.status(400).json({ error: 'Invalid client' });
+    effectiveCategoryId = client.categoryId;
+  }
+
+  let priced;
+  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, taxCategory, interState, type }); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+
+  // Same self-overlap guard as create: two lines on one site with overlapping
+  // dates would each pass the DB conflict check before either is written.
+  for (let a = 0; a < items.length; a++) {
+    for (let b = a + 1; b < items.length; b++) {
+      if (Number(items[a].siteId) !== Number(items[b].siteId)) continue;
+      if (rangesOverlap(items[a].startDate, items[a].endDate, items[b].startDate, items[b].endDate)) {
+        const code = priced.sites[Number(items[a].siteId)]?.code || 'A site';
+        return res.status(409).json({ error: `${code} appears twice with overlapping dates in this order.` });
+      }
+    }
+  }
+
+  const r = priced.result;
+
+  // Reminder envelope from the new dates.
+  const starts = items.map((i) => dayjs(i.startDate));
+  const ends = items.map((i) => dayjs(i.endDate));
+  const minStart = starts.reduce((a, b) => (b.isBefore(a) ? b : a));
+  const maxEnd = ends.reduce((a, b) => (b.isAfter(a) ? b : a));
+  const midDate = minStart.add(Math.round(maxEnd.diff(minStart, 'day') / 2), 'day');
+  const reminders = [];
+  if (monitoring) {
+    if (monitorStart) reminders.push({ phase: 'START', dueDate: minStart.toDate() });
+    if (monitorMid) reminders.push({ phase: 'MID', dueDate: midDate.toDate() });
+    if (monitorEnd) reminders.push({ phase: 'END', dueDate: maxEnd.toDate() });
+  }
+
+  // Confirmed-ish orders keep their commitment on edit; lifecycle re-derives
+  // LIVE/COMPLETED from the new dates afterwards. Quotations stay tentative.
+  const confirmedish = ['CONFIRMED', 'LIVE', 'COMPLETED'].includes(existing.status);
+  const baseLineStatus = confirmedish ? 'CONFIRMED' : 'TENTATIVE';
+
+  let order;
+  try {
+    order = await prisma.$transaction(async (tx) => {
+      // Lock every site that is involved before or after the edit.
+      const allSiteIds = [...new Set([...existing.items.map((b) => b.siteId), ...items.map((i) => Number(i.siteId))])];
+      await lockSites(tx, allSiteIds);
+
+      // Conflict-check each new line against OTHER orders (this order's own
+      // bookings are excluded, so a kept line never clashes with itself).
+      const lineStatus = [];
+      for (const it of items) {
+        const conflict = await findConflict(tx, Number(it.siteId), it.startDate, it.endDate, { excludeOrderId: id });
+        if (conflict && type === 'REGULAR')
+          throw new BookingConflict(`${priced.sites[Number(it.siteId)]?.code || 'Site'} is already booked for these dates by ${conflict.order.client.name}. Use a Loose booking to waitlist.`);
+        lineStatus.push(conflict && type === 'LOOSE' ? 'WAITLIST' : baseLineStatus);
+      }
+
+      // Diff lines by existing booking id. Anything the payload no longer keeps
+      // is removed (its photos cascade away) and its site freed.
+      const keptIds = new Set(items.map((i) => Number(i.id)).filter(Boolean));
+      const removed = existing.items.filter((b) => !keptIds.has(b.id));
+      for (const b of removed) {
+        await tx.booking.delete({ where: { id: b.id } });
+        await releaseSite(tx, b.siteId);
+      }
+
+      // Update kept lines in place; create genuinely new ones. r.lines is index-
+      // aligned with items (computeOrder maps 1:1).
+      for (let i = 0; i < r.lines.length; i++) {
+        const line = r.lines[i];
+        const src = items[i];
+        const st = lineStatus[i];
+        const data = {
+          siteId: line.siteId, type, status: st,
+          startDate: new Date(src.startDate), endDate: new Date(src.endDate),
+          days: line.days, dayRate: line.dayRate, subtotal: line.subtotal,
+          displayNotes: src.displayNotes || null,
+        };
+        const matchId = Number(src.id) || null;
+        if (matchId && existing.items.some((b) => b.id === matchId)) {
+          await tx.booking.update({ where: { id: matchId }, data });
+        } else {
+          await tx.booking.create({ data: { ...data, bookingNo: await nextBookingNo(), orderId: id } });
+        }
+        if (st === 'TENTATIVE') await tx.site.update({ where: { id: line.siteId }, data: { status: 'TENTATIVE' } });
+        if (st === 'CONFIRMED') await tx.site.update({ where: { id: line.siteId }, data: { status: 'BOOKED' } });
+      }
+
+      // Rebuild reminders from the fresh monitoring settings + date envelope.
+      await tx.reminder.deleteMany({ where: { orderId: id } });
+
+      await tx.order.update({
+        where: { id },
+        data: {
+          // Relation FKs go through connect/disconnect: the nested add-on/reminder
+          // writes below force Prisma's "checked" update input, which rejects raw
+          // scalar foreign keys (clientId/companyId/…).
+          client: { connect: { id: Number(clientId) } },
+          company: { connect: { id: Number(companyId) } },
+          category: effectiveCategoryId ? { connect: { id: effectiveCategoryId } } : { disconnect: true },
+          printingPartner: printingPartnerId ? { connect: { id: Number(printingPartnerId) } } : { disconnect: true },
+          // Normalise confirmed-ish states to CONFIRMED so lifecycle can re-derive
+          // LIVE/COMPLETED from the edited dates; quotations/cancelled are left be.
+          status: confirmedish ? 'CONFIRMED' : existing.status,
+          bookingDate: bookingDate ? new Date(bookingDate) : existing.bookingDate,
+          description,
+          printMaterial: printMaterial || null,
+          noOfPrints: Number(noOfPrints) || 0, printRate: Number(printRate) || 0, printingTotal: r.printingTotal,
+          mountingCost: r.mountingTotal,
+          monitoring: !!monitoring, monitorStart: !!monitorStart, monitorMid: !!monitorMid, monitorEnd: !!monitorEnd,
+          taxCategory, interState: !!interState, placeOfSupply: placeOfSupply || 'Rajasthan',
+          paymentTerms,
+          discountPct: Math.min(100, Math.max(0, Number(discountPct) || 0)), discountRemarks,
+          rentalSubtotal: r.rentalSubtotal, addOnTotal: r.addOnTotal, discountAmount: r.discountAmount,
+          taxableAmount: r.taxableAmount, cgst: r.cgst, sgst: r.sgst, igst: r.igst,
+          gstAmount: r.gstAmount, grandTotal: r.grandTotal, notes,
+          addOns: { deleteMany: {}, create: (addOns || []).filter((a) => a.label).map((a) => ({ label: a.label, amount: Number(a.amount) || 0 })) },
+          reminders: { create: reminders },
+        },
+      });
+
+      return tx.order.findUnique({ where: { id }, include: orderInclude });
+    });
+  } catch (e) {
+    if (e instanceof BookingConflict) return res.status(409).json({ error: e.message });
+    // Never let an unexpected edit error crash the process (async throws in a
+    // route become unhandled rejections). Log it and report a clean 500.
+    console.error('[order edit] failed:', e);
+    return res.status(500).json({ error: e.message || 'Failed to save campaign' });
+  }
+
+  // Re-settle by the calendar so an edit that moves dates into the past/future
+  // lands in the right status and frees/holds sites immediately.
+  try {
+    await advanceCampaignLifecycle();
+    order = await prisma.order.findUnique({ where: { id }, include: orderInclude });
+  } catch (e) { console.error('[lifecycle] post-edit failed:', e.message); }
+
+  res.json(withDerived(order));
 });
 
 // Order status transitions with cascade to line + site status.

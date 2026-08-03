@@ -45,6 +45,7 @@ export function can(user, action) {
     managePartners: ['MANAGER', 'FINANCE'],
     manageCategories: ['MANAGER'],
     shiftOrStopBooking: ['SALES', 'MANAGER', 'FINANCE'],
+    editCampaign: [], // super admin only (isAdmin short-circuits above)
     exportInventory: ['SALES', 'MANAGER', 'FINANCE'],
     viewReports: ['MANAGER', 'FINANCE'],
     manageUsers: [],

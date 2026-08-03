@@ -131,12 +131,15 @@ router.get('/top-clients', requireRole('MANAGER', 'FINANCE'), async (req, res) =
 
   const orders = await prisma.order.findMany({
     where,
-    select: { grandTotal: true, client: { select: { id: true, name: true } } },
+    select: { grandTotal: true, client: { select: { id: true, name: true, company: true } } },
   });
   const map = {};
   for (const o of orders) {
     const id = o.client.id;
-    map[id] = map[id] || { id, name: o.client.name, revenue: 0, orders: 0 };
+    // Prefer the organisation name; fall back to the contact person only when
+    // the client has no company recorded.
+    const displayName = o.client.company?.trim() || o.client.name;
+    map[id] = map[id] || { id, name: displayName, revenue: 0, orders: 0 };
     map[id].revenue += o.grandTotal;
     map[id].orders += 1;
   }
