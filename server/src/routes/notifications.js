@@ -44,10 +44,14 @@ router.get('/', async (req, res) => {
   const today = startOfToday();
   const horizon = new Date(today.getTime() + 7 * DAY);
   horizon.setHours(23, 59, 59, 999);
+  // Don't surface stale monitoring reminders. Back-dated campaigns can generate
+  // reminders whose due date is months in the past; anything older than 30 days
+  // is dropped so the bar isn't flooded with ancient "critical" alerts.
+  const floor = new Date(today.getTime() - 30 * DAY);
 
   const [reminders, orders] = await Promise.all([
     prisma.reminder.findMany({
-      where: { done: false, dueDate: { lte: horizon } },
+      where: { done: false, dueDate: { gte: floor, lte: horizon } },
       orderBy: { dueDate: 'asc' },
       include: {
         order: {

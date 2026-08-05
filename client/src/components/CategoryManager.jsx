@@ -15,6 +15,9 @@ export default function CategoryManager() {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [mergeFrom, setMergeFrom] = useState('');
+  const [mergeTo, setMergeTo] = useState('');
+  const [mergeName, setMergeName] = useState('');
 
   function load() {
     setLoading(true);
@@ -49,6 +52,25 @@ export default function CategoryManager() {
     catch (e2) { setErr(e2.response?.data?.error || 'Could not rename'); }
   }
 
+  async function mergeCats(e) {
+    e.preventDefault();
+    if (!mergeFrom || !mergeTo || mergeFrom === mergeTo) { setErr('Pick two different categories to merge'); return; }
+    const from = cats.find((c) => String(c.id) === String(mergeFrom));
+    const to = cats.find((c) => String(c.id) === String(mergeTo));
+    const asName = mergeName.trim();
+    if (!window.confirm(
+      `Merge "${from?.name}" into "${to?.name}"${asName ? ` as "${asName}"` : ''}?\n\n`
+      + `Every client and order under "${from?.name}" moves to "${to?.name}", and "${from?.name}" is deleted. This can't be undone.`
+    )) return;
+    setBusy(true); setErr('');
+    try {
+      await api.post('/categories/merge', { sourceId: Number(mergeFrom), targetId: Number(mergeTo), name: asName || undefined });
+      setMergeFrom(''); setMergeTo(''); setMergeName('');
+      load();
+    } catch (e2) { setErr(e2.response?.data?.error || 'Could not merge'); }
+    finally { setBusy(false); }
+  }
+
   async function remove(c) {
     // Deleting is only a true delete when nothing points at it; the server
     // deactivates instead, so say so up front.
@@ -78,6 +100,27 @@ export default function CategoryManager() {
         <form onSubmit={add} className="card p-4 mb-4 flex flex-wrap gap-2">
           <input className="input flex-1 min-w-[220px]" placeholder="New category — e.g. Hospitality" value={name} onChange={(e) => setName(e.target.value)} />
           <button className="btn-primary flex items-center gap-1.5" disabled={busy || !name.trim()}>{busy ? 'Adding…' : <><Plus size={16} /> Add category</>}</button>
+        </form>
+      )}
+
+      {editable && cats.length >= 2 && (
+        <form onSubmit={mergeCats} className="card p-4 mb-4 space-y-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-700">Merge categories</div>
+            <p className="text-xs text-slate-500">Move every client and order from one category into another, then delete the source — for combining duplicates like “Institute” + “Coaching”.</p>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-2">
+            <select className="input" value={mergeFrom} onChange={(e) => setMergeFrom(e.target.value)}>
+              <option value="">Merge from…</option>
+              {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <select className="input" value={mergeTo} onChange={(e) => setMergeTo(e.target.value)}>
+              <option value="">…into</option>
+              {cats.filter((c) => String(c.id) !== String(mergeFrom)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <input className="input" placeholder="Rename merged category (optional) — e.g. Coaching & Institutes" value={mergeName} onChange={(e) => setMergeName(e.target.value)} />
+          <button className="btn-ghost self-start" disabled={busy || !mergeFrom || !mergeTo}>{busy ? 'Merging…' : 'Merge categories'}</button>
         </form>
       )}
 

@@ -341,17 +341,28 @@ export default function EditCampaign() {
             )}
           </div>
 
+          {/* Payment terms — its own card (mirrors New Booking) so it's easy to
+              find on the edit screen, not buried inside Tax & Discount. */}
+          <div className="card p-5 space-y-3">
+            <div className="text-sm font-semibold text-slate-700">Payment Terms</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {[
+                ['ADVANCE', 'Advance', 'Client pays before the display goes up'],
+                ['POSTPAID', 'Postpaid', 'Billed after the campaign runs'],
+              ].map(([v, l, d]) => (
+                <button type="button" key={v} onClick={() => set('paymentTerms', v)}
+                  className={`text-left rounded-lg border p-3 transition ${form.paymentTerms === v ? 'border-brand bg-brand/5' : 'border-slate-200 hover:border-slate-300'}`}>
+                  <div className={`text-sm font-semibold ${form.paymentTerms === v ? 'text-brand' : 'text-slate-700'}`}>{l}</div>
+                  <div className="text-xs text-slate-500 mt-0.5">{d}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Tax & discount */}
           <div className="card p-5 space-y-4">
             <div className="text-sm font-semibold text-slate-700">Tax &amp; Discount</div>
             <div className="grid sm:grid-cols-2 gap-4">
-              <div>
-                <label className="label">Payment Terms</label>
-                <select className="input" value={form.paymentTerms} onChange={(e) => set('paymentTerms', e.target.value)}>
-                  <option value="ADVANCE">Advance</option>
-                  <option value="POSTPAID">Postpaid</option>
-                </select>
-              </div>
               {form.taxCategory === 'GST' && (
                 <div>
                   <label className="label">Supply Type</label>

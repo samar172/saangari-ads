@@ -14,6 +14,7 @@ export default function Clients() {
   const [clients, setClients] = useState([]);
   const [categories, setCategories] = useState([]);
   const [q, setQ] = useState('');
+  const [sort, setSort] = useState('date');
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState(null);
   const [editing, setEditing] = useState(null); // 'new' | client object
@@ -25,6 +26,14 @@ export default function Clients() {
   useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [q]);
   useEffect(() => { api.get('/categories').then((r) => setCategories(r.data)); }, []);
 
+  // Client-side sort — name, category or newest-first. List isn't paginated.
+  const clientName = (c) => (c.company || c.name || '').toLowerCase();
+  const sortedClients = [...clients].sort((a, b) => {
+    if (sort === 'az') return clientName(a).localeCompare(clientName(b));
+    if (sort === 'category') return (a.category?.name || '￿').localeCompare(b.category?.name || '￿');
+    return new Date(b.createdAt) - new Date(a.createdAt); // date, newest first
+  });
+
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
@@ -34,6 +43,11 @@ export default function Clients() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <input className="input w-full sm:w-64" placeholder="Search name / phone…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value)} title="Sort by">
+            <option value="date">Sort: Date</option>
+            <option value="az">Sort: A–Z</option>
+            <option value="category">Sort: Category</option>
+          </select>
           <button className="btn-accent text-sm flex items-center gap-1.5 shrink-0" onClick={() => setEditing('new')}>
             <Plus size={16} /> New Client
           </button>
@@ -56,7 +70,7 @@ export default function Clients() {
               </tr>
             </thead>
             <tbody>
-              {clients.map((c) => (
+              {sortedClients.map((c) => (
                 <tr key={c.id} onClick={() => setOpenId(c.id)} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer">
                   <td className="px-4 py-2 font-semibold text-slate-800">{c.company || <span className="font-normal text-slate-400">{c.name}</span>}</td>
                   <td className="px-4 py-2">

@@ -7,6 +7,12 @@ import { Modal, Spinner, Badge, Money, StatTile } from '../components/ui';
 
 const empty = { name: '', contact: '', phone: '', email: '', address: '', ratePerSqft: '', notes: '' };
 
+// Only these statuses were actually printed — mirror the server's COUNTED set so
+// the per-month subtotals match the all-time totals.
+const COUNTED = ['CONFIRMED', 'LIVE', 'COMPLETED'];
+const monthKey = (d) => { const dt = new Date(d); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`; };
+const monthLabel = (key) => { const [y, m] = key.split('-'); return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }); };
+
 export default function PrintingPartners() {
   const { user } = useAuth();
   const [partners, setPartners] = useState([]);
@@ -129,9 +135,31 @@ function PartnerDetail({ id, onClose }) {
   const { user } = useAuth();
   const [p, setP] = useState(null);
   const [expanded, setExpanded] = useState(null);
+  const [monthFilter, setMonthFilter] = useState('');
 
   function reload() { return api.get(`/printing-partners/${id}`).then((r) => setP(r.data)); }
   useEffect(() => { reload(); }, [id]);
+
+  // Group this partner's print jobs by the month they were booked in (jobs come
+  // back already sorted newest-first, so months come out newest-first too). Each
+  // group carries counted-only subtotals so the client gets a month-wise record.
+  const jobs = p?.jobs || [];
+  const months = [...new Set(jobs.map((j) => monthKey(j.bookingDate)))];
+  const groups = months
+    .filter((mk) => !monthFilter || mk === monthFilter)
+    .map((mk) => {
+      const mJobs = jobs.filter((j) => monthKey(j.bookingDate) === mk);
+      const counted = mJobs.filter((j) => COUNTED.includes(j.status));
+      return {
+        key: mk,
+        label: monthLabel(mk),
+        jobs: mJobs,
+        orders: counted.length,
+        prints: counted.reduce((s, j) => s + (j.noOfPrints || 0), 0),
+        value: Math.round(counted.reduce((s, j) => s + (j.printingTotal || 0), 0)),
+        sqft: Math.round(counted.reduce((s, j) => s + j.totalSqft, 0) * 100) / 100,
+      };
+    });
 
   return (
     <Modal open onClose={onClose} title={p?.name || 'Printing Partner'} wide>
@@ -158,6 +186,16 @@ function PartnerDetail({ id, onClose }) {
 
           <MaterialsPanel partner={p} editable={can(user, 'managePartners')} onChanged={reload} />
 
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-slate-700">Print history — month wise</div>
+            {months.length > 0 && (
+              <select className="input w-auto py-1 text-sm" value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)}>
+                <option value="">All months</option>
+                {months.map((mk) => <option key={mk} value={mk}>{monthLabel(mk)}</option>)}
+              </select>
+            )}
+          </div>
+
           <div className="card overflow-x-auto">
             <table className="w-full min-w-[720px] text-sm">
               <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
@@ -174,7 +212,20 @@ function PartnerDetail({ id, onClose }) {
                 </tr>
               </thead>
               <tbody>
-                {p.jobs.map((j) => (
+                {groups.map((g) => (
+                  <Fragment key={g.key}>
+                    <tr className="bg-slate-100/70 border-t border-slate-200">
+                      <td colSpan="4" className="px-3 py-1.5 font-semibold text-slate-700">
+                        {g.label}
+                        <span className="text-xs font-normal text-slate-400"> · {g.orders} counted / {g.jobs.length} order{g.jobs.length === 1 ? '' : 's'}</span>
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-semibold">{g.prints}</td>
+                      <td />
+                      <td className="px-3 py-1.5 text-right font-semibold"><Money value={g.value} /></td>
+                      <td className="px-3 py-1.5 text-right text-slate-500">{g.sqft || '—'}</td>
+                      <td />
+                    </tr>
+                    {g.jobs.map((j) => (
                   <Fragment key={j.id}>
                     <tr
                       className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer"
@@ -216,9 +267,14 @@ function PartnerDetail({ id, onClose }) {
                       </tr>
                     )}
                   </Fragment>
+                    ))}
+                  </Fragment>
                 ))}
                 {p.jobs.length === 0 && (
                   <tr><td colSpan="9" className="px-3 py-10 text-center text-slate-400">No print jobs routed to this partner yet</td></tr>
+                )}
+                {p.jobs.length > 0 && groups.length === 0 && (
+                  <tr><td colSpan="9" className="px-3 py-10 text-center text-slate-400">No print jobs in this month</td></tr>
                 )}
               </tbody>
             </table>

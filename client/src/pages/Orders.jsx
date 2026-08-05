@@ -101,6 +101,7 @@ export default function Orders() {
   const [orders, setOrders] = useState([]);
   const isQuotations = location.pathname.includes('quotations');
   const [status, setStatus] = useState(isQuotations ? 'QUOTATION' : '');
+  const [sort, setSort] = useState('date');
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
   // Admin-chosen visible columns, persisted so the choice survives reloads.
@@ -134,6 +135,17 @@ export default function Orders() {
   }
   useEffect(load, [status, activeCompany]);
 
+  // Client-side sort — every field is already on each row and the list isn't
+  // paginated, so this orders the whole set correctly.
+  const orderName = (o) => (o.client.company || o.client.name || '').toLowerCase();
+  const sortedOrders = [...orders].sort((a, b) => {
+    if (sort === 'az') return orderName(a).localeCompare(orderName(b));
+    if (sort === 'amount') return (b.grandTotal || 0) - (a.grandTotal || 0);
+    // Uncategorised sorts last (￿) so named categories group together.
+    if (sort === 'category') return (a.category?.name || '￿').localeCompare(b.category?.name || '￿');
+    return new Date(b.bookingDate) - new Date(a.bookingDate); // date, newest first
+  });
+
   // Navigate to highlighted order if present in URL on mount
   useEffect(() => {
     const highlight = params.get('highlight');
@@ -155,6 +167,12 @@ export default function Orders() {
               {STATUS_FILTERS.filter(s => s !== 'QUOTATION').map((s) => <option key={s} value={s}>{s || 'All statuses'}</option>)}
             </select>
           )}
+          <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value)} title="Sort by">
+            <option value="date">Sort: Date</option>
+            <option value="az">Sort: A–Z</option>
+            <option value="amount">Sort: Amount</option>
+            <option value="category">Sort: Category</option>
+          </select>
           {isQuotations && (
             <button className="btn-accent text-sm flex items-center gap-1.5" onClick={() => navigate('/quotations/new')}><Plus size={16} /> New Quotation</button>
           )}
@@ -176,7 +194,7 @@ export default function Orders() {
               </tr>
             </thead>
             <tbody>
-              {orders.map((o) => {
+              {sortedOrders.map((o) => {
                 const open = expandedId === o.id;
                 return (
                   <Fragment key={o.id}>

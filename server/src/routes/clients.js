@@ -63,13 +63,26 @@ router.patch('/:id', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   const { name, phone, email, company, gstNumber, taxCategory, address, state, categoryId } = req.body || {};
   const data = { name, phone, email, company, gstNumber, taxCategory, address, state };
   Object.keys(data).forEach((k) => data[k] === undefined && delete data[k]);
+  const clientId = Number(req.params.id);
   // An empty string means "clear the category", which Prisma wants as null.
-  if (categoryId !== undefined) data.categoryId = categoryId ? Number(categoryId) : null;
+  const categoryChanged = categoryId !== undefined;
+  const nextCategoryId = categoryChanged ? (categoryId ? Number(categoryId) : null) : undefined;
+  if (categoryChanged) data.categoryId = nextCategoryId;
   try {
-    const client = await prisma.client.update({
-      where: { id: Number(req.params.id) },
-      data,
-      include: { category: true },
+    const client = await prisma.$transaction(async (tx) => {
+      const updated = await tx.client.update({
+        where: { id: clientId },
+        data,
+        include: { category: true },
+      });
+      // Orders snapshot the client's category at booking time, and the reports
+      // group spend on that per-order snapshot. So recategorising a client must
+      // cascade to their existing orders, otherwise the change never shows up in
+      // reports (this is the "Bhoj advertising still uncategorised" bug).
+      if (categoryChanged) {
+        await tx.order.updateMany({ where: { clientId }, data: { categoryId: nextCategoryId } });
+      }
+      return updated;
     });
     res.json(client);
   } catch (e) {

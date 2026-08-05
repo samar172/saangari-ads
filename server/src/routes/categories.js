@@ -28,6 +28,44 @@ router.post('/', requireRole('MANAGER'), async (req, res) => {
   }
 });
 
+// Merge one category into another: move every client AND order off the source
+// onto the target, optionally rename the target (e.g. "Coaching & Institutes"),
+// then delete the now-empty source. Reassigning ORDERS is essential — reports
+// group spend on the order's own category snapshot, so a merge that only moved
+// clients would strand that spend under the deleted category.
+router.post('/merge', requireRole('MANAGER'), async (req, res) => {
+  const sourceId = Number(req.body?.sourceId);
+  const targetId = Number(req.body?.targetId);
+  const newName = req.body?.name ? String(req.body.name).trim() : null;
+  if (!Number.isInteger(sourceId) || !Number.isInteger(targetId)) {
+    return res.status(400).json({ error: 'sourceId and targetId are required' });
+  }
+  if (sourceId === targetId) return res.status(400).json({ error: 'Pick two different categories to merge' });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const [source, target] = await Promise.all([
+        tx.category.findUnique({ where: { id: sourceId } }),
+        tx.category.findUnique({ where: { id: targetId } }),
+      ]);
+      if (!source || !target) throw { status: 404, message: 'Category not found' };
+      const [movedClients, movedOrders] = await Promise.all([
+        tx.client.updateMany({ where: { categoryId: sourceId }, data: { categoryId: targetId } }),
+        tx.order.updateMany({ where: { categoryId: sourceId }, data: { categoryId: targetId } }),
+      ]);
+      const category = newName
+        ? await tx.category.update({ where: { id: targetId }, data: { name: newName } })
+        : target;
+      await tx.category.delete({ where: { id: sourceId } });
+      return { category, movedClients: movedClients.count, movedOrders: movedOrders.count };
+    });
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    if (e.status === 404) return res.status(404).json({ error: e.message });
+    if (e.code === 'P2002') return res.status(409).json({ error: 'A category with that name already exists' });
+    throw e;
+  }
+});
+
 router.patch('/:id', requireRole('MANAGER'), async (req, res) => {
   const { name, sortOrder, active } = req.body || {};
   const data = {};
