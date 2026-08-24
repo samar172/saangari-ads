@@ -124,4 +124,16 @@ function computeOrder({
   return { lines, ...totals };
 }
 
-module.exports = { computeOrder, computeLine, recomputeOrderTotals, dayRateOf, GST_RATE };
+// TDS is deducted by the client on the taxable (pre-GST) value of a payment, not
+// on the GST-inclusive gross. For a GST order the gross carries 18% GST, so strip
+// it before applying the rate; a Non-GST payment has no GST to strip. `netReceived`
+// is what actually reaches the bank; the order is still credited the full gross.
+function computeTds(gross, pct, isGst) {
+  const g = Number(gross) || 0;
+  const p = Number(pct) || 0;
+  const base = isGst ? g / (1 + GST_RATE / 100) : g;
+  const tdsAmount = p > 0 ? Math.round(base * p / 100) : 0;
+  return { tdsAmount, netReceived: g - tdsAmount };
+}
+
+module.exports = { computeOrder, computeLine, recomputeOrderTotals, dayRateOf, GST_RATE, computeTds };

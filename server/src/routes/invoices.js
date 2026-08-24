@@ -6,6 +6,7 @@ const { requireRole } = require('../middleware/auth');
 const { nextInvoiceNo } = require('../utils/counters');
 const { GST_RATE, recomputeOrderTotals } = require('../utils/pricing');
 const { writeLineNotes } = require('../utils/pdf');
+const { logActivity } = require('../utils/activity');
 
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
 
@@ -202,6 +203,11 @@ router.post('/', requireRole('FINANCE'), async (req, res) => {
     data: { clientId: order.clientId, companyId: order.companyId, invoiceId: invoice.id, type: 'DEBIT', amount: split.total, narration: `Invoice ${invoiceNo}` },
   });
 
+  logActivity({
+    type: 'INVOICE', user: req.user, orderId: order.id, orderNo: order.orderNo, invoiceId: invoice.id,
+    summary: `Invoice raised · ${invoiceNo}`,
+    detail: `${order.client?.company?.trim() || order.client?.name || ''} · ₹${Number(split.total).toLocaleString('en-IN')}`,
+  });
   res.status(201).json(invoice);
 });
 

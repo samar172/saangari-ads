@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, X, CheckCircle, Camera, Banknote, ListTodo, Plus, Trash2, Check, Megaphone, FileText } from 'lucide-react';
+import { Bell, X, CheckCircle, Camera, Banknote, ListTodo, Plus, Trash2, Check, Megaphone, FileText, Activity } from 'lucide-react';
 import api from '../api';
 
 const SEVERITY = {
@@ -16,10 +16,18 @@ const CATEGORY_TABS = [
   { key: 'INVOICE', label: 'Invoice', icon: FileText },
   { key: 'PAYMENT', label: 'Payments', icon: Banknote },
   { key: 'MONITORING', label: 'Photos', icon: Camera },
+  { key: 'ACTIVITY', label: 'Activity', icon: Activity },
 ];
-const ICON_FOR = { CAMPAIGN: Megaphone, INVOICE: FileText, PAYMENT: Banknote, MONITORING: Camera };
+const ICON_FOR = { CAMPAIGN: Megaphone, INVOICE: FileText, PAYMENT: Banknote, MONITORING: Camera, ACTIVITY: Activity };
 
 const when = (item) => {
+  // Activity items are a log of things that already happened — always "N ago".
+  if (item.category === 'ACTIVITY') {
+    const then = new Date(item.dueDate); then.setHours(0, 0, 0, 0);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const days = Math.round((today - then) / 864e5);
+    return days <= 0 ? 'today' : days === 1 ? 'yesterday' : `${days}d ago`;
+  }
   if (item.kind === 'PAYMENT') return item.ageDays === 0 ? 'today' : `${item.ageDays}d outstanding`;
   if (item.ageDays != null) return item.ageDays === 0 ? 'today' : `${item.ageDays}d ago`;
   const due = new Date(item.dueDate);
@@ -147,7 +155,8 @@ export default function NotificationBar({ onCount }) {
                     className={`flex flex-col items-center gap-0.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition shrink-0 relative ${active ? 'bg-brand text-white' : 'text-slate-500 hover:bg-slate-100'}`}>
                     <Icon size={16} />
                     {label}
-                    {total > 0 && (
+                    {/* Activity is a log, not a to-do — no count badge for it. */}
+                    {total > 0 && key !== 'ACTIVITY' && (
                       <span className={`absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full text-[9px] leading-4 text-center ${att > 0 ? 'bg-red-500 text-white' : active ? 'bg-white text-brand' : 'bg-slate-200 text-slate-600'}`}>{total}</span>
                     )}
                   </button>

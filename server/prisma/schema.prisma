@@ -527,3 +527,24 @@ model ApprovalRequest {
   createdAt     DateTime       @default(now())
   reviewedAt    DateTime?
 }
+
+// Lightweight activity feed: a human-readable record of the actions worth
+// showing in the notification panel's "Activity" tab — a payment received, a
+// booking created, an invoice raised, an edit, a cancellation. Kept denormalised
+// (orderNo, userName stored inline) so the feed reads without extra joins and a
+// deleted order/user never breaks the history. Best-effort: logging never blocks
+// the underlying mutation.
+model ActivityLog {
+  id        Int      @id @default(autoincrement())
+  type      String // PAYMENT | PAYMENT_EDIT | BOOKING | CAMPAIGN_EDIT | INVOICE | ADDON | SITE_SHIFT | CANCEL
+  summary   String
+  detail    String?
+  orderId   Int?
+  orderNo   String?
+  invoiceId Int?
+  userId    Int?
+  userName  String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}

@@ -4,11 +4,12 @@ const PDFDocument = require('pdfkit');
 const { Prisma } = require('@prisma/client');
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
-const { computeOrder, computeLine, recomputeOrderTotals } = require('../utils/pricing');
+const { computeOrder, computeLine, recomputeOrderTotals, computeTds } = require('../utils/pricing');
 const { settleInCash } = require('../utils/settle');
 const { applyPaymentEdit } = require('../utils/payments');
 const { advanceCampaignLifecycle } = require('../utils/lifecycle');
 const { nextOrderNo, nextBookingNo } = require('../utils/counters');
+const { logActivity } = require('../utils/activity');
 const { writeLineNotes } = require('../utils/pdf');
 
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
@@ -375,6 +376,11 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
     } catch (e) { console.error('[lifecycle] post-create failed:', e.message); }
   }
 
+  logActivity({
+    type: 'BOOKING', user: req.user, orderId: order.id, orderNo: order.orderNo,
+    summary: `New booking · ${order.orderNo}`,
+    detail: `${order.items?.length || 0} site${(order.items?.length || 0) !== 1 ? 's' : ''} · ₹${Number(order.grandTotal || 0).toLocaleString('en-IN')}`,
+  });
   res.status(201).json(withDerived(order));
 });
 
@@ -560,6 +566,11 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
     order = await prisma.order.findUnique({ where: { id }, include: orderInclude });
   } catch (e) { console.error('[lifecycle] post-edit failed:', e.message); }
 
+  logActivity({
+    type: 'CAMPAIGN_EDIT', user: req.user, orderId: id, orderNo: order?.orderNo,
+    summary: `Campaign edited · ${order?.orderNo || ''}`.trim(),
+    detail: `${order?.items?.length || 0} site${(order?.items?.length || 0) !== 1 ? 's' : ''} · ₹${Number(order?.grandTotal || 0).toLocaleString('en-IN')}`,
+  });
   res.json(withDerived(order));
 });
 
@@ -599,6 +610,12 @@ router.post('/:id/status', requireRole('SALES', 'MANAGER', 'FINANCE'), async (re
   });
 
   const full = await prisma.order.findUnique({ where: { id }, include: orderInclude });
+  if (status !== order.status) {
+    logActivity({
+      type: status === 'CANCELLED' ? 'CANCEL' : 'CAMPAIGN_EDIT', user: req.user, orderId: id, orderNo: order.orderNo,
+      summary: status === 'CANCELLED' ? `Campaign cancelled · ${order.orderNo}` : `Status → ${status} · ${order.orderNo}`,
+    });
+  }
   res.json(withDerived(full));
 });
 
@@ -608,7 +625,7 @@ router.post('/:id/status', requireRole('SALES', 'MANAGER', 'FINANCE'), async (re
 // still credited the full gross; `netReceived` is what reached the bank.
 router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (req, res) => {
   const id = Number(req.params.id);
-  const { amount, mode = 'CASH', reference, notes, tdsApplicable = false, tdsPct = 0 } = req.body || {};
+  const { amount, mode = 'CASH', reference, notes, tdsApplicable = false, tdsPct = 0, receivedAt } = req.body || {};
   const order = await prisma.order.findUnique({ where: { id } });
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (salesForbidden(req, order)) return res.status(403).json({ error: 'This campaign belongs to another user' });
@@ -629,8 +646,18 @@ router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (
 
   const pct = tdsApplicable ? Number(tdsPct) || 0 : 0;
   if (pct < 0 || pct > 100) return res.status(400).json({ error: 'TDS rate must be between 0 and 100' });
-  const tdsAmount = Math.round(gross * pct / 100);
-  const netReceived = gross - tdsAmount;
+  // TDS is computed on the pre-GST value for a GST order (the client deducts it on
+  // the taxable amount, not on the GST-inclusive gross).
+  const { tdsAmount, netReceived } = computeTds(gross, pct, order.taxCategory === 'GST');
+
+  // Payment date defaults to now but can be back-dated (a payment logged a few
+  // days late, or received on a holiday). Guard against an unparseable/future-junk
+  // value by falling back to now.
+  let when;
+  if (receivedAt) {
+    const d = new Date(receivedAt);
+    if (!Number.isNaN(d.getTime())) when = d;
+  }
 
   await prisma.$transaction(async (tx) => {
     const payment = await tx.payment.create({
@@ -638,6 +665,7 @@ router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (
         orderId: id, clientId: order.clientId, companyId: order.companyId, amount: gross, mode,
         tdsApplicable: !!tdsApplicable && pct > 0, tdsPct: pct, tdsAmount, netReceived,
         reference, notes, recordedById: req.user.id,
+        ...(when ? { receivedAt: when } : {}),
       },
     });
     const tdsNote = tdsAmount ? ` · TDS ${pct}% ₹${tdsAmount.toLocaleString('en-IN')} deducted` : '';
@@ -651,6 +679,11 @@ router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (
   });
 
   const full = await prisma.order.findUnique({ where: { id }, include: orderInclude });
+  logActivity({
+    type: 'PAYMENT', user: req.user, orderId: id, orderNo: order.orderNo,
+    summary: `Payment received · ${order.orderNo}`,
+    detail: `₹${gross.toLocaleString('en-IN')} via ${mode}${tdsAmount ? ` · TDS ₹${tdsAmount.toLocaleString('en-IN')}` : ''}`,
+  });
   res.status(201).json(withDerived(full));
 });
 
@@ -672,6 +705,11 @@ router.patch('/:id/payments/:pid', requireRole('MANAGER'), async (req, res) => {
     return res.status(400).json({ error: e.message || 'Could not edit the payment' });
   }
   const full = await prisma.order.findUnique({ where: { id: orderId }, include: orderInclude });
+  logActivity({
+    type: 'PAYMENT_EDIT', user: req.user, orderId, orderNo: full?.orderNo,
+    summary: `Payment edited · ${full?.orderNo || ''}`.trim(),
+    detail: `₹${Number(pay.amount).toLocaleString('en-IN')} → ₹${Number(req.body?.amount || 0).toLocaleString('en-IN')}`,
+  });
   res.json(withDerived(full));
 });
 
@@ -696,6 +734,11 @@ router.post('/:id/addons', requireRole('MANAGER', 'FINANCE', 'SALES'), async (re
   });
 
   const full = await prisma.order.findUnique({ where: { id }, include: orderInclude });
+  logActivity({
+    type: 'ADDON', user: req.user, orderId: id, orderNo: order.orderNo,
+    summary: `Charge added · ${order.orderNo}`,
+    detail: `${prefix}${text} · ₹${amt.toLocaleString('en-IN')}`,
+  });
   res.status(201).json(withDerived(full));
 });
 
@@ -823,6 +866,11 @@ router.post('/:id/items/:lineId/shift', requireRole('SALES', 'MANAGER', 'FINANCE
   }
 
   const full = await prisma.order.findUnique({ where: { id: orderId }, include: orderInclude });
+  logActivity({
+    type: 'SITE_SHIFT', user: req.user, orderId, orderNo: full?.orderNo,
+    summary: `Site shifted · ${full?.orderNo || ''}`.trim(),
+    detail: `→ ${site.code}${reason ? ` · ${reason}` : ''}`,
+  });
   res.json(withDerived(full));
 });
 

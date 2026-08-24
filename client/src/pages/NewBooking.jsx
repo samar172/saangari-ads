@@ -15,6 +15,12 @@ export const DURATIONS = [
   ['6M', '6 Months'], ['9M', '9 Months'], ['12M', '12 Months'],
 ];
 
+// Loose media is a short display (1–2 days up to under a month) and is billed by
+// the day — it never runs in month-long tenures, so its duration picker offers
+// only day counts (1 to 29).
+export const LOOSE_MAX_DAYS = 29;
+export const LOOSE_DURATIONS = Array.from({ length: LOOSE_MAX_DAYS }, (_, i) => [`${i + 1}D`, `${i + 1} Day${i ? 's' : ''}`]);
+
 // End date for a preset, using the inclusive last-active-day convention: a month
 // tenure from the 23rd runs to the 22nd of the target month (start + N months − 1
 // day); a day tenure of N days ends on start + N − 1.
@@ -399,7 +405,7 @@ export default function NewBooking() {
                 <label className="label">Duration</label>
                 <select className="input" onChange={(e) => applyDurationPreset(e.target.value)}>
                   <option value="">Custom...</option>
-                  {DURATIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  {(form.bookingType === 'LOOSE' ? LOOSE_DURATIONS : DURATIONS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </div>
               <div>
@@ -450,7 +456,7 @@ export default function NewBooking() {
                             }
                           }}>
                             <option value="">Custom...</option>
-                            {DURATIONS.map(([v, l2]) => <option key={v} value={v}>{l2}</option>)}
+                            {(form.bookingType === 'LOOSE' ? LOOSE_DURATIONS : DURATIONS).map(([v, l2]) => <option key={v} value={v}>{l2}</option>)}
                           </select>
                         </div>
                         <div><div className="text-[10px] text-slate-400 mb-0.5">End</div><input type="date" className="input py-1 text-xs" value={l.endDate} onChange={(e) => { updateLine(i, 'endDate', e.target.value); updateLine(i, 'customDays', undefined); }} /></div>
@@ -472,7 +478,11 @@ export default function NewBooking() {
                         <div>
                           <div className="text-[10px] text-slate-400 mb-0.5">Days</div>
                           <input type="text" className="input py-1 text-xs" value={l.customDays !== undefined ? l.customDays : (days > 0 ? days : '')} onChange={(e) => {
-                            const val = e.target.value;
+                            let val = e.target.value;
+                            // Loose media never runs a month or more — cap the day count at 29.
+                            const isLoose = form.bookingType === 'LOOSE';
+                            const parsed = parseInt(val, 10);
+                            if (isLoose && parsed > LOOSE_MAX_DAYS) val = String(LOOSE_MAX_DAYS);
                             updateLine(i, 'customDays', val);
                             const d = parseInt(val, 10);
                             if (d > 0) {

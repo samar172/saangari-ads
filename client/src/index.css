@@ -7,6 +7,20 @@
     @apply bg-slate-100 text-slate-800 antialiased;
     font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   }
+
+  /* Strip the up/down spinner buttons off every number field. They invite an
+     accidental nudge (and a wheel-scroll over the field silently changed the
+     amount) — amounts are always typed, never spun. Wheel-scroll changing a
+     focused number input is neutralised globally in main.jsx. */
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
 }
 
 @keyframes fadeIn {

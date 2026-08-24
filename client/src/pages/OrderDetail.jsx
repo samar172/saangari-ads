@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Tag, Download, Receipt, FileText, StopCircle, ArrowRightLeft, Camera, MapPin, Image as ImageIcon, Newspaper, Banknote, Check, Plus, Trash2, Pencil, ChevronRight } from 'lucide-react';
+import dayjs from 'dayjs';
 import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
 import { Badge, Money, Spinner } from '../components/ui';
+import { tdsAmountOf } from '../lib/tds';
 
 const PHASES = ['START', 'MID', 'END'];
 const KINDS = [['GPS', <><MapPin size={14} className="inline mr-1" /> GPS</>], ['NORMAL', <><ImageIcon size={14} className="inline mr-1" /> Normal</>], ['NEWSPAPER', <><Newspaper size={14} className="inline mr-1" /> Newspaper</>]];
@@ -859,6 +861,7 @@ function PaymentEditModal({ order, payment, isReviewer, onClose, onDone }) {
   const [amount, setAmount] = useState(String(payment.amount));
   const [mode, setMode] = useState(payment.mode || 'CASH');
   const [reference, setReference] = useState(payment.reference || '');
+  const [receivedAt, setReceivedAt] = useState(dayjs(payment.receivedAt).format('YYYY-MM-DD'));
   const [tdsApplicable, setTdsApplicable] = useState(!!payment.tdsApplicable);
   const [tdsPct, setTdsPct] = useState(payment.tdsPct || 2);
   const [reason, setReason] = useState('');
@@ -867,12 +870,12 @@ function PaymentEditModal({ order, payment, isReviewer, onClose, onDone }) {
   const [done, setDone] = useState(false);
 
   const gross = Number(amount) || 0;
-  const tds = tdsApplicable ? Math.round(gross * (Number(tdsPct) || 0) / 100) : 0;
+  const tds = tdsApplicable ? tdsAmountOf(gross, tdsPct, order.taxCategory === 'GST') : 0;
 
   async function submit() {
     if (!(gross > 0)) { setErr('Amount must be greater than zero'); return; }
     setBusy(true); setErr('');
-    const payload = { amount: gross, mode, reference, tdsApplicable, tdsPct: tdsApplicable ? Number(tdsPct) : 0 };
+    const payload = { amount: gross, mode, reference, receivedAt: receivedAt || undefined, tdsApplicable, tdsPct: tdsApplicable ? Number(tdsPct) : 0 };
     try {
       if (isReviewer) {
         await api.patch(`/orders/${order.id}/payments/${payment.id}`, payload);
@@ -905,7 +908,10 @@ function PaymentEditModal({ order, payment, isReviewer, onClose, onDone }) {
               <div><label className="label">Amount (₹)</label><input type="number" min="1" className="input" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
               <div><label className="label">Mode</label><select className="input" value={mode} onChange={(e) => setMode(e.target.value)}>{['CASH', 'UPI', 'BANK', 'CHEQUE', 'CARD'].map((m) => <option key={m} value={m}>{m}</option>)}</select></div>
             </div>
-            <div className="mt-3"><label className="label">Reference (optional)</label><input className="input" value={reference} onChange={(e) => setReference(e.target.value)} /></div>
+            <div className="grid grid-cols-2 gap-3 mt-3">
+              <div><label className="label">Payment date</label><input type="date" max={dayjs().format('YYYY-MM-DD')} className="input" value={receivedAt} onChange={(e) => setReceivedAt(e.target.value)} /></div>
+              <div><label className="label">Reference (optional)</label><input className="input" value={reference} onChange={(e) => setReference(e.target.value)} /></div>
+            </div>
             <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mt-3">
               <input type="checkbox" checked={tdsApplicable} onChange={(e) => setTdsApplicable(e.target.checked)} /> TDS applicable
             </label>
@@ -931,24 +937,24 @@ function PaymentEditModal({ order, payment, isReviewer, onClose, onDone }) {
 }
 
 function Payments({ o, user, onChanged }) {
-  const [form, setForm] = useState({ amount: '', mode: 'CASH', reference: '', tdsApplicable: false, tdsPct: 2 });
+  const [form, setForm] = useState({ amount: '', mode: 'CASH', reference: '', receivedAt: dayjs().format('YYYY-MM-DD'), tdsApplicable: false, tdsPct: 2 });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [editPay, setEditPay] = useState(null); // payment being edited
   const isReviewer = user.role === 'MANAGER' || user.role === 'SUPER_ADMIN';
 
   const gross = Number(form.amount) || 0;
-  const tds = form.tdsApplicable ? Math.round(gross * Number(form.tdsPct) / 100) : 0;
+  const tds = form.tdsApplicable ? tdsAmountOf(gross, form.tdsPct, o.taxCategory === 'GST') : 0;
 
   async function record(e) {
     e.preventDefault();
     setBusy(true); setErr('');
     try {
       await api.post(`/orders/${o.id}/payments`, {
-        amount: gross, mode: form.mode, reference: form.reference,
+        amount: gross, mode: form.mode, reference: form.reference, receivedAt: form.receivedAt || undefined,
         tdsApplicable: form.tdsApplicable, tdsPct: form.tdsApplicable ? Number(form.tdsPct) : 0,
       });
-      setForm({ amount: '', mode: 'CASH', reference: '', tdsApplicable: false, tdsPct: 2 });
+      setForm({ amount: '', mode: 'CASH', reference: '', receivedAt: dayjs().format('YYYY-MM-DD'), tdsApplicable: false, tdsPct: 2 });
       onChanged();
     } catch (e2) {
       setErr(e2.response?.data?.error || 'Failed to record payment');
@@ -1018,11 +1024,17 @@ function Payments({ o, user, onChanged }) {
             <label className="label">Amount settled against this order</label>
             <input type="number" min="1" className="input" placeholder="Amount" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
           </div>
-          <div>
-            <label className="label">Payment Mode</label>
-            <select className="input" value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
-              {['CASH', 'UPI', 'BANK', 'CHEQUE', 'CARD'].map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Payment Mode</label>
+              <select className="input" value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
+                {['CASH', 'UPI', 'BANK', 'CHEQUE', 'CARD'].map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Payment date</label>
+              <input type="date" max={dayjs().format('YYYY-MM-DD')} className="input" value={form.receivedAt} onChange={(e) => setForm({ ...form, receivedAt: e.target.value })} />
+            </div>
           </div>
 
           <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">

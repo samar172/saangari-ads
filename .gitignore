@@ -5,3 +5,4 @@ server/uploads/*
 server/.env
 .DS_Store
 *.log
+_db_backups/

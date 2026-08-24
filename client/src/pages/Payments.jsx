@@ -4,6 +4,7 @@ import dayjs from 'dayjs';
 import api, { downloadFile } from '../api';
 import { useCompany } from '../CompanyContext';
 import { Money, Spinner } from '../components/ui';
+import { tdsAmountOf } from '../lib/tds';
 
 // Same rates offered on the order detail payment form.
 const TDS_RATES = [1, 2, 5, 10];
@@ -205,20 +206,21 @@ function RecordPaymentModal({ onClose, onSaved }) {
   const [amount, setAmount] = useState('');
   const [mode, setMode] = useState('CASH');
   const [reference, setReference] = useState('');
+  const [receivedAt, setReceivedAt] = useState(dayjs().format('YYYY-MM-DD'));
   const [tdsApplicable, setTdsApplicable] = useState(false);
   const [tdsPct, setTdsPct] = useState(TDS_RATES[0]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
-  // Mirrors the server: TDS is withheld from the gross, but the order is still
-  // credited the full gross — the client remits the deduction on our behalf.
-  const gross = Number(amount) || 0;
-  const tds = tdsApplicable ? Math.round(gross * (Number(tdsPct) || 0) / 100) : 0;
-
   // TDS only exists where GST applies. Companies with GST hidden (e.g. the
   // non-GST entity) never deduct TDS, so hide the option for their orders.
   const selectedOrder = orders.find((o) => String(o.id) === String(orderId));
   const tdsAllowed = !!selectedOrder && !selectedOrder.company?.gstHidden;
+
+  // Mirrors the server: TDS is withheld from the gross on its pre-GST value, but
+  // the order is still credited the full gross — the client remits it on our behalf.
+  const gross = Number(amount) || 0;
+  const tds = tdsApplicable ? tdsAmountOf(gross, tdsPct, selectedOrder?.taxCategory === 'GST') : 0;
 
   // If the chosen order belongs to a non-GST entity, clear any TDS toggle so a
   // stale checkbox can't send TDS the server would (rightly) reject/ignore.
@@ -246,7 +248,7 @@ function RecordPaymentModal({ onClose, onSaved }) {
     setBusy(true); setErr('');
     try {
       await api.post(`/orders/${orderId}/payments`, {
-        amount, mode, reference: reference || undefined,
+        amount, mode, reference: reference || undefined, receivedAt: receivedAt || undefined,
         tdsApplicable, tdsPct: tdsApplicable ? Number(tdsPct) : 0,
       });
       onSaved();
@@ -322,9 +324,15 @@ function RecordPaymentModal({ onClose, onSaved }) {
                 </div>
               </div>
 
-              <div>
-                <label className="label">Reference (optional)</label>
-                <input className="input" placeholder="UTR / cheque no." value={reference} onChange={(e) => setReference(e.target.value)} />
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="label">Payment date</label>
+                  <input type="date" className="input" max={dayjs().format('YYYY-MM-DD')} value={receivedAt} onChange={(e) => setReceivedAt(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Reference (optional)</label>
+                  <input className="input" placeholder="UTR / cheque no." value={reference} onChange={(e) => setReference(e.target.value)} />
+                </div>
               </div>
 
               {tdsAllowed && (

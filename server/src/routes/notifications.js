@@ -6,7 +6,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; };
 const daysBetween = (a, b) => Math.floor((a - b) / DAY);
 
-const CATEGORIES = ['CAMPAIGN', 'INVOICE', 'PAYMENT', 'MONITORING'];
+const CATEGORIES = ['CAMPAIGN', 'INVOICE', 'PAYMENT', 'MONITORING', 'ACTIVITY'];
 
 // How many (flat 30-day) months the campaign runs, from its earliest start to
 // its latest end. Used to turn a grand total into a per-month installment so a
@@ -54,7 +54,7 @@ router.get('/', async (req, res) => {
   // Recent-activity window for new bookings, shifts and freshly-issued invoices.
   const recent = new Date(today.getTime() - 14 * DAY);
 
-  const [reminders, orders, recentOrders, shifts, invoices] = await Promise.all([
+  const [reminders, orders, recentOrders, shifts, invoices, activity] = await Promise.all([
     prisma.reminder.findMany({
       where: { done: false, dueDate: { gte: floor, lte: horizon } },
       orderBy: { dueDate: 'asc' },
@@ -109,6 +109,12 @@ router.get('/', async (req, res) => {
         id: true, invoiceNo: true, issuedAt: true, dueDate: true, status: true, total: true, orderId: true,
         client: { select: { name: true, company: true } },
       },
+    }),
+    // Recent activity feed — the last ~40 logged actions in the recency window.
+    prisma.activityLog.findMany({
+      where: { createdAt: { gte: recent } },
+      orderBy: { createdAt: 'desc' },
+      take: 40,
     }),
   ]);
 
@@ -259,6 +265,22 @@ router.get('/', async (req, res) => {
       dueDate: inv.dueDate || inv.issuedAt,
       invoiceId: inv.id,
       orderId: inv.orderId,
+    });
+  }
+
+  // ---- ACTIVITY: recent logged actions (entries, edits, payments) ----
+  for (const a of activity) {
+    items.push({
+      id: `activity-${a.id}`,
+      category: 'ACTIVITY',
+      kind: a.type,
+      severity: 'info',
+      title: a.summary,
+      detail: [a.detail, a.userName].filter(Boolean).join(' · '),
+      dueDate: a.createdAt,
+      orderId: a.orderId || undefined,
+      orderNo: a.orderNo || undefined,
+      invoiceId: a.invoiceId || undefined,
     });
   }
 

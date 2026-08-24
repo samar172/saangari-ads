@@ -3,6 +3,7 @@ const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
 const { settleInCash } = require('../utils/settle');
 const { applyPaymentEdit } = require('../utils/payments');
+const { logActivity } = require('../utils/activity');
 
 const ACTIONS = ['DELETE_ORDER', 'CANCEL_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'EDIT_PAYMENT', 'OTHER'];
 const ACTIVE = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
@@ -160,6 +161,16 @@ router.post('/:id/approve', requireRole('MANAGER'), async (req, res) => {
     where: { id },
     data: { status: 'APPROVED', reviewedById: req.user.id, reviewedAt: new Date(), reviewNote: req.body?.reviewNote || null },
     include: requestInclude,
+  });
+
+  // Record the approved action in the activity feed (a cancellation, a payment
+  // edit, a cash settlement, …). orderId only when the request was about an order.
+  const ACTIVITY_TYPE = { CANCEL_ORDER: 'CANCEL', EDIT_PAYMENT: 'PAYMENT_EDIT', DELETE_ORDER: 'CANCEL' };
+  logActivity({
+    type: ACTIVITY_TYPE[request.action] || 'CAMPAIGN_EDIT', user: req.user,
+    orderId: request.entityType === 'order' ? request.entityId : undefined,
+    summary: request.label || `${request.action.replace(/_/g, ' ').toLowerCase()} approved`,
+    detail: 'Approved from the queue',
   });
   res.json(updated);
 });
