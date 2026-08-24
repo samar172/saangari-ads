@@ -182,6 +182,20 @@ export default function NewBooking() {
   const updateLine = (i, k, v) => setLines((ls) => ls.map((l, idx) => (idx === i ? { ...l, [k]: v } : l)));
   const removeLine = (i) => setLines((ls) => ls.filter((_, idx) => idx !== i));
 
+  // Shared-rate helpers: a unipole rate typed on one site auto-flows to the other
+  // sites so it only needs entering once. `fillBlankRates` (on blur) is
+  // non-destructive — it only fills sites that don't yet have their own rate, so
+  // a site given a different rate keeps it. `applyRateToAll` (the "all" button)
+  // forces every site to match, overriding customised ones.
+  const fillBlankRates = (field, value) => {
+    if (value == null || value === '') return;
+    setLines((ls) => ls.map((l) => (l[field] == null || l[field] === '' ? { ...l, [field]: value } : l)));
+  };
+  const applyRateToAll = (field, value) => {
+    if (value == null || value === '') return;
+    setLines((ls) => ls.map((l) => ({ ...l, [field]: value })));
+  };
+
   const updateAddOn = (i, k, v) => setAddOns((a) => a.map((x, idx) => (idx === i ? { ...x, [k]: v } : x)));
 
   // Live order quote
@@ -441,9 +455,19 @@ export default function NewBooking() {
                         </div>
                         <div><div className="text-[10px] text-slate-400 mb-0.5">End</div><input type="date" className="input py-1 text-xs" value={l.endDate} onChange={(e) => { updateLine(i, 'endDate', e.target.value); updateLine(i, 'customDays', undefined); }} /></div>
                         {form.bookingType === 'LOOSE' ? (
-                          <div><div className="text-[10px] text-slate-400 mb-0.5">Rate/Day</div><input type="number" className="input py-1 text-xs" placeholder={s ? String(s.dayRate > 0 ? s.dayRate : Math.round(s.monthlyRate / 30)) : ''} value={l.dayRateOverride || ''} onChange={(e) => updateLine(i, 'dayRateOverride', e.target.value)} /></div>
+                          <div>
+                            <div className="text-[10px] text-slate-400 mb-0.5 flex items-center justify-between">Rate/Day
+                              {lines.length > 1 && l.dayRateOverride && <button type="button" className="text-brand hover:underline" title="Apply this rate to all sites" onClick={() => applyRateToAll('dayRateOverride', l.dayRateOverride)}>→ all</button>}
+                            </div>
+                            <input type="number" className="input py-1 text-xs" placeholder={s ? String(s.dayRate > 0 ? s.dayRate : Math.round(s.monthlyRate / 30)) : ''} value={l.dayRateOverride || ''} onChange={(e) => updateLine(i, 'dayRateOverride', e.target.value)} onBlur={(e) => fillBlankRates('dayRateOverride', e.target.value)} />
+                          </div>
                         ) : (
-                          <div><div className="text-[10px] text-slate-400 mb-0.5">Rate/Month</div><input type="number" className="input py-1 text-xs" placeholder={s ? String(s.monthlyRate) : ''} value={l.monthlyRateOverride || ''} onChange={(e) => updateLine(i, 'monthlyRateOverride', e.target.value)} /></div>
+                          <div>
+                            <div className="text-[10px] text-slate-400 mb-0.5 flex items-center justify-between">Rate/Month
+                              {lines.length > 1 && l.monthlyRateOverride && <button type="button" className="text-brand hover:underline" title="Apply this rate to all sites" onClick={() => applyRateToAll('monthlyRateOverride', l.monthlyRateOverride)}>→ all</button>}
+                            </div>
+                            <input type="number" className="input py-1 text-xs" placeholder={s ? String(s.monthlyRate) : ''} value={l.monthlyRateOverride || ''} onChange={(e) => updateLine(i, 'monthlyRateOverride', e.target.value)} onBlur={(e) => fillBlankRates('monthlyRateOverride', e.target.value)} />
+                          </div>
                         )}
                         <div>
                           <div className="text-[10px] text-slate-400 mb-0.5">Days</div>

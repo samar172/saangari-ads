@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Tag, Download, Receipt, FileText, StopCircle, ArrowRightLeft, Camera, MapPin, Image as ImageIcon, Newspaper, Banknote, Check, Plus, Trash2, Pencil } from 'lucide-react';
+import { Tag, Download, Receipt, FileText, StopCircle, ArrowRightLeft, Camera, MapPin, Image as ImageIcon, Newspaper, Banknote, Check, Plus, Trash2, Pencil, ChevronRight } from 'lucide-react';
 import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
 import { Badge, Money, Spinner } from '../components/ui';
@@ -184,7 +184,7 @@ export function OrderTabs({ o, user, busy, changeStatus, onChanged, tab, setTab,
   return (
     <>
       <div className={`flex gap-1 overflow-x-auto border-b border-slate-200 px-2 pt-2 bg-slate-50/50 ${compact ? '' : 'rounded-t-xl'}`}>
-        {[['overview', 'Overview'], ['sites', `Sites (${o.items.length})`], ['invoices', `Invoices (${o.invoices?.length || 0})`], ['payments', 'Payments']].map(([k, l]) => (
+        {[['overview', 'Overview'], ['sites', `Sites (${o.items.length})`], ['monitoring', `Monitoring (${o.items.reduce((a, it) => a + it.photos.length, 0)})`], ['invoices', `Invoices (${o.invoices?.length || 0})`], ['payments', 'Payments']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`shrink-0 px-4 ${compact ? 'py-2 text-xs' : 'py-3 text-sm'} font-medium border-b-2 -mb-px transition ${tab === k ? 'border-brand text-brand bg-white rounded-t-lg' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{l}</button>
         ))}
@@ -197,6 +197,7 @@ export function OrderTabs({ o, user, busy, changeStatus, onChanged, tab, setTab,
             {o.items.map((it) => <LineCard key={it.id} order={o} line={it} onChanged={onChanged} />)}
           </div>
         )}
+        {tab === 'monitoring' && <MonitoringTab o={o} onChanged={onChanged} />}
         {tab === 'invoices' && <InvoicesPanel o={o} user={user} onChanged={onChanged} />}
         {tab === 'payments' && <Payments o={o} user={user} onChanged={onChanged} />}
       </div>
@@ -460,10 +461,48 @@ function LineCard({ order, line, onChanged }) {
           onCancel={() => setPanel(null)}
         />
       )}
+    </div>
+  );
+}
 
-      <div className="mt-5 border-t border-slate-100 pt-5">
-        <PhotoSection booking={line} monitoring={order.monitoring} onUploaded={onChanged} />
-      </div>
+// Monitoring proofs, presented one collapsible tile per site so a long campaign
+// isn't a wall of photos. A tile shows the site, a thumbnail strip and an X/9
+// progress chip; expanding it reveals the full upload/edit grid for that site.
+function MonitoringTab({ o, onChanged }) {
+  const [openId, setOpenId] = useState(o.items.length === 1 ? o.items[0].id : null);
+  return (
+    <div className="space-y-2">
+      {o.items.map((it) => {
+        const n = it.photos.length;
+        const open = openId === it.id;
+        const complete = n >= 9;
+        return (
+          <div key={it.id} className="rounded-xl border border-slate-200 overflow-hidden">
+            <button onClick={() => setOpenId(open ? null : it.id)}
+              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition text-left">
+              <ChevronRight size={16} className={`shrink-0 text-slate-400 transition-transform ${open ? 'rotate-90' : ''}`} />
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold text-slate-800">{it.site.code}</div>
+                {it.site.location && <div className="text-xs text-slate-500 truncate">{it.site.location}</div>}
+              </div>
+              {n > 0 && (
+                <div className="hidden sm:flex -space-x-2 shrink-0">
+                  {it.photos.slice(0, 3).map((p) => (
+                    <img key={p.id} src={p.filePath} alt="" className="h-9 w-9 rounded-md border-2 border-white object-cover shadow-sm" />
+                  ))}
+                </div>
+              )}
+              <span className={`text-xs font-medium shrink-0 px-2 py-0.5 rounded-full ${complete ? 'bg-emerald-50 text-emerald-600' : n > 0 ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-400'}`}>{n}/9 proofs</span>
+            </button>
+            {open && (
+              <div className="border-t border-slate-100 p-4 bg-slate-50/40">
+                <PhotoSection booking={it} monitoring={o.monitoring} onUploaded={onChanged} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {o.items.length === 0 && <div className="text-sm text-slate-400 py-6 text-center">No sites on this campaign.</div>}
     </div>
   );
 }

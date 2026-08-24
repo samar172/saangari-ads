@@ -150,7 +150,7 @@ router.get('/', async (req, res) => {
       // startDate/endDate drive the display-period columns on the orders table.
       items: {
         select: {
-          id: true, siteId: true, status: true, startDate: true, endDate: true,
+          id: true, siteId: true, status: true, startDate: true, endDate: true, type: true,
           site: { select: { code: true } }, photos: { select: { id: true } },
         },
       },

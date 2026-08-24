@@ -13,6 +13,7 @@ export default function Invoices() {
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [genOpen, setGenOpen] = useState(false);
+  const [q, setQ] = useState('');
 
   function load() {
     setLoading(true);
@@ -22,11 +23,18 @@ export default function Invoices() {
 
   async function markPaid(id) { await api.post(`/invoices/${id}/mark-paid`); load(); }
 
+  const needle = q.trim().toLowerCase();
+  const filtered = needle
+    ? invoices.filter((i) => [i.invoiceNo, i.client.company, i.client.name, i.order?.orderNo]
+        .filter(Boolean).join(' ').toLowerCase().includes(needle))
+    : invoices;
+
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <h1 className="text-2xl font-bold text-slate-800">Invoices</h1>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <input className="input w-full sm:w-64" placeholder="Search company / invoice…" value={q} onChange={(e) => setQ(e.target.value)} />
           <button className="btn-ghost flex items-center gap-1.5" onClick={() => downloadFile(`/exports/invoices/excel${activeCompany?.id ? `?companyId=${activeCompany.id}` : ''}`, 'invoices.xlsx')}><Download size={16} /> Export Excel</button>
           {can(user, 'generateInvoice') && <button className="btn-accent flex items-center gap-1.5" onClick={() => setGenOpen(true)}><Plus size={16} /> Generate Invoice</button>}
         </div>
@@ -47,10 +55,13 @@ export default function Invoices() {
               </tr>
             </thead>
             <tbody>
-              {invoices.map((i) => (
+              {filtered.map((i) => (
                 <tr key={i.id} onClick={() => navigate(`/invoices/${i.id}`)} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer">
                   <td className="px-4 py-2 font-medium">{i.invoiceNo}</td>
-                  <td className="px-4 py-2">{i.client.name}</td>
+                  <td className="px-4 py-2">
+                    <span className="font-medium text-slate-800">{i.client.company || i.client.name}</span>
+                    {i.client.company && <div className="text-[11px] text-slate-400">{i.client.name}</div>}
+                  </td>
                   <td className="px-4 py-2">{i.order?.orderNo}<div className="text-xs text-slate-400">{(i.order?.items || []).map((it) => it.site.code).join(', ')}</div></td>
                   <td className="px-4 py-2">{i.taxCategory === 'GST' ? <Badge status="LIVE">{i.interState ? 'IGST' : 'CGST+SGST'}</Badge> : <span className="text-slate-400">Non-GST</span>}</td>
                   <td className="px-4 py-2 text-right font-medium"><Money value={i.total} /></td>
@@ -64,7 +75,7 @@ export default function Invoices() {
                   </td>
                 </tr>
               ))}
-              {invoices.length === 0 && <tr><td colSpan="8" className="px-4 py-10 text-center text-slate-400">No invoices yet</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan="8" className="px-4 py-10 text-center text-slate-400">{invoices.length === 0 ? 'No invoices yet' : 'No matching invoices'}</td></tr>}
             </tbody>
           </table>
         </div>

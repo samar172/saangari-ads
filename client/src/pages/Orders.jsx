@@ -102,6 +102,9 @@ export default function Orders() {
   const isQuotations = location.pathname.includes('quotations');
   const [status, setStatus] = useState(isQuotations ? 'QUOTATION' : '');
   const [sort, setSort] = useState('date');
+  const [q, setQ] = useState('');
+  const [typeFilter, setTypeFilter] = useState(''); // '' | REGULAR | LOOSE
+  const [termsFilter, setTermsFilter] = useState(''); // '' | ADVANCE | POSTPAID
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
   // Admin-chosen visible columns, persisted so the choice survives reloads.
@@ -135,10 +138,26 @@ export default function Orders() {
   }
   useEffect(load, [status, activeCompany]);
 
-  // Client-side sort — every field is already on each row and the list isn't
-  // paginated, so this orders the whole set correctly.
+  // Client-side search + filter + sort — every field is already on each row and
+  // the list isn't paginated, so this narrows and orders the whole set correctly.
   const orderName = (o) => (o.client.company || o.client.name || '').toLowerCase();
-  const sortedOrders = [...orders].sort((a, b) => {
+  const needle = q.trim().toLowerCase();
+  // Regular/Loose lives on each booking, not the order, so an order matches a
+  // type filter when it has at least one booking of that type (a mixed order
+  // shows under both).
+  const filteredOrders = orders.filter((o) => {
+    if (typeFilter && !o.items.some((i) => (i.type || 'REGULAR') === typeFilter)) return false;
+    if (termsFilter && (o.paymentTerms || 'ADVANCE') !== termsFilter) return false;
+    if (needle) {
+      const hay = [
+        o.orderNo, o.client.company, o.client.name, o.category?.name,
+        ...o.items.map((i) => i.site.code),
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(needle)) return false;
+    }
+    return true;
+  });
+  const sortedOrders = [...filteredOrders].sort((a, b) => {
     if (sort === 'az') return orderName(a).localeCompare(orderName(b));
     if (sort === 'amount') return (b.grandTotal || 0) - (a.grandTotal || 0);
     // Uncategorised sorts last (￿) so named categories group together.
@@ -162,9 +181,24 @@ export default function Orders() {
           <p className="text-sm text-slate-500">All {isQuotations ? 'quotations' : 'campaigns'}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <input className="input w-full sm:w-56" placeholder="Search order / client / site…" value={q} onChange={(e) => setQ(e.target.value)} />
           {!isQuotations && (
             <select className="input w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
               {STATUS_FILTERS.filter(s => s !== 'QUOTATION').map((s) => <option key={s} value={s}>{s || 'All statuses'}</option>)}
+            </select>
+          )}
+          {!isQuotations && (
+            <select className="input w-auto" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} title="Media type">
+              <option value="">All types</option>
+              <option value="REGULAR">Regular</option>
+              <option value="LOOSE">Loose</option>
+            </select>
+          )}
+          {!isQuotations && (
+            <select className="input w-auto" value={termsFilter} onChange={(e) => setTermsFilter(e.target.value)} title="Payment terms">
+              <option value="">All terms</option>
+              <option value="ADVANCE">Advance</option>
+              <option value="POSTPAID">Postpaid</option>
             </select>
           )}
           <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value)} title="Sort by">
@@ -223,7 +257,7 @@ export default function Orders() {
                   </Fragment>
                 );
               })}
-              {orders.length === 0 && <tr><td colSpan={cols.length} className="px-4 py-12 text-center text-slate-400">No orders found</td></tr>}
+              {sortedOrders.length === 0 && <tr><td colSpan={cols.length} className="px-4 py-12 text-center text-slate-400">No orders found</td></tr>}
             </tbody>
           </table>
         </div>

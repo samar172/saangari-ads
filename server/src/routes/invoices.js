@@ -39,7 +39,7 @@ router.get('/', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
     where,
     orderBy: { issuedAt: 'desc' },
     include: {
-      client: { select: { name: true, phone: true } },
+      client: { select: { name: true, phone: true, company: true } },
       company: { select: { id: true, name: true, code: true } },
       order: { select: { orderNo: true, items: { select: { site: { select: { code: true } } } } } },
     },

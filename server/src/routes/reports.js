@@ -23,8 +23,10 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
       where: orderWhere,
       select: {
         id: true, clientId: true, grandTotal: true, taxableAmount: true,
+        rentalSubtotal: true, printingTotal: true, mountingCost: true, addOnTotal: true,
         cgst: true, sgst: true, igst: true, gstAmount: true, status: true,
         category: { select: { name: true } },
+        client: { select: { id: true, name: true, company: true } },
       },
     }),
     prisma.booking.findMany({
@@ -46,6 +48,14 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   const quotations = orders.filter((o) => o.status === 'QUOTATION');
 
   const bookedValue = confirmed.reduce((s, o) => s + o.grandTotal, 0);
+  // Component breakdown of the booked value, so the dashboard can show what the
+  // gross is made of: net-of-GST (taxable), and the rental / print / mounting
+  // splits (gross of discount — these are the raw line components).
+  const bookedExclGst = confirmed.reduce((s, o) => s + o.taxableAmount, 0);
+  const rentalValue = confirmed.reduce((s, o) => s + (o.rentalSubtotal || 0), 0);
+  const printingValue = confirmed.reduce((s, o) => s + (o.printingTotal || 0), 0);
+  const mountingValue = confirmed.reduce((s, o) => s + (o.mountingCost || 0), 0);
+  const addOnValue = confirmed.reduce((s, o) => s + (o.addOnTotal || 0), 0);
   const quotationValue = quotations.reduce((s, o) => s + o.grandTotal, 0);
   // Payments credit the gross; TDS is the slice the client remitted to the government.
   const paidRevenue = payments._sum.amount || 0;
@@ -65,12 +75,26 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   }
   const topCategory = Object.entries(revByType).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
 
-  // Revenue by the client's booking category (institute, hospital, …)
+  // Revenue by the client's booking category (institute, hospital, …). Also keep
+  // a per-category client breakdown so a category row can expand to reveal which
+  // clients make it up, each with their share of the category's revenue.
   const revByCategory = {};
+  const catClients = {}; // { [category]: { [clientId]: { name, revenue, orders } } }
   for (const o of confirmed) {
     const name = o.category?.name || 'Uncategorised';
     revByCategory[name] = (revByCategory[name] || 0) + o.grandTotal;
+    const bucket = (catClients[name] = catClients[name] || {});
+    const cid = o.client?.id || o.clientId;
+    const display = o.client?.company?.trim() || o.client?.name || 'Unknown';
+    bucket[cid] = bucket[cid] || { name: display, revenue: 0, orders: 0 };
+    bucket[cid].revenue += o.grandTotal;
+    bucket[cid].orders += 1;
   }
+  const revByCategoryClients = Object.fromEntries(
+    Object.entries(catClients).map(([cat, clients]) => [
+      cat, Object.values(clients).sort((a, b) => b.revenue - a.revenue),
+    ]),
+  );
 
   // Repeat clients (2+ orders)
   const perClient = {};
@@ -80,13 +104,15 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   res.json({
     siteCount, occupancy, siteStatus: statusMap,
     siteByType: Object.fromEntries(byType.map((t) => [t.type, t._count._all])),
-    bookedValue, quotationValue, quotationCount: quotations.length,
+    bookedValue, bookedExclGst, rentalValue, printingValue, mountingValue, addOnValue,
+    quotationValue, quotationCount: quotations.length,
     paidRevenue, outstanding,
     tdsDeducted, netReceived,
     gstCollected, cgst, sgst, igst,
     totalOrders: orders.length, totalBookings: lines.length, totalClients: clients, repeatClients,
     revenueByType: revByType, bookingsByType: cntByType, topCategory,
     revenueByCategory: revByCategory,
+    revenueByCategoryClients: revByCategoryClients,
   });
 });
 
