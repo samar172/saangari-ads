@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Download, Edit3, Trash2, Check, X } from 'lucide-react';
+import { Download, Edit3, Trash2, Check, X, Send } from 'lucide-react';
 import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
 import { Badge, Money, Spinner, Modal } from '../components/ui';
@@ -11,6 +11,7 @@ export default function InvoiceDetail() {
   const { user } = useAuth();
   const [invoice, setInvoice] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [sendOpen, setSendOpen] = useState(false);
 
   function load() {
     api.get(`/invoices/${id}`).then((r) => setInvoice(r.data)).catch(() => navigate('/invoices'));
@@ -32,10 +33,15 @@ export default function InvoiceDetail() {
           <span className="badge bg-slate-100 text-slate-700">{invoice.taxCategory === 'GST' ? (invoice.interState ? 'IGST' : 'CGST+SGST') : 'Non-GST'}</span>
         </div>
         <div className="flex-1" />
+        <button className="btn-primary text-sm flex items-center gap-1.5" onClick={() => setSendOpen(true)}>
+          <Send size={16} /> Send Bill
+        </button>
         <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/invoices/${id}/pdf`, `Invoice-${invoice.invoiceNo}.pdf`)}>
           <Download size={16} /> Invoice PDF
         </button>
       </div>
+
+      {sendOpen && <SendBillModal invoice={invoice} onClose={() => setSendOpen(false)} onSent={load} />}
 
       <div className="grid md:grid-cols-2 gap-8">
         <div>
@@ -121,6 +127,77 @@ export default function InvoiceDetail() {
 
 function Row({ k, children }) {
   return <div className="flex justify-between gap-4 border-b border-slate-100 pb-2"><dt className="text-slate-500">{k}</dt><dd className="font-medium text-slate-800 text-right">{children}</dd></div>;
+}
+
+// Indian numbers are stored with or without the country code; wa.me wants 91XXXXXXXXXX.
+const waDigits = (phone) => { const d = String(phone || '').replace(/\D/g, ''); return d.length === 10 ? '91' + d : d.replace(/^0+/, ''); };
+
+// Share the bill over WhatsApp or email. The message is opened pre-addressed
+// (wa.me / mailto) and a person presses send — we only log that it went out.
+function SendBillModal({ invoice, onClose, onSent }) {
+  const client = invoice.client;
+  const contacts = client.contacts || [];
+  // Recipients: the flagged bills-to contact leads, then the rest, then the client itself.
+  const options = [
+    ...contacts.map((c) => ({ id: `c${c.id}`, label: `${c.name}${c.role ? ` · ${c.role}` : ''}${c.billsTo ? ' · Bills to' : ''}`, phone: c.phone, email: c.email })),
+    { id: 'client', label: `${client.company || client.name} (client)`, phone: client.phone, email: client.email },
+  ];
+  const [sel, setSel] = useState(options[0]?.id || 'client');
+  const chosen = options.find((o) => o.id === sel) || options[options.length - 1];
+
+  const amount = `₹${Number(invoice.total || 0).toLocaleString('en-IN')}`;
+  const due = invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('en-IN') : null;
+  const text = [
+    `Dear ${client.company || client.name},`,
+    `Please find the bill ${invoice.invoiceNo} for ${amount}${due ? `, due by ${due}` : ''}.`,
+    `Order ${invoice.order?.orderNo || ''}`.trim(),
+    `— ${invoice.company?.name || 'Saangari Ads'}`,
+  ].filter(Boolean).join('\n');
+
+  function logShare(channel) {
+    api.post(`/invoices/${invoice.id}/share`, { channel, toName: chosen?.label, toContact: channel === 'EMAIL' ? chosen?.email : chosen?.phone })
+      .then(() => onSent?.()).catch(() => {});
+  }
+
+  function sendWhatsApp() {
+    if (!chosen?.phone) return;
+    window.open(`https://wa.me/${waDigits(chosen.phone)}?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+    logShare('WHATSAPP');
+    onClose();
+  }
+  function sendEmail() {
+    if (!chosen?.email) return;
+    const subject = `Bill ${invoice.invoiceNo} — ${invoice.company?.name || 'Saangari Ads'}`;
+    window.location.href = `mailto:${chosen.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
+    logShare('EMAIL');
+    onClose();
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Send bill ${invoice.invoiceNo}`}>
+      <div className="space-y-4">
+        <div>
+          <label className="label">Send to</label>
+          <select className="input" value={sel} onChange={(e) => setSel(e.target.value)}>
+            {options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+          <div className="text-xs text-slate-500 mt-1">
+            {chosen?.phone ? `📞 ${chosen.phone}` : 'no phone'} · {chosen?.email ? `✉ ${chosen.email}` : 'no email'}
+          </div>
+        </div>
+
+        <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600 whitespace-pre-wrap">{text}</div>
+        <p className="text-[11px] text-slate-400 leading-tight">The message opens ready-addressed — you press send. Attach the invoice PDF in WhatsApp/email if you want it included; download it from the invoice screen first.</p>
+
+        <div className="flex gap-2">
+          <button className="btn-primary flex-1 flex items-center justify-center gap-1.5" disabled={!chosen?.phone} onClick={sendWhatsApp}>
+            <Send size={16} /> WhatsApp
+          </button>
+          <button className="btn-ghost flex-1" disabled={!chosen?.email} onClick={sendEmail}>Email</button>
+        </div>
+      </div>
+    </Modal>
+  );
 }
 
 function EditPricingModal({ invoice, onClose, onSaved }) {

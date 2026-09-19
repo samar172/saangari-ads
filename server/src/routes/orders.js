@@ -221,7 +221,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
   const body = req.body || {};
   const {
     clientId, categoryId, companyId, items = [], type = 'REGULAR', bookingDate, description,
-    printingPartnerId, printMaterial, noOfPrints = 0, printRate = 0, mountingCost = 0,
+    printingPartnerId, printMaterial, noOfPrints = 0, printRate = 0, printCost = 0, mountingCost = 0,
     monitoring = false, monitorStart = false, monitorMid = false, monitorEnd = false,
     taxCategory: rawTaxCategory = 'NON_GST', interState = false, placeOfSupply,
     paymentTerms: rawPaymentTerms = 'ADVANCE',
@@ -325,6 +325,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
         printingPartnerId: printingPartnerId ? Number(printingPartnerId) : null,
         printMaterial: printMaterial || null,
         noOfPrints: Number(noOfPrints) || 0, printRate: Number(printRate) || 0, printingTotal: r.printingTotal,
+        printCost: Math.round(Number(printCost) || 0),
         mountingCost: r.mountingTotal,
         monitoring: !!monitoring, monitorStart: !!monitorStart, monitorMid: !!monitorMid, monitorEnd: !!monitorEnd,
         taxCategory, interState: !!interState, placeOfSupply: placeOfSupply || 'Rajasthan',
@@ -404,7 +405,7 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
   const {
     clientId = existing.clientId, categoryId, companyId = existing.companyId,
     items = [], type = existing.type, bookingDate, description,
-    printingPartnerId, printMaterial, noOfPrints = 0, printRate = 0, mountingCost = 0,
+    printingPartnerId, printMaterial, noOfPrints = 0, printRate = 0, printCost = 0, mountingCost = 0,
     monitoring = false, monitorStart = false, monitorMid = false, monitorEnd = false,
     taxCategory: rawTaxCategory = 'NON_GST', interState = false, placeOfSupply,
     paymentTerms: rawPaymentTerms = 'ADVANCE',
@@ -536,6 +537,7 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
           description,
           printMaterial: printMaterial || null,
           noOfPrints: Number(noOfPrints) || 0, printRate: Number(printRate) || 0, printingTotal: r.printingTotal,
+          printCost: Math.round(Number(printCost) || 0),
           mountingCost: r.mountingTotal,
           monitoring: !!monitoring, monitorStart: !!monitorStart, monitorMid: !!monitorMid, monitorEnd: !!monitorEnd,
           taxCategory, interState: !!interState, placeOfSupply: placeOfSupply || 'Rajasthan',

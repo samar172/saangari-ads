@@ -52,7 +52,9 @@ router.get('/:id', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
   const invoice = await prisma.invoice.findUnique({
     where: { id: Number(req.params.id) },
     include: {
-      client: true,
+      // Pull the client's named contacts too, so the "Send bill" action can route
+      // to whoever is flagged billsTo (falling back to the client's own phone/email).
+      client: { include: { contacts: { orderBy: [{ billsTo: 'desc' }, { createdAt: 'asc' }] } } },
       company: true,
       order: {
         include: {
@@ -64,6 +66,27 @@ router.get('/:id', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
   });
   if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
   res.json(invoice);
+});
+
+// Log that a bill was shared with the client over WhatsApp / email. The message
+// is opened client-side (wa.me / mailto) and the person presses send; this only
+// records that it happened, into the Activity feed. We never claim delivery.
+router.post('/:id/share', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+  const id = Number(req.params.id);
+  const { channel, toName, toContact } = req.body || {};
+  const ch = channel === 'EMAIL' ? 'EMAIL' : 'WHATSAPP';
+  const invoice = await prisma.invoice.findUnique({
+    where: { id },
+    include: { client: { select: { name: true, company: true } } },
+  });
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+  const who = invoice.client?.company?.trim() || invoice.client?.name || '';
+  logActivity({
+    type: 'INVOICE_SENT', user: req.user, orderId: invoice.orderId, invoiceId: invoice.id,
+    summary: `Bill sent (${ch === 'EMAIL' ? 'Email' : 'WhatsApp'}) · ${invoice.invoiceNo}`,
+    detail: [who, toName, toContact].filter(Boolean).join(' · '),
+  });
+  res.json({ ok: true });
 });
 
 router.patch('/:id/commercials', requireRole('FINANCE', 'MANAGER'), async (req, res) => {

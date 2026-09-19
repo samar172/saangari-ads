@@ -157,6 +157,8 @@ function PartnerDetail({ id, onClose }) {
         orders: counted.length,
         prints: counted.reduce((s, j) => s + (j.noOfPrints || 0), 0),
         value: Math.round(counted.reduce((s, j) => s + (j.printingTotal || 0), 0)),
+        cost: Math.round(counted.reduce((s, j) => s + (j.printCost || 0), 0)),
+        margin: Math.round(counted.reduce((s, j) => s + (j.printMargin || 0), 0)),
         sqft: Math.round(counted.reduce((s, j) => s + j.totalSqft, 0) * 100) / 100,
       };
     });
@@ -180,9 +182,19 @@ function PartnerDetail({ id, onClose }) {
             <StatTile label="All Orders" value={p.summary.totalOrders} sub="incl. quotations & cancelled" />
           </div>
 
+          {/* Printing P&L — what we charge clients vs what we pay this partner. */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <StatTile label="Printing Charged" value={<Money value={p.summary.totalPrintingValue} />} sub="billed to clients" />
+            <StatTile label="Partner Cost" value={<Money value={p.summary.totalPrintCost} />} sub="what you pay them" />
+            <StatTile label="Printing Margin" value={<Money value={p.summary.printingMargin} />} sub="charged − cost" accent={p.summary.printingMargin >= 0 ? 'text-emerald-600' : 'text-red-600'} />
+            <StatTile label="Balance Owed" value={<Money value={p.summary.balanceOwed} />} sub={`paid ₹${(p.summary.totalPaid || 0).toLocaleString('en-IN')}`} accent={p.summary.balanceOwed > 0 ? 'text-red-600' : 'text-slate-700'} />
+          </div>
+
           <div className="text-xs text-slate-400">
             Totals count confirmed, live and completed orders only — quotations and cancelled orders are listed but never printed.
           </div>
+
+          <PartnerPayments partner={p} editable={can(user, 'managePartners')} onChanged={reload} />
 
           <MaterialsPanel partner={p} editable={can(user, 'managePartners')} onChanged={reload} />
 
@@ -206,7 +218,9 @@ function PartnerDetail({ id, onClose }) {
                   <th className="px-3 py-2 text-left">Status</th>
                   <th className="px-3 py-2 text-right">Prints</th>
                   <th className="px-3 py-2 text-right">Rate</th>
-                  <th className="px-3 py-2 text-right">Value</th>
+                  <th className="px-3 py-2 text-right">Charged</th>
+                  <th className="px-3 py-2 text-right">Cost</th>
+                  <th className="px-3 py-2 text-right">Margin</th>
                   <th className="px-3 py-2 text-right">Sqft</th>
                   <th className="px-3 py-2 text-right">Sites</th>
                 </tr>
@@ -222,6 +236,8 @@ function PartnerDetail({ id, onClose }) {
                       <td className="px-3 py-1.5 text-right font-semibold">{g.prints}</td>
                       <td />
                       <td className="px-3 py-1.5 text-right font-semibold"><Money value={g.value} /></td>
+                      <td className="px-3 py-1.5 text-right font-semibold text-slate-600"><Money value={g.cost} /></td>
+                      <td className={`px-3 py-1.5 text-right font-semibold ${g.margin >= 0 ? 'text-emerald-600' : 'text-red-600'}`}><Money value={g.margin} /></td>
                       <td className="px-3 py-1.5 text-right text-slate-500">{g.sqft || '—'}</td>
                       <td />
                     </tr>
@@ -238,12 +254,14 @@ function PartnerDetail({ id, onClose }) {
                       <td className="px-3 py-2 text-right font-medium">{j.noOfPrints || 0}</td>
                       <td className="px-3 py-2 text-right text-slate-500">{j.printRate ? <Money value={j.printRate} /> : '—'}</td>
                       <td className="px-3 py-2 text-right font-medium"><Money value={j.printingTotal} /></td>
+                      <td className="px-3 py-2 text-right text-slate-600">{j.printCost ? <Money value={j.printCost} /> : '—'}</td>
+                      <td className={`px-3 py-2 text-right font-medium ${(j.printMargin || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{(j.printingTotal || j.printCost) ? <Money value={j.printMargin} /> : '—'}</td>
                       <td className="px-3 py-2 text-right text-slate-500">{j.totalSqft || '—'}</td>
                       <td className="px-3 py-2 text-right text-brand underline decoration-dotted">{j.sites.length}</td>
                     </tr>
                     {expanded === j.id && (
                       <tr className="bg-slate-50/70">
-                        <td colSpan="9" className="px-3 py-3">
+                        <td colSpan="11" className="px-3 py-3">
                           {j.description && <div className="text-xs text-slate-500 mb-2">{j.description}</div>}
                           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
                             {j.sites.map((s, i) => (
@@ -271,10 +289,10 @@ function PartnerDetail({ id, onClose }) {
                   </Fragment>
                 ))}
                 {p.jobs.length === 0 && (
-                  <tr><td colSpan="9" className="px-3 py-10 text-center text-slate-400">No print jobs routed to this partner yet</td></tr>
+                  <tr><td colSpan="11" className="px-3 py-10 text-center text-slate-400">No print jobs routed to this partner yet</td></tr>
                 )}
                 {p.jobs.length > 0 && groups.length === 0 && (
-                  <tr><td colSpan="9" className="px-3 py-10 text-center text-slate-400">No print jobs in this month</td></tr>
+                  <tr><td colSpan="11" className="px-3 py-10 text-center text-slate-400">No print jobs in this month</td></tr>
                 )}
               </tbody>
             </table>
@@ -289,6 +307,89 @@ function PartnerDetail({ id, onClose }) {
         </div>
       )}
     </Modal>
+  );
+}
+
+// Payments WE make to this partner, settling the printing payable. The balance
+// (job cost − payments) is shown in the P&L tiles above.
+function PartnerPayments({ partner, editable, onChanged }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const blank = { amount: '', mode: 'BANK', paidAt: today, reference: '' };
+  const [form, setForm] = useState(blank);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const payments = partner.payments || [];
+
+  async function record(e) {
+    e.preventDefault();
+    if (!(Number(form.amount) > 0)) { setErr('Enter an amount'); return; }
+    setBusy(true); setErr('');
+    try {
+      await api.post(`/printing-partners/${partner.id}/payments`, {
+        amount: Number(form.amount), mode: form.mode, paidAt: form.paidAt || undefined, reference: form.reference || undefined,
+      });
+      setForm(blank);
+      await onChanged();
+    } catch (e2) { setErr(e2.response?.data?.error || 'Could not record payment'); }
+    finally { setBusy(false); }
+  }
+
+  async function remove(pid) {
+    await api.delete(`/printing-partners/payments/${pid}`);
+    await onChanged();
+  }
+
+  return (
+    <div className="rounded-xl border border-slate-200 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm font-semibold text-slate-700">Payments to this partner</div>
+        <div className="text-xs text-slate-500">Owed <span className={`font-semibold ${partner.summary.balanceOwed > 0 ? 'text-red-600' : 'text-slate-700'}`}><Money value={partner.summary.balanceOwed} /></span></div>
+      </div>
+
+      {payments.length === 0 ? (
+        <div className="text-xs text-slate-400 mb-3">No payments recorded to this partner yet.</div>
+      ) : (
+        <div className="space-y-1.5 mb-3">
+          {payments.map((pay) => (
+            <div key={pay.id} className="flex items-center justify-between gap-2 text-sm rounded-lg bg-slate-50 border border-slate-100 px-3 py-1.5">
+              <div className="min-w-0">
+                <span className="font-medium text-slate-800"><Money value={pay.amount} /></span>
+                <span className="badge bg-slate-100 text-slate-600 ml-2 text-[10px]">{pay.mode}</span>
+                <span className="text-xs text-slate-500 ml-2">{new Date(pay.paidAt).toLocaleDateString('en-IN')}{pay.reference ? ` · ${pay.reference}` : ''}{pay.recordedBy?.name ? ` · ${pay.recordedBy.name}` : ''}</span>
+              </div>
+              {editable && <button className="text-xs text-slate-400 hover:text-red-600 shrink-0" onClick={() => remove(pay.id)}>Delete</button>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editable && (
+        <form onSubmit={record} className="grid grid-cols-2 sm:grid-cols-5 gap-2 items-end">
+          <div className="col-span-2 sm:col-span-1">
+            <div className="text-[10px] text-slate-400 mb-0.5">Amount ₹</div>
+            <input type="number" min="1" className="input py-1.5 text-sm" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
+          </div>
+          <div>
+            <div className="text-[10px] text-slate-400 mb-0.5">Mode</div>
+            <select className="input py-1.5 text-sm" value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
+              {['CASH', 'UPI', 'BANK', 'CHEQUE', 'CARD'].map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="text-[10px] text-slate-400 mb-0.5">Date</div>
+            <input type="date" max={today} className="input py-1.5 text-sm" value={form.paidAt} onChange={(e) => setForm({ ...form, paidAt: e.target.value })} />
+          </div>
+          <div>
+            <div className="text-[10px] text-slate-400 mb-0.5">Reference</div>
+            <input className="input py-1.5 text-sm" placeholder="UTR / cheque" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} />
+          </div>
+          <div className="col-span-2 sm:col-span-5">
+            {err && <div className="text-xs text-red-600 mb-1">{err}</div>}
+            <button className="btn-primary text-sm py-1.5" disabled={busy}>{busy ? 'Saving…' : 'Record payment'}</button>
+          </div>
+        </form>
+      )}
+    </div>
   );
 }
 

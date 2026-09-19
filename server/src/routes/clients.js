@@ -31,6 +31,7 @@ router.get('/:id', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) 
         include: { items: { include: { site: { select: { code: true, location: true, type: true } } } }, invoices: true, payments: true },
       },
       ledger: { orderBy: { date: 'desc' }, include: { invoice: { select: { invoiceNo: true } } } },
+      contacts: { orderBy: [{ billsTo: 'desc' }, { createdAt: 'asc' }] },
     },
   });
   if (!client) return res.status(404).json({ error: 'Client not found' });
@@ -89,6 +90,54 @@ router.patch('/:id', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
     if (e.code === 'P2002') return res.status(409).json({ error: 'A client with this phone number already exists' });
     throw e;
   }
+});
+
+// ── Client contacts (owner / accounts / coordinator) ──────────────────────────
+// The one flagged `billsTo` is the default recipient for WhatsApp/email bills.
+// Only one contact per client can hold that flag at a time.
+router.post('/:id/contacts', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+  const clientId = Number(req.params.id);
+  if (!Number.isInteger(clientId)) return res.status(400).json({ error: 'Invalid client id' });
+  const { name, role, phone, email, billsTo } = req.body || {};
+  const cleanName = String(name || '').trim();
+  if (!cleanName) return res.status(400).json({ error: 'Contact name is required' });
+  if (!String(phone || '').trim() && !String(email || '').trim())
+    return res.status(400).json({ error: 'Add a phone or an email for this contact' });
+
+  const contact = await prisma.$transaction(async (tx) => {
+    if (billsTo) await tx.clientContact.updateMany({ where: { clientId, billsTo: true }, data: { billsTo: false } });
+    return tx.clientContact.create({
+      data: { clientId, name: cleanName, role: role || null, phone: phone || null, email: email || null, billsTo: !!billsTo },
+    });
+  });
+  res.status(201).json(contact);
+});
+
+router.patch('/contacts/:cid', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+  const cid = Number(req.params.cid);
+  if (!Number.isInteger(cid)) return res.status(400).json({ error: 'Invalid contact id' });
+  const existing = await prisma.clientContact.findUnique({ where: { id: cid } });
+  if (!existing) return res.status(404).json({ error: 'Contact not found' });
+  const { name, role, phone, email, billsTo } = req.body || {};
+  const data = {};
+  if (name !== undefined) data.name = String(name).trim();
+  if (role !== undefined) data.role = role || null;
+  if (phone !== undefined) data.phone = phone || null;
+  if (email !== undefined) data.email = email || null;
+
+  const contact = await prisma.$transaction(async (tx) => {
+    if (billsTo === true) await tx.clientContact.updateMany({ where: { clientId: existing.clientId, billsTo: true, NOT: { id: cid } }, data: { billsTo: false } });
+    if (billsTo !== undefined) data.billsTo = !!billsTo;
+    return tx.clientContact.update({ where: { id: cid }, data });
+  });
+  res.json(contact);
+});
+
+router.delete('/contacts/:cid', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+  const cid = Number(req.params.cid);
+  if (!Number.isInteger(cid)) return res.status(400).json({ error: 'Invalid contact id' });
+  await prisma.clientContact.delete({ where: { id: cid } });
+  res.json({ ok: true });
 });
 
 // Record a payment (credit) against a client's ledger

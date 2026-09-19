@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
+const { logActivity } = require('../utils/activity');
 
 router.get('/', async (req, res) => {
   const partners = await prisma.printingPartner.findMany({
@@ -42,6 +43,13 @@ router.get('/:id', async (req, res) => {
     },
   });
 
+  // Payments we've made to this partner (settling what we owe for their jobs).
+  const payments = await prisma.partnerPayment.findMany({
+    where: { partnerId: id },
+    orderBy: { paidAt: 'desc' },
+    include: { recordedBy: { select: { name: true } } },
+  });
+
   const jobs = orders.map((o) => {
     // Cancelled line-items were never printed, so they don't add to the area.
     const live = o.items.filter((it) => it.status !== 'CANCELLED');
@@ -57,6 +65,9 @@ router.get('/:id', async (req, res) => {
       noOfPrints: o.noOfPrints,
       printRate: o.printRate,
       printingTotal: o.printingTotal,
+      printCost: o.printCost || 0,
+      // Margin on this job = what we charged the client − what we pay the partner.
+      printMargin: Math.round((o.printingTotal || 0) - (o.printCost || 0)),
       mountingCost: o.mountingCost,
       totalSqft: Math.round(totalSqft * 100) / 100,
       sites: live.map((it) => ({
@@ -71,11 +82,21 @@ router.get('/:id', async (req, res) => {
   });
 
   const counted = jobs.filter((j) => COUNTED.includes(j.status));
+  const totalPrintingValue = Math.round(counted.reduce((s, j) => s + (j.printingTotal || 0), 0));
+  const totalPrintCost = Math.round(counted.reduce((s, j) => s + (j.printCost || 0), 0));
+  const totalPaid = Math.round(payments.reduce((s, p) => s + (p.amount || 0), 0));
   const summary = {
     totalOrders: jobs.length,
     countedOrders: counted.length,
     totalPrints: counted.reduce((s, j) => s + (j.noOfPrints || 0), 0),
-    totalPrintingValue: Math.round(counted.reduce((s, j) => s + (j.printingTotal || 0), 0)),
+    // Revenue we billed the client for printing.
+    totalPrintingValue,
+    // Cost owed to the partner for those same jobs, and the resulting margin.
+    totalPrintCost,
+    printingMargin: totalPrintingValue - totalPrintCost,
+    // Partner payable: what we owe (job cost) minus what we've already paid them.
+    totalPaid,
+    balanceOwed: totalPrintCost - totalPaid,
     totalSqft: Math.round(counted.reduce((s, j) => s + j.totalSqft, 0) * 100) / 100,
     totalSites: counted.reduce((s, j) => s + j.sites.length, 0),
   };
@@ -83,7 +104,59 @@ router.get('/:id', async (req, res) => {
     ? Math.round(summary.totalPrintingValue / summary.totalPrints)
     : 0;
 
-  res.json({ ...partner, summary, jobs });
+  res.json({ ...partner, summary, jobs, payments });
+});
+
+// Record a payment WE make to this partner (settles part of the payable). Manager
+// / Finance only, mirroring who can record client payments.
+router.post('/:id/payments', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const partnerId = Number(req.params.id);
+  if (!Number.isInteger(partnerId)) return res.status(400).json({ error: 'Invalid partner id' });
+  const { amount, mode = 'BANK', reference, notes, paidAt } = req.body || {};
+  const amt = Math.round(Number(amount) || 0);
+  if (!(amt > 0)) return res.status(400).json({ error: 'Amount must be greater than zero' });
+
+  const partner = await prisma.printingPartner.findUnique({ where: { id: partnerId } });
+  if (!partner) return res.status(404).json({ error: 'Printing partner not found' });
+
+  let when;
+  if (paidAt) { const d = new Date(paidAt); if (!Number.isNaN(d.getTime())) when = d; }
+
+  const payment = await prisma.partnerPayment.create({
+    data: {
+      partnerId, amount: amt, mode, reference: reference || null, notes: notes || null,
+      recordedById: req.user.id, ...(when ? { paidAt: when } : {}),
+    },
+  });
+  logActivity({
+    type: 'PARTNER_PAYMENT', user: req.user,
+    summary: `Paid printing partner · ${partner.name}`,
+    detail: `₹${amt.toLocaleString('en-IN')} via ${mode}`,
+  });
+  res.status(201).json(payment);
+});
+
+// Edit / delete a partner payment (Manager / Finance) — a mistyped amount or a
+// payment logged against the wrong partner.
+router.patch('/payments/:pid', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const pid = Number(req.params.pid);
+  if (!Number.isInteger(pid)) return res.status(400).json({ error: 'Invalid payment id' });
+  const { amount, mode, reference, notes, paidAt } = req.body || {};
+  const data = {};
+  if (amount !== undefined) { const a = Math.round(Number(amount) || 0); if (!(a > 0)) return res.status(400).json({ error: 'Amount must be greater than zero' }); data.amount = a; }
+  if (mode !== undefined) data.mode = mode;
+  if (reference !== undefined) data.reference = reference || null;
+  if (notes !== undefined) data.notes = notes || null;
+  if (paidAt !== undefined) { const d = new Date(paidAt); if (!Number.isNaN(d.getTime())) data.paidAt = d; }
+  const payment = await prisma.partnerPayment.update({ where: { id: pid }, data });
+  res.json(payment);
+});
+
+router.delete('/payments/:pid', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const pid = Number(req.params.pid);
+  if (!Number.isInteger(pid)) return res.status(400).json({ error: 'Invalid payment id' });
+  await prisma.partnerPayment.delete({ where: { id: pid } });
+  res.json({ ok: true });
 });
 
 router.post('/', requireRole('MANAGER', 'FINANCE'), async (req, res) => {

@@ -125,12 +125,13 @@ model User {
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  orders   Order[]           @relation("OrderBy")
-  photos   MonitoringPhoto[] @relation("UploadedBy")
-  invoices Invoice[]         @relation("GeneratedBy")
-  payments Payment[]         @relation("PaymentBy")
-  shifts   SiteShift[]       @relation("ShiftedBy")
-  notes    Note[]            @relation("UserNotes")
+  orders          Order[]           @relation("OrderBy")
+  photos          MonitoringPhoto[] @relation("UploadedBy")
+  invoices        Invoice[]         @relation("GeneratedBy")
+  payments        Payment[]         @relation("PaymentBy")
+  shifts          SiteShift[]       @relation("ShiftedBy")
+  notes           Note[]            @relation("UserNotes")
+  partnerPayments PartnerPayment[]  @relation("PartnerPaymentBy")
 
   approvalsRequested ApprovalRequest[] @relation("ApprovalRequestedBy")
   approvalsReviewed  ApprovalRequest[] @relation("ApprovalReviewedBy")
@@ -205,6 +206,22 @@ model Client {
   invoices Invoice[]
   ledger   LedgerEntry[]
   payments Payment[]
+  contacts ClientContact[]
+}
+
+// Named contacts on a client account (owner, accounts person, on-site coordinator).
+// The one flagged `billsTo` is the default recipient for invoices sent over
+// WhatsApp/email; falls back to the client's own phone/email when none is set.
+model ClientContact {
+  id        Int      @id @default(autoincrement())
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  clientId  Int
+  name      String
+  role      String? // e.g. "Accounts", "Owner", "Coordinator"
+  phone     String?
+  email     String?
+  billsTo   Boolean  @default(false)
+  createdAt DateTime @default(now())
 }
 
 model Site {
@@ -257,8 +274,24 @@ model PrintingPartner {
 
   materials PrintingMaterial[]
   orders    Order[]
+  payments  PartnerPayment[]
 }
 
+// A payment WE make to a printing partner (settling what we owe them for jobs).
+// Partner balance owed = Σ(order.printCost for their orders) − Σ(these payments).
+model PartnerPayment {
+  id           Int             @id @default(autoincrement())
+  partner      PrintingPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  partnerId    Int
+  amount       Float
+  mode         PaymentMode     @default(BANK)
+  reference    String?
+  notes        String?
+  paidAt       DateTime        @default(now())
+  recordedBy   User            @relation("PartnerPaymentBy", fields: [recordedById], references: [id])
+  recordedById Int
+  createdAt    DateTime        @default(now())
+}
 
 model PrintingMaterial {
   id        Int             @id @default(autoincrement())
@@ -298,6 +331,10 @@ model Order {
   noOfPrints        Int              @default(0)
   printRate         Float            @default(0)
   printingTotal     Float            @default(0)
+  // What we PAY the printing partner for this order's printing (the cost side).
+  // Internal only — never part of the customer's taxable amount. Printing margin
+  // = printingTotal (charged) − printCost (paid). Feeds the partner payable ledger.
+  printCost         Float            @default(0)
 
   // Mounting (30-day mounting cycle)
   mountingCost Float @default(0)
@@ -438,11 +475,11 @@ model Payment {
   tdsAmount     Float   @default(0)
   netReceived   Float   @default(0)
 
-  reference    String?
-  notes        String?
-  receivedAt   DateTime @default(now())
-  recordedBy   User     @relation("PaymentBy", fields: [recordedById], references: [id])
-  recordedById Int
+  reference     String?
+  notes         String?
+  receivedAt    DateTime      @default(now())
+  recordedBy    User          @relation("PaymentBy", fields: [recordedById], references: [id])
+  recordedById  Int
   // The client-ledger credit(s) this payment posted, so an edit can adjust the
   // exact matching entry instead of guessing by narration.
   ledgerEntries LedgerEntry[]

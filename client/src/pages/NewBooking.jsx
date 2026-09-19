@@ -92,6 +92,7 @@ export default function NewBooking() {
     printMaterial: '',
     noOfPrints: 0,
     printRate: 0,
+    printCost: 0,
     mountingCost: 0,
     monitoring: true,
     monitorStart: true,
@@ -277,6 +278,9 @@ export default function NewBooking() {
         printMaterial: form.printMaterial || undefined,
         noOfPrints: Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
+        // What we pay the printing partner (internal cost) — drives printing P&L,
+        // never the customer's taxable amount.
+        printCost: Number(form.printCost) || 0,
         // Mounting is charged per print (one mount per flex), not per site. Fall
         // back to the site count when no print quantity is entered.
         mountingCost: (Number(form.mountingCost) || 0) * (Number(form.noOfPrints) > 0 ? Number(form.noOfPrints) : lines.length),
@@ -549,7 +553,25 @@ export default function NewBooking() {
                 <label className="label">Mounting Cost (per print)</label>
                 <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
               </div>
+              <div>
+                <label className="label">Partner cost (total you pay)</label>
+                <input type="number" min="0" className="input" value={form.printCost} onChange={(e) => set('printCost', e.target.value)} placeholder="What you pay the printer" />
+              </div>
             </div>
+            {/* Internal printing P&L preview — customer never sees this. */}
+            {(() => {
+              const charge = (Number(form.noOfPrints) || 0) * (Number(form.printRate) || 0);
+              const cost = Number(form.printCost) || 0;
+              if (charge <= 0 && cost <= 0) return null;
+              const margin = charge - cost;
+              return (
+                <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs flex flex-wrap gap-x-4 gap-y-1">
+                  <span className="text-slate-500">Printing charged: <b className="text-slate-700">₹{charge.toLocaleString('en-IN')}</b></span>
+                  <span className="text-slate-500">Partner cost: <b className="text-slate-700">₹{cost.toLocaleString('en-IN')}</b></span>
+                  <span className={margin >= 0 ? 'text-emerald-600' : 'text-red-600'}>Margin: <b>₹{margin.toLocaleString('en-IN')}</b></span>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Add-ons */}

@@ -261,6 +261,8 @@ function ClientDetail({ id, onClose }) {
             </button>
           )}
 
+          <ClientContacts client={c} onChanged={load} />
+
           <div>
             <div className="text-xs font-semibold uppercase text-slate-500 mb-2">Orders ({c.orders.length})</div>
             <div className="card overflow-x-auto">
@@ -327,4 +329,86 @@ function ClientDetail({ id, onClose }) {
 
 function Info({ k, v }) {
   return <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">{k}</div><div className="font-medium text-slate-800">{v}</div></div>;
+}
+
+// Named contacts for a client (owner, accounts, coordinator). The one flagged
+// "Bills to" is the default recipient when an invoice is sent over WhatsApp/email.
+const blankContact = { name: '', role: '', phone: '', email: '', billsTo: false };
+function ClientContacts({ client, onChanged }) {
+  const [form, setForm] = useState(blankContact);
+  const [editId, setEditId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const contacts = client.contacts || [];
+
+  function edit(ct) { setForm({ name: ct.name || '', role: ct.role || '', phone: ct.phone || '', email: ct.email || '', billsTo: !!ct.billsTo }); setEditId(ct.id); setShowForm(true); setErr(''); }
+  function addNew() { setForm(blankContact); setEditId(null); setShowForm(true); setErr(''); }
+
+  async function save(e) {
+    e.preventDefault();
+    if (!form.name.trim()) { setErr('Name is required'); return; }
+    if (!form.phone.trim() && !form.email.trim()) { setErr('Add a phone or an email'); return; }
+    setBusy(true); setErr('');
+    try {
+      if (editId) await api.patch(`/clients/contacts/${editId}`, form);
+      else await api.post(`/clients/${client.id}/contacts`, form);
+      setShowForm(false); setForm(blankContact); setEditId(null);
+      await onChanged();
+    } catch (e2) { setErr(e2.response?.data?.error || 'Could not save contact'); }
+    finally { setBusy(false); }
+  }
+
+  async function remove(cid) { await api.delete(`/clients/contacts/${cid}`); await onChanged(); }
+  async function makeBillsTo(cid) { await api.patch(`/clients/contacts/${cid}`, { billsTo: true }); await onChanged(); }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-semibold uppercase text-slate-500">Contacts ({contacts.length})</div>
+        <button className="text-xs text-brand hover:underline" onClick={addNew}>+ Add contact</button>
+      </div>
+
+      {contacts.length === 0 && !showForm && (
+        <div className="text-xs text-slate-400 mb-2">No named contacts. Add one and mark who bills go to — falls back to the client's own phone/email ({client.phone}{client.email ? ` · ${client.email}` : ''}).</div>
+      )}
+
+      <div className="space-y-1.5">
+        {contacts.map((ct) => (
+          <div key={ct.id} className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+            <div className="min-w-0 text-sm">
+              <span className="font-medium text-slate-800">{ct.name}</span>
+              {ct.role && <span className="text-xs text-slate-500 ml-1.5">· {ct.role}</span>}
+              {ct.billsTo && <span className="badge bg-emerald-100 text-emerald-700 ml-2 text-[10px]">Bills to</span>}
+              <div className="text-xs text-slate-500">{[ct.phone, ct.email].filter(Boolean).join(' · ') || '—'}</div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 text-xs">
+              {!ct.billsTo && <button className="text-slate-400 hover:text-emerald-600" onClick={() => makeBillsTo(ct.id)} title="Make this the bill recipient">Set bills-to</button>}
+              <button className="text-brand hover:underline" onClick={() => edit(ct)}>Edit</button>
+              <button className="text-slate-400 hover:text-red-600" onClick={() => remove(ct.id)}>Delete</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {showForm && (
+        <form onSubmit={save} className="mt-2 rounded-lg border border-slate-200 p-3 space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <input className="input py-1.5 text-sm" placeholder="Name *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            <input className="input py-1.5 text-sm" placeholder="Role (e.g. Accounts)" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} />
+            <input className="input py-1.5 text-sm" placeholder="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+            <input className="input py-1.5 text-sm" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={form.billsTo} onChange={(e) => setForm({ ...form, billsTo: e.target.checked })} /> Bills are sent to this contact
+          </label>
+          {err && <div className="text-xs text-red-600">{err}</div>}
+          <div className="flex gap-2">
+            <button className="btn-primary text-sm py-1.5" disabled={busy}>{busy ? 'Saving…' : (editId ? 'Save contact' : 'Add contact')}</button>
+            <button type="button" className="btn-ghost text-sm py-1.5" onClick={() => { setShowForm(false); setEditId(null); setForm(blankContact); }}>Cancel</button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
 }
