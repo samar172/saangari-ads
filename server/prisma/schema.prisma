@@ -267,6 +267,8 @@ model PrintingPartner {
   phone       String?
   email       String?
   address     String?
+  gstin       String? // partner's GSTIN (for their bills / statement)
+  machines    String? // printing machines / equipment the partner runs (free text)
   ratePerSqft Float    @default(0)
   active      Boolean  @default(true)
   notes       String?
@@ -298,7 +300,10 @@ model PrintingMaterial {
   partner   PrintingPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
   partnerId Int
   name      String // e.g. "Flex", "Pamphlet", "White Back"
-  rate      Float           @default(0) // rate per print/sqft for this material
+  rate      Float           @default(0) // CUSTOMER charge for this material (per print) — what we bill
+  // What the PARTNER charges US per sqft for this material (the cost side). Black
+  // Base ₹7.5/sqft, White Base ₹5.5/sqft — used to derive the printing payable.
+  costPerSqft Float         @default(0)
   active    Boolean         @default(true)
   createdAt DateTime        @default(now())
 

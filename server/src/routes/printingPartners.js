@@ -55,29 +55,30 @@ async function loadPartnerAccount(id) {
     include: { recordedBy: { select: { name: true } } },
   });
 
-  // The partner's own material rates are the (locked) cost basis. When an order
-  // has no explicit printCost entered, fall back to prints × that material's rate
-  // so historical jobs still carry a payable derived from the rates on file.
-  const rateByMaterial = Object.fromEntries(partner.materials.map((m) => [m.name, m.rate]));
+  // Each material carries its own cost-per-sqft (what the partner charges US for
+  // that material): White Base ₹5.5/sqft, Black Base ₹7.5/sqft. `rate` on the
+  // material is the CUSTOMER charge and is not a cost.
+  const materialByName = Object.fromEntries(partner.materials.map((m) => [m.name, m]));
 
   const jobs = orders.map((o) => {
     // Cancelled line-items were never printed, so they don't add to the area.
     const live = o.items.filter((it) => it.status !== 'CANCELLED');
     const totalSqft = Math.round(live.reduce((s, it) => s + (it.site?.sqft || 0), 0) * 100) / 100;
-    const materialRate = o.printMaterial ? (rateByMaterial[o.printMaterial] || 0) : 0;
+    const mat = o.printMaterial ? materialByName[o.printMaterial] : null;
+    const materialRate = mat?.rate || 0;            // customer charge (for reference)
+    const materialCostPerSqft = mat?.costPerSqft || 0; // partner cost per sqft
 
     // Partner cost basis, in priority order:
     //  1. explicit printCost entered on the order (a manual override wins);
-    //  2. area × the partner's locked ₹/sqft — flex/vinyl is billed by the sqft,
-    //     so this is the normal basis (e.g. 8960 sqft × ₹7.5 = ₹67,200);
-    //  3. prints × material rate, when a per-print material rate is on file;
-    //  4. otherwise unknown (0) until a cost is entered.
-    const bySqft = Math.round(totalSqft * (partner.ratePerSqft || 0));
-    const byMaterial = Math.round((o.noOfPrints || 0) * materialRate);
+    //  2. area × THIS MATERIAL's ₹/sqft — the normal basis (Black 7.5, White 5.5);
+    //  3. area × the partner-wide ₹/sqft, when the material has no per-sqft cost;
+    //  4. otherwise unknown (0) until a cost is set.
+    const bySqftMaterial = Math.round(totalSqft * materialCostPerSqft);
+    const bySqftPartner = Math.round(totalSqft * (partner.ratePerSqft || 0));
     let effectiveCost, costSource, costNote;
     if (o.printCost > 0) { effectiveCost = Math.round(o.printCost); costSource = 'entered'; costNote = 'entered'; }
-    else if (bySqft > 0) { effectiveCost = bySqft; costSource = 'sqft'; costNote = `${totalSqft} sqft × ₹${partner.ratePerSqft}`; }
-    else if (byMaterial > 0) { effectiveCost = byMaterial; costSource = 'material'; costNote = `${o.noOfPrints} × ₹${materialRate}`; }
+    else if (bySqftMaterial > 0) { effectiveCost = bySqftMaterial; costSource = 'material_sqft'; costNote = `${totalSqft} sqft × ₹${materialCostPerSqft}${mat ? ` (${mat.name})` : ''}`; }
+    else if (bySqftPartner > 0) { effectiveCost = bySqftPartner; costSource = 'sqft'; costNote = `${totalSqft} sqft × ₹${partner.ratePerSqft}`; }
     else { effectiveCost = 0; costSource = 'none'; costNote = ''; }
 
     return {
@@ -93,6 +94,7 @@ async function loadPartnerAccount(id) {
       printingTotal: o.printingTotal,
       printMaterial: o.printMaterial || null,
       materialRate,
+      materialCostPerSqft,
       printCost: effectiveCost,
       costEntered: o.printCost || 0,
       costSource,
@@ -306,18 +308,18 @@ router.delete('/payments/:pid', requireRole('MANAGER', 'FINANCE'), async (req, r
 });
 
 router.post('/', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
-  const { name, contact, phone, email, address, ratePerSqft, notes } = req.body || {};
+  const { name, contact, phone, email, address, gstin, machines, ratePerSqft, notes } = req.body || {};
   if (!name) return res.status(400).json({ error: 'Name is required' });
   const partner = await prisma.printingPartner.create({
-    data: { name, contact, phone, email, address, ratePerSqft: Number(ratePerSqft) || 0, notes },
+    data: { name, contact, phone, email, address, gstin, machines, ratePerSqft: Number(ratePerSqft) || 0, notes },
   });
   res.status(201).json(partner);
 });
 
 router.patch('/:id', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
-  const { name, contact, phone, email, address, ratePerSqft, notes, active } = req.body || {};
+  const { name, contact, phone, email, address, gstin, machines, ratePerSqft, notes, active } = req.body || {};
   const data = {};
-  for (const [k, v] of Object.entries({ name, contact, phone, email, address, notes })) if (v !== undefined) data[k] = v;
+  for (const [k, v] of Object.entries({ name, contact, phone, email, address, gstin, machines, notes })) if (v !== undefined) data[k] = v;
   if (ratePerSqft !== undefined) data.ratePerSqft = Number(ratePerSqft) || 0;
   if (active !== undefined) data.active = !!active;
   const partner = await prisma.printingPartner.update({ where: { id: Number(req.params.id) }, data });
@@ -329,12 +331,12 @@ router.patch('/:id', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
 router.post('/:id/materials', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   const partnerId = Number(req.params.id);
   if (!Number.isInteger(partnerId)) return res.status(400).json({ error: 'Invalid partner id' });
-  const { name, rate } = req.body || {};
+  const { name, rate, costPerSqft } = req.body || {};
   const cleanName = String(name || '').trim();
   if (!cleanName) return res.status(400).json({ error: 'Material name is required' });
   try {
     const material = await prisma.printingMaterial.create({
-      data: { partnerId, name: cleanName, rate: Number(rate) || 0 },
+      data: { partnerId, name: cleanName, rate: Number(rate) || 0, costPerSqft: Number(costPerSqft) || 0 },
     });
     res.status(201).json(material);
   } catch (e) {
@@ -346,10 +348,11 @@ router.post('/:id/materials', requireRole('MANAGER', 'FINANCE'), async (req, res
 router.patch('/materials/:mid', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   const mid = Number(req.params.mid);
   if (!Number.isInteger(mid)) return res.status(400).json({ error: 'Invalid material id' });
-  const { name, rate, active } = req.body || {};
+  const { name, rate, costPerSqft, active } = req.body || {};
   const data = {};
   if (name !== undefined) data.name = String(name).trim();
   if (rate !== undefined) data.rate = Number(rate) || 0;
+  if (costPerSqft !== undefined) data.costPerSqft = Number(costPerSqft) || 0;
   if (active !== undefined) data.active = !!active;
   const material = await prisma.printingMaterial.update({ where: { id: mid }, data });
   res.json(material);

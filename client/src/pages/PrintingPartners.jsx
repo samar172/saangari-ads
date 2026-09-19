@@ -8,7 +8,7 @@ import { Modal, Spinner, Badge, Money, StatTile } from '../components/ui';
 // Indian numbers are stored with or without the country code; wa.me wants 91XXXXXXXXXX.
 const waDigits = (phone) => { const d = String(phone || '').replace(/\D/g, ''); return d.length === 10 ? '91' + d : d.replace(/^0+/, ''); };
 
-const empty = { name: '', contact: '', phone: '', email: '', address: '', ratePerSqft: '', notes: '' };
+const empty = { name: '', contact: '', phone: '', email: '', address: '', gstin: '', machines: '', ratePerSqft: '', notes: '' };
 
 // Only these statuses were actually printed — mirror the server's COUNTED set so
 // the per-month subtotals match the all-time totals.
@@ -105,7 +105,14 @@ export default function PrintingPartners() {
           </div>
           <input className="input" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
           <input className="input" placeholder="Address" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
-          <input type="number" className="input" placeholder="Rate per sq.ft (₹)" value={form.ratePerSqft} onChange={(e) => setForm({ ...form, ratePerSqft: e.target.value })} />
+          <div className="grid grid-cols-2 gap-3">
+            <input className="input" placeholder="GSTIN" value={form.gstin} onChange={(e) => setForm({ ...form, gstin: e.target.value })} />
+            <input className="input" placeholder="Machines / equipment" value={form.machines} onChange={(e) => setForm({ ...form, machines: e.target.value })} />
+          </div>
+          <div>
+            <input type="number" className="input" placeholder="Default cost rate per sq.ft (₹)" value={form.ratePerSqft} onChange={(e) => setForm({ ...form, ratePerSqft: e.target.value })} />
+            <div className="text-[11px] text-slate-400 mt-1">Fallback ₹/sqft we pay this partner. Per-material rates below override it (White Base ₹5.5, Black Base ₹7.5).</div>
+          </div>
           <input className="input" placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
           <button className="btn-primary w-full" disabled={busy}>{busy ? 'Saving…' : 'Save Partner'}</button>
         </form>
@@ -174,6 +181,8 @@ function PartnerDetail({ id, onClose }) {
             {p.contact && <span>{p.contact}</span>}
             {p.phone && <span>📞 {p.phone}</span>}
             {p.email && <span>✉ {p.email}</span>}
+            {p.gstin && <span>GSTIN: {p.gstin}</span>}
+            {p.machines && <span>🖨 {p.machines}</span>}
             {p.ratePerSqft > 0 && <span className="badge bg-brand/10 text-brand">₹{p.ratePerSqft}/sqft</span>}
             {!p.active && <span className="badge bg-slate-200 text-slate-600">Inactive</span>}
           </div>
@@ -491,6 +500,7 @@ function PartnerPayments({ partner, editable, onChanged }) {
 function MaterialsPanel({ partner, editable, onChanged }) {
   const [name, setName] = useState('');
   const [rate, setRate] = useState('');
+  const [costPerSqft, setCostPerSqft] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const materials = partner.materials || [];
@@ -500,15 +510,17 @@ function MaterialsPanel({ partner, editable, onChanged }) {
     if (!name.trim()) return;
     setBusy(true); setErr('');
     try {
-      await api.post(`/printing-partners/${partner.id}/materials`, { name: name.trim(), rate: Number(rate) || 0 });
-      setName(''); setRate(''); onChanged();
+      await api.post(`/printing-partners/${partner.id}/materials`, { name: name.trim(), rate: Number(rate) || 0, costPerSqft: Number(costPerSqft) || 0 });
+      setName(''); setRate(''); setCostPerSqft(''); onChanged();
     } catch (e2) { setErr(e2.response?.data?.error || 'Could not add material'); }
     finally { setBusy(false); }
   }
-  async function editRate(m) {
-    const next = window.prompt(`Rate for "${m.name}" (₹)`, m.rate);
-    if (next === null) return;
-    try { await api.patch(`/printing-partners/materials/${m.id}`, { rate: Number(next) || 0 }); onChanged(); }
+  async function edit(m) {
+    const charge = window.prompt(`Customer charge for "${m.name}" (₹ per print)`, m.rate);
+    if (charge === null) return;
+    const cost = window.prompt(`Partner COST for "${m.name}" (₹ per sqft)`, m.costPerSqft || 0);
+    if (cost === null) return;
+    try { await api.patch(`/printing-partners/materials/${m.id}`, { rate: Number(charge) || 0, costPerSqft: Number(cost) || 0 }); onChanged(); }
     catch (e2) { setErr(e2.response?.data?.error || 'Could not update'); }
   }
   async function remove(m) {
@@ -519,19 +531,21 @@ function MaterialsPanel({ partner, editable, onChanged }) {
 
   return (
     <div className="card p-4">
-      <div className="text-sm font-semibold text-slate-800 mb-2">Materials &amp; Rates</div>
+      <div className="text-sm font-semibold text-slate-800 mb-1">Materials &amp; Rates</div>
+      <div className="text-[11px] text-slate-400 mb-2">Charge = what the client pays (per print). Cost = what the partner charges you (per sqft).</div>
       {err && <div className="mb-2 text-sm text-red-600">{err}</div>}
       {materials.length === 0 ? (
-        <div className="text-xs text-slate-400 mb-3">No materials yet. Add flex, pamphlet, brochure, white back, etc.</div>
+        <div className="text-xs text-slate-400 mb-3">No materials yet. Add flex, pamphlet, white base, black base, etc.</div>
       ) : (
         <div className="flex flex-wrap gap-2 mb-3">
           {materials.map((m) => (
             <div key={m.id} className={`flex items-center gap-2 rounded-lg border px-2.5 py-1 text-sm ${m.active ? 'border-slate-200' : 'border-slate-100 opacity-50'}`}>
               <span className="font-medium text-slate-700">{m.name}</span>
-              <span className="text-brand">₹{m.rate}</span>
+              <span className="text-brand">charge ₹{m.rate}</span>
+              <span className={m.costPerSqft > 0 ? 'text-slate-600' : 'text-amber-600'}>cost ₹{m.costPerSqft || 0}/sqft</span>
               {editable && (
                 <>
-                  <button className="text-xs text-slate-400 hover:text-slate-700" onClick={() => editRate(m)}>edit</button>
+                  <button className="text-xs text-slate-400 hover:text-slate-700" onClick={() => edit(m)}>edit</button>
                   <button className="text-xs text-slate-400 hover:text-red-600" onClick={() => remove(m)}>×</button>
                 </>
               )}
@@ -541,8 +555,9 @@ function MaterialsPanel({ partner, editable, onChanged }) {
       )}
       {editable && (
         <form onSubmit={add} className="flex flex-wrap gap-2">
-          <input className="input flex-1 min-w-[160px]" placeholder="Material — e.g. Flex" value={name} onChange={(e) => setName(e.target.value)} />
-          <input type="number" className="input w-32" placeholder="Rate ₹" value={rate} onChange={(e) => setRate(e.target.value)} />
+          <input className="input flex-1 min-w-[140px]" placeholder="Material — e.g. White Base" value={name} onChange={(e) => setName(e.target.value)} />
+          <input type="number" className="input w-28" placeholder="Charge ₹" value={rate} onChange={(e) => setRate(e.target.value)} />
+          <input type="number" step="0.01" className="input w-28" placeholder="Cost ₹/sqft" value={costPerSqft} onChange={(e) => setCostPerSqft(e.target.value)} />
           <button className="btn-primary text-sm" disabled={busy || !name.trim()}>{busy ? 'Adding…' : 'Add'}</button>
         </form>
       )}
