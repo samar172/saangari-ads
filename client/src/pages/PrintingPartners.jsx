@@ -1,9 +1,12 @@
 import { Fragment, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import api from '../api';
-import { Plus, ChevronRight } from 'lucide-react';
+import api, { downloadFile } from '../api';
+import { Plus, ChevronRight, Download, Send } from 'lucide-react';
 import { useAuth, can } from '../auth';
 import { Modal, Spinner, Badge, Money, StatTile } from '../components/ui';
+
+// Indian numbers are stored with or without the country code; wa.me wants 91XXXXXXXXXX.
+const waDigits = (phone) => { const d = String(phone || '').replace(/\D/g, ''); return d.length === 10 ? '91' + d : d.replace(/^0+/, ''); };
 
 const empty = { name: '', contact: '', phone: '', email: '', address: '', ratePerSqft: '', notes: '' };
 
@@ -196,6 +199,8 @@ function PartnerDetail({ id, onClose }) {
 
           <PartnerPayments partner={p} editable={can(user, 'managePartners')} onChanged={reload} />
 
+          <PartnerStatement partner={p} />
+
           <MaterialsPanel partner={p} editable={can(user, 'managePartners')} onChanged={reload} />
 
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -263,6 +268,12 @@ function PartnerDetail({ id, onClose }) {
                       <tr className="bg-slate-50/70">
                         <td colSpan="11" className="px-3 py-3">
                           {j.description && <div className="text-xs text-slate-500 mb-2">{j.description}</div>}
+                          <div className="text-xs text-slate-500 mb-2">
+                            Partner cost: <b className="text-slate-700"><Money value={j.printCost} /></b>
+                            {j.costNote && j.costSource !== 'none' && <span className="text-slate-400"> · {j.costSource === 'entered' ? 'entered manually' : `basis ${j.costNote}`}</span>}
+                            {j.costSource === 'none' && <span className="text-amber-600"> · no cost basis yet — set ₹/sqft on the partner or enter it on the order</span>}
+                            {' · '}Margin <b className={(j.printMargin || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}><Money value={j.printMargin} /></b>
+                          </div>
                           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
                             {j.sites.map((s, i) => (
                               <div key={i} className="rounded-lg border border-slate-200 bg-white p-2">
@@ -307,6 +318,88 @@ function PartnerDetail({ id, onClose }) {
         </div>
       )}
     </Modal>
+  );
+}
+
+// Account-based statement: the running ledger (jobs as debits, payments as
+// credits) plus a PDF download and a WhatsApp/email send to the partner.
+function PartnerStatement({ partner }) {
+  const ledger = partner.ledger || [];
+  const owed = partner.summary?.balanceOwed || 0;
+
+  const statementText = () => {
+    const lines = [
+      `Statement of account — ${partner.name}`,
+      `As on ${new Date().toLocaleDateString('en-IN')}`,
+      `Total billed: ₹${(partner.summary?.totalPrintCost || 0).toLocaleString('en-IN')}`,
+      `Paid: ₹${(partner.summary?.totalPaid || 0).toLocaleString('en-IN')}`,
+      `Balance payable: ₹${owed.toLocaleString('en-IN')}`,
+      `— Saangri Advertising`,
+    ];
+    return lines.join('\n');
+  };
+
+  function share(channel) {
+    const to = channel === 'EMAIL' ? partner.email : partner.phone;
+    if (!to) return;
+    if (channel === 'EMAIL') {
+      window.location.href = `mailto:${partner.email}?subject=${encodeURIComponent(`Statement of account — Saangri Advertising`)}&body=${encodeURIComponent(statementText())}`;
+    } else {
+      window.open(`https://wa.me/${waDigits(partner.phone)}?text=${encodeURIComponent(statementText())}`, '_blank', 'noopener');
+    }
+    api.post(`/printing-partners/${partner.id}/statement/share`, { channel: channel === 'EMAIL' ? 'EMAIL' : 'WHATSAPP', toContact: to }).catch(() => {});
+  }
+
+  return (
+    <div className="rounded-xl border border-slate-200 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div className="text-sm font-semibold text-slate-700">Statement of account</div>
+        <div className="flex gap-2">
+          <button className="btn-ghost text-xs flex items-center gap-1.5" onClick={() => downloadFile(`/printing-partners/${partner.id}/statement/pdf`, `Statement-${partner.name}.pdf`)}>
+            <Download size={14} /> PDF
+          </button>
+          <button className="btn-ghost text-xs flex items-center gap-1.5" disabled={!partner.phone} onClick={() => share('WHATSAPP')}>
+            <Send size={14} /> WhatsApp
+          </button>
+          <button className="btn-ghost text-xs" disabled={!partner.email} onClick={() => share('EMAIL')}>Email</button>
+        </div>
+      </div>
+
+      {ledger.length === 0 ? (
+        <div className="text-xs text-slate-400">No ledger entries yet — job costs and payments will appear here.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-sm">
+            <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
+              <tr>
+                <th className="px-3 py-2 text-left">Date</th>
+                <th className="px-3 py-2 text-left">Particulars</th>
+                <th className="px-3 py-2 text-right">Debit</th>
+                <th className="px-3 py-2 text-right">Credit</th>
+                <th className="px-3 py-2 text-right">Balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ledger.map((r, i) => (
+                <tr key={i} className="border-t border-slate-100">
+                  <td className="px-3 py-1.5 text-slate-500 whitespace-nowrap">{new Date(r.date).toLocaleDateString('en-IN')}</td>
+                  <td className="px-3 py-1.5">{r.particulars}</td>
+                  <td className="px-3 py-1.5 text-right text-slate-700">{r.debit ? <Money value={r.debit} /> : '—'}</td>
+                  <td className="px-3 py-1.5 text-right text-emerald-700">{r.credit ? <Money value={r.credit} /> : '—'}</td>
+                  <td className="px-3 py-1.5 text-right font-medium">{<Money value={r.balance} />}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="bg-slate-50 font-semibold">
+              <tr>
+                <td className="px-3 py-2" colSpan="4">Balance payable</td>
+                <td className={`px-3 py-2 text-right ${owed > 0 ? 'text-red-600' : 'text-emerald-600'}`}><Money value={owed} /></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 

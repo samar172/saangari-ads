@@ -1,7 +1,10 @@
 const router = require('express').Router();
+const PDFDocument = require('pdfkit');
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
 const { logActivity } = require('../utils/activity');
+
+const INR = (n) => 'Rs ' + Math.round(Number(n || 0)).toLocaleString('en-IN');
 
 router.get('/', async (req, res) => {
   const partners = await prisma.printingPartner.findMany({
@@ -20,13 +23,15 @@ router.get('/', async (req, res) => {
 // nothing was actually printed for those.
 const COUNTED = ['CONFIRMED', 'LIVE', 'COMPLETED'];
 
-router.get('/:id', async (req, res) => {
-  const id = Number(req.params.id);
+// Load a partner and compute their whole account: print jobs (with cost derived
+// from the locked material rates), payments, the P&L summary and the running
+// ledger. Shared by the JSON detail, the PDF statement and the share route.
+async function loadPartnerAccount(id) {
   const partner = await prisma.printingPartner.findUnique({
     where: { id },
     include: { materials: { orderBy: { name: 'asc' } } },
   });
-  if (!partner) return res.status(404).json({ error: 'Printing partner not found' });
+  if (!partner) return null;
 
   const orders = await prisma.order.findMany({
     where: { printingPartnerId: id },
@@ -50,10 +55,31 @@ router.get('/:id', async (req, res) => {
     include: { recordedBy: { select: { name: true } } },
   });
 
+  // The partner's own material rates are the (locked) cost basis. When an order
+  // has no explicit printCost entered, fall back to prints × that material's rate
+  // so historical jobs still carry a payable derived from the rates on file.
+  const rateByMaterial = Object.fromEntries(partner.materials.map((m) => [m.name, m.rate]));
+
   const jobs = orders.map((o) => {
     // Cancelled line-items were never printed, so they don't add to the area.
     const live = o.items.filter((it) => it.status !== 'CANCELLED');
-    const totalSqft = live.reduce((s, it) => s + (it.site?.sqft || 0), 0);
+    const totalSqft = Math.round(live.reduce((s, it) => s + (it.site?.sqft || 0), 0) * 100) / 100;
+    const materialRate = o.printMaterial ? (rateByMaterial[o.printMaterial] || 0) : 0;
+
+    // Partner cost basis, in priority order:
+    //  1. explicit printCost entered on the order (a manual override wins);
+    //  2. area × the partner's locked ₹/sqft — flex/vinyl is billed by the sqft,
+    //     so this is the normal basis (e.g. 8960 sqft × ₹7.5 = ₹67,200);
+    //  3. prints × material rate, when a per-print material rate is on file;
+    //  4. otherwise unknown (0) until a cost is entered.
+    const bySqft = Math.round(totalSqft * (partner.ratePerSqft || 0));
+    const byMaterial = Math.round((o.noOfPrints || 0) * materialRate);
+    let effectiveCost, costSource, costNote;
+    if (o.printCost > 0) { effectiveCost = Math.round(o.printCost); costSource = 'entered'; costNote = 'entered'; }
+    else if (bySqft > 0) { effectiveCost = bySqft; costSource = 'sqft'; costNote = `${totalSqft} sqft × ₹${partner.ratePerSqft}`; }
+    else if (byMaterial > 0) { effectiveCost = byMaterial; costSource = 'material'; costNote = `${o.noOfPrints} × ₹${materialRate}`; }
+    else { effectiveCost = 0; costSource = 'none'; costNote = ''; }
+
     return {
       id: o.id,
       orderNo: o.orderNo,
@@ -65,9 +91,14 @@ router.get('/:id', async (req, res) => {
       noOfPrints: o.noOfPrints,
       printRate: o.printRate,
       printingTotal: o.printingTotal,
-      printCost: o.printCost || 0,
+      printMaterial: o.printMaterial || null,
+      materialRate,
+      printCost: effectiveCost,
+      costEntered: o.printCost || 0,
+      costSource,
+      costNote,
       // Margin on this job = what we charged the client − what we pay the partner.
-      printMargin: Math.round((o.printingTotal || 0) - (o.printCost || 0)),
+      printMargin: Math.round((o.printingTotal || 0) - effectiveCost),
       mountingCost: o.mountingCost,
       totalSqft: Math.round(totalSqft * 100) / 100,
       sites: live.map((it) => ({
@@ -104,8 +135,123 @@ router.get('/:id', async (req, res) => {
     ? Math.round(summary.totalPrintingValue / summary.totalPrints)
     : 0;
 
-  res.json({ ...partner, summary, jobs, payments });
+  return { ...partner, summary, jobs, payments, ledger: buildLedger(counted, payments) };
+}
+
+router.get('/:id', async (req, res) => {
+  const acc = await loadPartnerAccount(Number(req.params.id));
+  if (!acc) return res.status(404).json({ error: 'Printing partner not found' });
+  res.json(acc);
 });
+
+// Statement of account PDF for the partner — the ledger (jobs as debits, payments
+// as credits, running balance) they can be sent to reconcile what we owe.
+router.get('/:id/statement/pdf', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+  const acc = await loadPartnerAccount(Number(req.params.id));
+  if (!acc) return res.status(404).json({ error: 'Printing partner not found' });
+
+  const doc = new PDFDocument({ margin: 45, size: 'A4' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="Statement-${acc.name.replace(/[^A-Za-z0-9]+/g, '_')}.pdf"`);
+  doc.pipe(res);
+
+  const logoPath = require('path').join(__dirname, '../assets/logo.png');
+  try { doc.image(logoPath, 45, 45, { height: 35 }); doc.fontSize(9).fillColor('#555').text('Outdoor Media — Bikaner, Rajasthan', 45, 85); }
+  catch (e) { doc.fontSize(20).fillColor('#ef4444').text('SAANGRI ADVERTISING', 45, 45); }
+
+  doc.fontSize(16).fillColor('#000').text('STATEMENT OF ACCOUNT', 0, 48, { align: 'right' });
+  doc.fontSize(10).fillColor('#333').text(`As on ${new Date().toLocaleDateString('en-IN')}`, { align: 'right' });
+
+  doc.moveDown(1.8);
+  doc.fontSize(11).fillColor('#000').text('Printing Partner:', 45);
+  doc.fontSize(10).fillColor('#333').text(acc.name);
+  if (acc.contact) doc.text(acc.contact);
+  if (acc.phone) doc.text(`Phone: ${acc.phone}`);
+  if (acc.email) doc.text(`Email: ${acc.email}`);
+
+  // Ledger table header
+  doc.moveDown();
+  const x = { date: 45, part: 120, debit: 340, credit: 420, bal: 490 };
+  let y = doc.y + 4;
+  doc.rect(45, y - 2, 505, 18).fill('#ef4444');
+  doc.fillColor('#fff').fontSize(9)
+    .text('Date', x.date, y).text('Particulars', x.part, y)
+    .text('Debit', x.debit, y, { width: 70, align: 'right' })
+    .text('Credit', x.credit, y, { width: 60, align: 'right' })
+    .text('Balance', x.bal, y, { width: 60, align: 'right' });
+  y += 20;
+  doc.font('Helvetica').fillColor('#333');
+  for (const r of acc.ledger) {
+    doc.fontSize(8).fillColor('#333')
+      .text(new Date(r.date).toLocaleDateString('en-IN'), x.date, y, { width: 70 })
+      .text(r.particulars, x.part, y, { width: 215 })
+      .text(r.debit ? INR(r.debit) : '', x.debit, y, { width: 70, align: 'right' })
+      .text(r.credit ? INR(r.credit) : '', x.credit, y, { width: 60, align: 'right' })
+      .text(INR(r.balance), x.bal, y, { width: 60, align: 'right' });
+    y += Math.max(15, doc.heightOfString(r.particulars, { width: 215, fontSize: 8 }));
+    if (y > 730) { doc.addPage(); y = 60; }
+  }
+
+  y += 6;
+  doc.moveTo(45, y).lineTo(550, y).strokeColor('#ddd').stroke();
+  y += 8;
+  const s = acc.summary;
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#000')
+    .text(`Total billed: ${INR(s.totalPrintCost)}   Paid: ${INR(s.totalPaid)}`, 45, y);
+  doc.fontSize(12).fillColor(s.balanceOwed > 0 ? '#b91c1c' : '#15803d')
+    .text(`Balance payable: ${INR(s.balanceOwed)}`, 45, y + 16);
+
+  doc.font('Helvetica').fontSize(8).fillColor('#888')
+    .text('This is a computer-generated statement of amounts payable by Saangri Advertising to the printing partner.', 45, 770, { width: 505, align: 'center' });
+  doc.end();
+});
+
+// Log that a statement was shared with the partner over WhatsApp / email. The
+// message is opened client-side; this only records that it happened.
+router.post('/:id/statement/share', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+  const id = Number(req.params.id);
+  const { channel, toContact } = req.body || {};
+  const ch = channel === 'EMAIL' ? 'EMAIL' : 'WHATSAPP';
+  const partner = await prisma.printingPartner.findUnique({ where: { id }, select: { name: true } });
+  if (!partner) return res.status(404).json({ error: 'Printing partner not found' });
+  logActivity({
+    type: 'PARTNER_STATEMENT_SENT', user: req.user,
+    summary: `Statement sent (${ch === 'EMAIL' ? 'Email' : 'WhatsApp'}) · ${partner.name}`,
+    detail: toContact || '',
+  });
+  res.json({ ok: true });
+});
+
+// Account-based statement: each printed job is a DEBIT (cost we owe the partner),
+// each payment a CREDIT, in date order, with a running balance. The closing
+// balance is what's still outstanding. Shared by the JSON detail and the PDF.
+function buildLedger(countedJobs, payments) {
+  const rows = [];
+  for (const j of countedJobs) {
+    if (!(j.printCost > 0)) continue;
+    rows.push({
+      date: j.bookingDate,
+      type: 'DEBIT',
+      ref: j.orderNo,
+      particulars: `Printing — ${j.orderNo}${j.costNote && j.costSource !== 'entered' ? ` (${j.costNote})` : ''}`,
+      debit: j.printCost,
+      credit: 0,
+    });
+  }
+  for (const p of payments) {
+    rows.push({
+      date: p.paidAt,
+      type: 'CREDIT',
+      ref: p.reference || '',
+      particulars: `Payment received — ${p.mode}${p.reference ? ` · ${p.reference}` : ''}`,
+      debit: 0,
+      credit: Math.round(p.amount || 0),
+    });
+  }
+  rows.sort((a, b) => new Date(a.date) - new Date(b.date) || (a.type === 'DEBIT' ? -1 : 1));
+  let balance = 0;
+  return rows.map((r) => { balance += r.debit - r.credit; return { ...r, balance }; });
+}
 
 // Record a payment WE make to this partner (settles part of the payable). Manager
 // / Finance only, mirroring who can record client payments.
