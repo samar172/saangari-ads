@@ -24,6 +24,8 @@ import BookingAnalysis from './pages/BookingAnalysis';
 import PaymentRecord from './pages/PaymentRecord';
 import UserForm from './pages/UserForm';
 import CompanyForm from './pages/CompanyForm';
+import SiteForm from './pages/SiteForm';
+import SiteDetail from './pages/SiteDetail';
 import Reminders from './pages/Reminders';
 import PrintingPartners from './pages/PrintingPartners';
 import Companies from './pages/Companies';
@@ -47,6 +49,8 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<Protected><Inventory /></Protected>} />
             <Route path="/new-booking" element={<Protected><NewBooking /></Protected>} />
+            <Route path="/inventory/new" element={<Protected><SiteForm /></Protected>} />
+            <Route path="/inventory/:id" element={<Protected><SiteDetail /></Protected>} />
             <Route path="/orders" element={<Protected><Orders /></Protected>} />
             <Route path="/quotations" element={<Protected><Orders /></Protected>} />
             <Route path="/quotations/new" element={<Protected><SimpleQuotation /></Protected>} />
