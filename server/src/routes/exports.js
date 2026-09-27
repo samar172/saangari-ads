@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
+const { computeBookingAnalysis } = require('../utils/bookingAnalysis');
 
 const uploadDir = path.join(__dirname, '..', '..', 'uploads');
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
@@ -749,6 +750,86 @@ router.get('/orders/:id/photos.pptx', requireRole('SALES', 'MANAGER', 'FINANCE',
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
   res.setHeader('Content-Disposition', `attachment; filename="Monitoring-${order.orderNo}.pptx"`);
   res.end(buffer);
+});
+
+// FY Booking Analysis — multi-sheet workbook mirroring the client's reference file.
+router.get('/booking-analysis', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const { companyId, from, to, category, customer, zone, paymentStatus, paymentTerms } = req.query;
+  const d = await computeBookingAnalysis({ companyId, from, to, category, customer, zone, paymentStatus, paymentTerms });
+  const wb = new ExcelJS.Workbook();
+  const money = (n) => Math.round(Number(n || 0));
+  const pctCell = (f) => (f == null ? '' : Math.round(f * 1000) / 10 + '%');
+
+  const header = (ws, cols) => {
+    ws.columns = cols;
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF9E2015' } };
+  };
+
+  // Dashboard
+  const dash = wb.addWorksheet('Dashboard');
+  dash.addRow(['FY Booking Analysis']).font = { bold: true, size: 14 };
+  dash.addRow([]);
+  const kv = [
+    ['Bookings', d.dashboard.bookings], ['Customers', d.dashboard.customers], ['Site-Months', d.dashboard.siteMonths],
+    ['Billing ex-GST (₹)', money(d.dashboard.billingExGst)], ['GST (₹)', money(d.dashboard.gst)], ['Total Billing (₹)', money(d.dashboard.totalBilling)],
+    ['Received (₹)', money(d.dashboard.received)], ['Outstanding (₹)', money(d.dashboard.outstanding)],
+    ['Collection %', pctCell(d.dashboard.collectionPct)], ['Avg Billing / Booking (₹)', money(d.dashboard.avgBillingPerBooking)],
+    ['Avg Rate / Site-Month (₹)', money(d.dashboard.avgRatePerSiteMonth)], ['Advance Bookings %', pctCell(d.dashboard.advancePct)],
+    ['Top Category', d.dashboard.topCategory], ['Best Month', d.dashboard.bestMonth],
+  ];
+  kv.forEach(([k, v]) => { const r = dash.addRow([k, v]); r.getCell(1).font = { bold: true }; });
+  dash.getColumn(1).width = 26; dash.getColumn(2).width = 20;
+
+  const mw = wb.addWorksheet('Month-wise');
+  header(mw, [
+    { header: 'Month', key: 'label', width: 12 }, { header: 'Bookings', key: 'bookings', width: 10 },
+    { header: 'Site-Months', key: 'siteMonths', width: 12 }, { header: 'Customers Billed', key: 'customersBilled', width: 15 },
+    { header: 'New Customers', key: 'newCustomers', width: 14 }, { header: 'Billing ex-GST', key: 'billingExGst', width: 15 },
+    { header: 'GST', key: 'gst', width: 12 }, { header: 'Total', key: 'total', width: 14 }, { header: 'Received', key: 'received', width: 14 },
+    { header: 'Outstanding', key: 'outstanding', width: 14 }, { header: 'Collection %', key: 'collectionPct', width: 12 },
+    { header: 'MoM Growth', key: 'momGrowth', width: 12 }, { header: 'Share of Year', key: 'shareOfYear', width: 12 },
+  ]);
+  d.monthwise.forEach((m) => mw.addRow({ ...m, collectionPct: pctCell(m.collectionPct), momGrowth: pctCell(m.momGrowth), shareOfYear: pctCell(m.shareOfYear) }));
+
+  const cw = wb.addWorksheet('Category-wise');
+  header(cw, [
+    { header: 'Category', key: 'category', width: 20 }, { header: 'Bookings', key: 'bookings', width: 10 }, { header: 'Customers', key: 'customers', width: 11 },
+    { header: 'Site-Months', key: 'siteMonths', width: 12 }, { header: 'Billing ex-GST', key: 'billingExGst', width: 15 }, { header: 'Share of Billing', key: 'shareOfBilling', width: 14 },
+    { header: 'GST', key: 'gst', width: 12 }, { header: 'Total', key: 'total', width: 14 }, { header: 'Received', key: 'received', width: 14 }, { header: 'Outstanding', key: 'outstanding', width: 14 },
+    { header: 'Collection %', key: 'collectionPct', width: 12 }, { header: 'Avg Rate / Site-Mo', key: 'avgRatePerSiteMonth', width: 16 }, { header: 'Avg Billing / Book', key: 'avgBillingPerBooking', width: 16 },
+  ]);
+  d.categorywise.forEach((c) => cw.addRow({ ...c, shareOfBilling: pctCell(c.shareOfBilling), collectionPct: pctCell(c.collectionPct) }));
+
+  const uw = wb.addWorksheet('Customer-wise');
+  header(uw, [
+    { header: '#', key: 'rank', width: 5 }, { header: 'Customer', key: 'customer', width: 24 }, { header: 'Category', key: 'category', width: 16 },
+    { header: 'Contact Person', key: 'contact', width: 18 }, { header: 'Contact No', key: 'phone', width: 14 }, { header: 'Bookings', key: 'bookings', width: 9 },
+    { header: 'First Month', key: 'firstMonth', width: 11 }, { header: 'Last Month', key: 'lastMonth', width: 11 }, { header: 'Site-Months', key: 'siteMonths', width: 12 },
+    { header: 'Billing ex-GST', key: 'billingExGst', width: 15 }, { header: 'GST', key: 'gst', width: 12 }, { header: 'Total', key: 'total', width: 14 },
+    { header: 'Received', key: 'received', width: 14 }, { header: 'Outstanding', key: 'outstanding', width: 14 }, { header: 'Collection %', key: 'collectionPct', width: 12 }, { header: 'Status', key: 'paymentStatus', width: 12 },
+  ]);
+  d.customerwise.forEach((u) => uw.addRow({ ...u, collectionPct: pctCell(u.collectionPct) }));
+
+  const pw = wb.addWorksheet('Payment Status');
+  header(pw, [
+    { header: 'Payment Status', key: 'status', width: 16 }, { header: 'Bookings', key: 'bookings', width: 10 }, { header: 'Total Billing', key: 'totalBilling', width: 15 },
+    { header: 'Received', key: 'received', width: 14 }, { header: 'Outstanding', key: 'outstanding', width: 14 }, { header: 'Share of Billing', key: 'shareOfBilling', width: 14 }, { header: 'Customers', key: 'customers', width: 11 },
+  ]);
+  d.paymentStatus.forEach((s) => pw.addRow({ ...s, shareOfBilling: pctCell(s.shareOfBilling) }));
+
+  const fw = wb.addWorksheet('Pending Follow-up');
+  header(fw, [
+    { header: '#', key: 'rank', width: 5 }, { header: 'Customer', key: 'customer', width: 24 }, { header: 'Category', key: 'category', width: 16 },
+    { header: 'Contact Person', key: 'contact', width: 18 }, { header: 'Contact No', key: 'phone', width: 14 }, { header: 'Outstanding', key: 'outstanding', width: 14 },
+    { header: 'Oldest Due Month', key: 'oldestDueMonth', width: 15 }, { header: 'Bookings Due', key: 'bookingsDue', width: 12 },
+  ]);
+  d.pendingFollowup.forEach((p) => fw.addRow(p));
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="FY_Booking_Analysis.xlsx"');
+  await wb.xlsx.write(res);
+  res.end();
 });
 
 module.exports = router;

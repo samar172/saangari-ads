@@ -18,6 +18,12 @@ import ClientDetail from './pages/ClientDetail';
 import ClientForm from './pages/ClientForm';
 import PartnerDetail from './pages/PartnerDetail';
 import PartnerForm from './pages/PartnerForm';
+import InvoiceGenerate from './pages/InvoiceGenerate';
+import InvoiceEdit from './pages/InvoiceEdit';
+import BookingAnalysis from './pages/BookingAnalysis';
+import PaymentRecord from './pages/PaymentRecord';
+import UserForm from './pages/UserForm';
+import CompanyForm from './pages/CompanyForm';
 import Reminders from './pages/Reminders';
 import PrintingPartners from './pages/PrintingPartners';
 import Companies from './pages/Companies';
@@ -58,12 +64,20 @@ export default function App() {
             {/* Categories moved into Business Setup; keep old links working. */}
             <Route path="/categories" element={<Navigate to="/settings/companies" replace />} />
             <Route path="/invoices" element={<Protected><Invoices /></Protected>} />
+            <Route path="/invoices/new" element={<Protected><InvoiceGenerate /></Protected>} />
             <Route path="/invoices/:id" element={<Protected><InvoiceDetail /></Protected>} />
+            <Route path="/invoices/:id/edit" element={<Protected><InvoiceEdit /></Protected>} />
             <Route path="/reports" element={<Protected><Reports /></Protected>} />
+            <Route path="/booking-analysis" element={<Protected><BookingAnalysis /></Protected>} />
             <Route path="/payments" element={<Protected><Payments /></Protected>} />
+            <Route path="/payments/record" element={<Protected><PaymentRecord /></Protected>} />
             <Route path="/accounts" element={<Protected><Accounts /></Protected>} />
             <Route path="/settings/companies" element={<Protected><Companies /></Protected>} />
+            <Route path="/settings/companies/new" element={<Protected><CompanyForm /></Protected>} />
+            <Route path="/settings/companies/:id/edit" element={<Protected><CompanyForm /></Protected>} />
             <Route path="/users" element={<Protected><Users /></Protected>} />
+            <Route path="/users/new" element={<Protected><UserForm /></Protected>} />
+            <Route path="/users/:id/edit" element={<Protected><UserForm /></Protected>} />
             <Route path="/approvals" element={<Protected><Approvals /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

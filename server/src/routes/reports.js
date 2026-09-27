@@ -2,6 +2,7 @@ const router = require('express').Router();
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
 const { computePrintCost } = require('../utils/printingCost');
+const { computeBookingAnalysis } = require('../utils/bookingAnalysis');
 
 const NON_CANCELLED = { notIn: ['CANCELLED'] };
 
@@ -329,6 +330,15 @@ router.get('/receivables', requireRole('MANAGER', 'FINANCE'), async (req, res) =
     overdue: overdue.slice(0, 25),
     overdueCount: overdue.length,
   });
+});
+
+// FY Booking Analysis — mirrors the client's workbook (Dashboard, Month-wise,
+// Category-wise, Customer-wise, Payment Status, Pending Follow-up).
+router.get('/booking-analysis', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const { companyId, from, to, category, customer, zone, paymentStatus, paymentTerms } = req.query;
+  const data = await computeBookingAnalysis({ companyId, from, to, category, customer, zone, paymentStatus, paymentTerms });
+  delete data.lines; // raw lines are for the Excel export only
+  res.json(data);
 });
 
 module.exports = router;
