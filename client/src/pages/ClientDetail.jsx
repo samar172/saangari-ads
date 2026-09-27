@@ -63,7 +63,7 @@ export default function ClientDetail() {
           <Info k="Phone" v={c.phone} />
           <Info k="Category" v={c.category?.name || <span className="text-slate-400">Uncategorised</span>} />
           <Info k="Tax" v={c.taxCategory} />
-          <Info k="Balance" v={<span className={c.balance > 0 ? 'text-red-600 font-bold' : 'text-emerald-600 font-bold'}><Money value={c.balance} /></span>} />
+          <Info k="Balance" v={<span className={`font-bold ${c.balance > 0 ? 'text-red-600' : c.balance < 0 ? 'text-emerald-600' : 'text-slate-500'}`}><Money value={Math.abs(c.balance)} />{c.balance < 0 ? ' Cr' : c.balance > 0 ? ' Dr' : ''}</span>} />
         </div>
 
         {can(user, 'exportInventory') && (

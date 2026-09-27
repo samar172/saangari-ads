@@ -89,7 +89,7 @@ export default function PartnerDetail() {
           <StatTile label="Printing Charged" value={<Money value={p.summary.totalPrintingValue} />} sub="billed to clients" />
           <StatTile label="Partner Cost" value={<Money value={p.summary.totalPrintCost} />} sub="what you pay them" />
           <StatTile label="Printing Margin" value={<Money value={p.summary.printingMargin} />} sub="charged − cost" accent={p.summary.printingMargin >= 0 ? 'text-emerald-600' : 'text-red-600'} />
-          <StatTile label="Balance Owed" value={<Money value={p.summary.balanceOwed} />} sub={`paid ₹${(p.summary.totalPaid || 0).toLocaleString('en-IN')}`} accent={p.summary.balanceOwed > 0 ? 'text-red-600' : 'text-slate-700'} />
+          <StatTile label={p.summary.balanceOwed < 0 ? 'Advance to partner' : 'Balance Owed'} value={<Money value={Math.abs(p.summary.balanceOwed)} />} sub={`paid ₹${(p.summary.totalPaid || 0).toLocaleString('en-IN')}`} accent={p.summary.balanceOwed > 0 ? 'text-red-600' : p.summary.balanceOwed < 0 ? 'text-emerald-600' : 'text-slate-700'} />
         </div>
 
         <div className="text-xs text-slate-400">
@@ -284,14 +284,18 @@ function PartnerStatement({ partner }) {
                   <td className="px-3 py-1.5">{r.particulars}</td>
                   <td className="px-3 py-1.5 text-right text-slate-700">{r.debit ? <Money value={r.debit} /> : '—'}</td>
                   <td className="px-3 py-1.5 text-right text-emerald-700">{r.credit ? <Money value={r.credit} /> : '—'}</td>
-                  <td className="px-3 py-1.5 text-right font-medium">{<Money value={r.balance} />}</td>
+                  <td className="px-3 py-1.5 text-right font-medium">{r.balance < 0
+                    ? <span className="text-emerald-600"><Money value={Math.abs(r.balance)} /> Adv</span>
+                    : <Money value={r.balance} />}</td>
                 </tr>
               ))}
             </tbody>
             <tfoot className="bg-slate-50 font-semibold">
               <tr>
                 <td className="px-3 py-2" colSpan="4">Balance payable</td>
-                <td className={`px-3 py-2 text-right ${owed > 0 ? 'text-red-600' : 'text-emerald-600'}`}><Money value={owed} /></td>
+                <td className={`px-3 py-2 text-right ${owed > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{owed < 0
+                  ? <><Money value={Math.abs(owed)} /> Adv</>
+                  : <Money value={owed} />}</td>
               </tr>
             </tfoot>
           </table>
@@ -334,7 +338,7 @@ function PartnerPayments({ partner, editable, onChanged }) {
     <div className="rounded-xl border border-slate-200 p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm font-semibold text-slate-700">Payments to this partner</div>
-        <div className="text-xs text-slate-500">Owed <span className={`font-semibold ${partner.summary.balanceOwed > 0 ? 'text-red-600' : 'text-slate-700'}`}><Money value={partner.summary.balanceOwed} /></span></div>
+        <div className="text-xs text-slate-500">{partner.summary.balanceOwed < 0 ? 'Advance' : 'Owed'} <span className={`font-semibold ${partner.summary.balanceOwed > 0 ? 'text-red-600' : partner.summary.balanceOwed < 0 ? 'text-emerald-600' : 'text-slate-700'}`}><Money value={Math.abs(partner.summary.balanceOwed)} /></span></div>
       </div>
 
       {payments.length === 0 ? (

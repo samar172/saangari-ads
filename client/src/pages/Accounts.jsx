@@ -166,7 +166,7 @@ function Receivables({ cid, refreshKey, onOpenParty }) {
                 <td className="px-4 py-2">Total</td>
                 <td className="px-4 py-2 text-right"><Money value={data.totals?.debit || 0} /></td>
                 <td className="px-4 py-2 text-right text-emerald-700"><Money value={data.totals?.credit || 0} /></td>
-                <td className={`px-4 py-2 text-right ${(data.totals?.balance || 0) > 0 ? 'text-red-600' : 'text-slate-600'}`}><Money value={Math.abs(data.totals?.balance || 0)} /></td>
+                <td className="px-4 py-2 text-right"><Bal value={data.totals?.balance || 0} /></td>
               </tr>
             </tfoot>
           )}

@@ -22,7 +22,11 @@ export function Badge({ status, children }) {
 }
 
 export function Money({ value }) {
-  return <>₹{Number(value || 0).toLocaleString('en-IN')}</>;
+  // Put the minus before the ₹ (–₹10,620), never after it (₹-10,620). Ledger
+  // balances should prefer the Dr/Cr convention, but this keeps any stray
+  // negative reading correctly.
+  const n = Number(value || 0);
+  return <>{n < 0 ? '-' : ''}₹{Math.abs(n).toLocaleString('en-IN')}</>;
 }
 
 export function Modal({ open, onClose, title, children, wide }) {
