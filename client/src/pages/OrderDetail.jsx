@@ -69,6 +69,7 @@ export default function OrderDetail() {
               const who = o.client.company?.trim() || o.client.name;
               const text = `Dear ${who}, your booking ${o.orderNo} (${o.items.length} site${o.items.length !== 1 ? 's' : ''}) is confirmed. — ${o.company?.name || 'Saangari Ads'}`;
               window.open(`https://wa.me/${waDigits(o.client.phone)}?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+              api.post('/whatsapp/log', { kind: 'BOOKING', entityType: 'order', entityId: o.id, toName: who, toNumber: o.client.phone, channel: 'WHATSAPP', label: o.orderNo }).catch(() => {});
             }}>
             <Send size={16} /> WhatsApp
           </button>

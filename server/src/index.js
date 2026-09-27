@@ -47,6 +47,7 @@ app.use('/api/approvals', require('./routes/approvals'));
 app.use('/api/accounts', require('./routes/accounts'));
 app.use('/api/search', require('./routes/search'));
 app.use('/api/whatsapp-settings', require('./routes/whatsapp'));
+app.use('/api/whatsapp', require('./routes/whatsapp'));
 // Central error handler
 app.use((err, req, res, next) => {
   console.error(err);

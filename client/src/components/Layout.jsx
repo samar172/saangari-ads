@@ -22,7 +22,7 @@ const NAV = [
   { to: '/accounts', label: 'Accounts', icon: BookOpen, show: (u) => can(u, 'viewReports') },
   { to: '/approvals', label: 'Approvals', icon: ShieldCheck, show: (u) => u.role === 'MANAGER' || u.role === 'SUPER_ADMIN', badge: 'approvals' },
   { to: '/settings/companies', label: 'Business Setup', icon: Building2, show: (u) => can(u, 'manageCategories') },
-  { to: '/settings/whatsapp', label: 'WhatsApp', icon: MessageCircle, show: (u) => u.role === 'MANAGER' || u.role === 'SUPER_ADMIN' },
+  { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, show: () => true },
   { to: '/users', label: 'Users', icon: Settings, show: (u) => u.role === 'SUPER_ADMIN' },
 ];
 

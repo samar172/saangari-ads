@@ -135,6 +135,7 @@ model User {
   notes           Note[]            @relation("UserNotes")
   partnerPayments PartnerPayment[]  @relation("PartnerPaymentBy")
   partnerBills    PartnerBill[]     @relation("PartnerBillBy")
+  whatsAppSends   WhatsAppLog[]     @relation("WhatsAppSentBy")
 
   approvalsRequested ApprovalRequest[] @relation("ApprovalRequestedBy")
   approvalsReviewed  ApprovalRequest[] @relation("ApprovalReviewedBy")
@@ -644,4 +645,22 @@ model WhatsAppSetting {
   tplExpiry     String?
   tplBillingDue String?
   updatedAt     DateTime @updatedAt @default(now())
+}
+
+// Record of every WhatsApp/email send from the app, so the WhatsApp Outbox can
+// show which invoices/bookings/reminders have been sent and which haven't.
+model WhatsAppLog {
+  id         Int      @id @default(autoincrement())
+  kind       String   // INVOICE | BOOKING | REMINDER | STATEMENT | OTHER
+  entityType String?  // invoice | order | partner
+  entityId   Int?
+  channel    String   @default("WHATSAPP") // WHATSAPP | EMAIL
+  toName     String?
+  toNumber   String?
+  label      String?
+  sentBy     User?    @relation("WhatsAppSentBy", fields: [sentById], references: [id])
+  sentById   Int?
+  sentAt     DateTime @default(now())
+
+  @@index([kind, entityId])
 }

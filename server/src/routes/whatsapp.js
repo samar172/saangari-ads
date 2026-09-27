@@ -46,4 +46,55 @@ router.put('/', requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
   res.json({ ...s, apiToken: undefined, hasApiToken: !!s.apiToken });
 });
 
+// Record a send (called after the client opens wa.me / mailto).
+router.post('/log', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) => {
+  const b = req.body || {};
+  const entry = await prisma.whatsAppLog.create({
+    data: {
+      kind: b.kind || 'OTHER',
+      entityType: b.entityType || null,
+      entityId: b.entityId != null ? Number(b.entityId) : null,
+      channel: b.channel === 'EMAIL' ? 'EMAIL' : 'WHATSAPP',
+      toName: b.toName || null, toNumber: b.toNumber || null, label: b.label || null,
+      sentById: req.user.id,
+    },
+  });
+  res.status(201).json(entry);
+});
+
+// Recent send log.
+router.get('/log', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) => {
+  const rows = await prisma.whatsAppLog.findMany({
+    orderBy: { sentAt: 'desc' }, take: 100,
+    include: { sentBy: { select: { name: true } } },
+  });
+  res.json(rows);
+});
+
+// Outbox: sendable items (invoices + confirmed bookings) with sent/not-sent status.
+router.get('/outbox', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) => {
+  const { companyId } = req.query;
+  const cw = companyId ? { companyId: Number(companyId) } : {};
+  const [invoices, orders, logs] = await Promise.all([
+    prisma.invoice.findMany({
+      where: { status: { not: 'CANCELLED' }, ...cw },
+      orderBy: { issuedAt: 'desc' }, take: 200,
+      select: { id: true, invoiceNo: true, total: true, issuedAt: true, client: { select: { name: true, company: true, phone: true } } },
+    }),
+    prisma.order.findMany({
+      where: { status: { in: ['CONFIRMED', 'LIVE', 'COMPLETED'] }, ...cw },
+      orderBy: { bookingDate: 'desc' }, take: 200,
+      select: { id: true, orderNo: true, bookingDate: true, client: { select: { name: true, company: true, phone: true } }, items: { select: { id: true } } },
+    }),
+    prisma.whatsAppLog.findMany({ select: { kind: true, entityId: true, sentAt: true } }),
+  ]);
+  const lastSent = {}; // `${kind}:${entityId}` -> sentAt
+  for (const l of logs) { const k = `${l.kind}:${l.entityId}`; if (!lastSent[k] || l.sentAt > lastSent[k]) lastSent[k] = l.sentAt; }
+  const who = (c) => c?.company?.trim() || c?.name || '';
+  res.json({
+    invoices: invoices.map((i) => ({ id: i.id, invoiceNo: i.invoiceNo, client: who(i.client), phone: i.client?.phone, total: i.total, issuedAt: i.issuedAt, sentAt: lastSent[`INVOICE:${i.id}`] || null })),
+    bookings: orders.map((o) => ({ id: o.id, orderNo: o.orderNo, client: who(o.client), phone: o.client?.phone, sites: o.items.length, bookingDate: o.bookingDate, sentAt: lastSent[`BOOKING:${o.id}`] || null })),
+  });
+});
+
 module.exports = router;

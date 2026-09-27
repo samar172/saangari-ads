@@ -153,8 +153,11 @@ function SendBillModal({ invoice, onClose, onSent }) {
   ].filter(Boolean).join('\n');
 
   function logShare(channel) {
-    api.post(`/invoices/${invoice.id}/share`, { channel, toName: chosen?.label, toContact: channel === 'EMAIL' ? chosen?.email : chosen?.phone })
+    const toContact = channel === 'EMAIL' ? chosen?.email : chosen?.phone;
+    api.post(`/invoices/${invoice.id}/share`, { channel, toName: chosen?.label, toContact })
       .then(() => onSent?.()).catch(() => {});
+    // Also record in the WhatsApp outbox log so the invoice flips to "Sent" there.
+    api.post('/whatsapp/log', { kind: 'INVOICE', entityType: 'invoice', entityId: invoice.id, channel, toName: chosen?.label, toNumber: toContact, label: invoice.invoiceNo }).catch(() => {});
   }
 
   function sendWhatsApp() {
