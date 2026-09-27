@@ -96,6 +96,20 @@ export default function PartnerDetail() {
           Totals count confirmed, live and completed orders only — quotations and cancelled orders are listed but never printed.
         </div>
 
+        {/* Bill matching: our expected cost vs what the partner actually billed. */}
+        <div className="rounded-xl border border-slate-200 p-4">
+          <div className="text-sm font-semibold text-slate-700 mb-3">Bill reconciliation</div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <StatTile label="Expected cost" value={<Money value={p.summary.expectedCost} />} sub="our ₹/sqft derivation" />
+            <StatTile label="Billed by partner" value={<Money value={p.summary.totalBilled} />} sub="their invoices" accent="text-slate-700" />
+            <StatTile label="Variance" value={<Money value={p.summary.billedVariance} />} sub={p.summary.billedVariance > 0 ? 'billed over expected' : 'within expected'} accent={p.summary.billedVariance > 0 ? 'text-red-600' : 'text-emerald-600'} />
+            <StatTile label="Paid" value={<Money value={p.summary.totalPaid} />} accent="text-emerald-600" />
+            <StatTile label="Balance payable" value={<Money value={Math.abs(p.summary.balanceOwed)} />} sub={p.summary.balanceOwed < 0 ? 'advance' : (p.summary.totalBilled > 0 ? 'on their bills' : 'on expected cost')} accent={p.summary.balanceOwed > 0 ? 'text-red-600' : 'text-slate-700'} />
+          </div>
+        </div>
+
+        <PartnerBills partner={p} editable={can(user, 'managePartners')} onChanged={reload} />
+
         <PartnerPayments partner={p} editable={can(user, 'managePartners')} onChanged={reload} />
 
         <PartnerStatement partner={p} />
@@ -300,6 +314,87 @@ function PartnerStatement({ partner }) {
             </tfoot>
           </table>
         </div>
+      )}
+    </div>
+  );
+}
+
+// Bills the partner raises against us (their invoices). Recording them lets us
+// match their charge vs our expected cost and drives the payable.
+function PartnerBills({ partner, editable, onChanged }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const blank = { amount: '', billNo: '', billDate: today, notes: '' };
+  const [form, setForm] = useState(blank);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const bills = partner.bills || [];
+
+  async function record(e) {
+    e.preventDefault();
+    if (!(Number(form.amount) > 0)) { setErr('Enter an amount'); return; }
+    setBusy(true); setErr('');
+    try {
+      await api.post(`/printing-partners/${partner.id}/bills`, {
+        amount: Number(form.amount), billNo: form.billNo || undefined, billDate: form.billDate || undefined, notes: form.notes || undefined,
+      });
+      setForm(blank);
+      await onChanged();
+    } catch (e2) { setErr(e2.response?.data?.error || 'Could not record bill'); }
+    finally { setBusy(false); }
+  }
+
+  async function remove(bid) {
+    await api.delete(`/printing-partners/bills/${bid}`);
+    await onChanged();
+  }
+
+  return (
+    <div className="rounded-xl border border-slate-200 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm font-semibold text-slate-700">Partner bills (their invoices)</div>
+        <div className="text-xs text-slate-500">Billed <span className="font-semibold text-slate-700"><Money value={partner.summary.totalBilled} /></span></div>
+      </div>
+
+      {bills.length === 0 ? (
+        <div className="text-xs text-slate-400 mb-3">No bills recorded. Until you enter their invoices, the payable uses our expected cost (₹/sqft).</div>
+      ) : (
+        <div className="space-y-1.5 mb-3">
+          {bills.map((b) => (
+            <div key={b.id} className="flex items-center justify-between gap-2 text-sm rounded-lg bg-slate-50 border border-slate-100 px-3 py-1.5">
+              <div className="min-w-0">
+                <span className="font-medium text-slate-800"><Money value={b.amount} /></span>
+                {b.billNo && <span className="badge bg-slate-100 text-slate-600 ml-2 text-[10px]">{b.billNo}</span>}
+                <span className="text-xs text-slate-500 ml-2">{new Date(b.billDate).toLocaleDateString('en-IN')}{b.notes ? ` · ${b.notes}` : ''}{b.recordedBy?.name ? ` · ${b.recordedBy.name}` : ''}</span>
+              </div>
+              {editable && <button className="text-xs text-slate-400 hover:text-red-600 shrink-0" onClick={() => remove(b.id)}>Delete</button>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editable && (
+        <form onSubmit={record} className="grid grid-cols-2 sm:grid-cols-5 gap-2 items-end">
+          <div className="col-span-2 sm:col-span-1">
+            <div className="text-[10px] text-slate-400 mb-0.5">Amount ₹</div>
+            <input type="number" min="1" className="input py-1.5 text-sm" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
+          </div>
+          <div>
+            <div className="text-[10px] text-slate-400 mb-0.5">Bill no.</div>
+            <input className="input py-1.5 text-sm" placeholder="their invoice #" value={form.billNo} onChange={(e) => setForm({ ...form, billNo: e.target.value })} />
+          </div>
+          <div>
+            <div className="text-[10px] text-slate-400 mb-0.5">Bill date</div>
+            <input type="date" max={today} className="input py-1.5 text-sm" value={form.billDate} onChange={(e) => setForm({ ...form, billDate: e.target.value })} />
+          </div>
+          <div>
+            <div className="text-[10px] text-slate-400 mb-0.5">Notes</div>
+            <input className="input py-1.5 text-sm" placeholder="e.g. Aug flex jobs" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+          </div>
+          <div className="col-span-2 sm:col-span-5">
+            {err && <div className="text-xs text-red-600 mb-1">{err}</div>}
+            <button className="btn-primary text-sm py-1.5" disabled={busy}>{busy ? 'Saving…' : 'Record bill'}</button>
+          </div>
+        </form>
       )}
     </div>
   );

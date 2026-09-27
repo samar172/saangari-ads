@@ -134,6 +134,7 @@ model User {
   shifts          SiteShift[]       @relation("ShiftedBy")
   notes           Note[]            @relation("UserNotes")
   partnerPayments PartnerPayment[]  @relation("PartnerPaymentBy")
+  partnerBills    PartnerBill[]     @relation("PartnerBillBy")
 
   approvalsRequested ApprovalRequest[] @relation("ApprovalRequestedBy")
   approvalsReviewed  ApprovalRequest[] @relation("ApprovalReviewedBy")
@@ -279,6 +280,23 @@ model PrintingPartner {
   materials PrintingMaterial[]
   orders    Order[]
   payments  PartnerPayment[]
+  bills     PartnerBill[]
+}
+
+// A bill the partner raises against US (their invoice). Recording it lets us
+// match what they charge against our derived expected cost, and it drives the
+// payable once present (balance = Σ bills − Σ payments).
+model PartnerBill {
+  id           Int             @id @default(autoincrement())
+  partner      PrintingPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  partnerId    Int
+  billNo       String?
+  billDate     DateTime        @default(now())
+  amount       Float
+  notes        String?
+  recordedBy   User            @relation("PartnerBillBy", fields: [recordedById], references: [id])
+  recordedById Int
+  createdAt    DateTime        @default(now())
 }
 
 // A payment WE make to a printing partner (settling what we owe them for jobs).

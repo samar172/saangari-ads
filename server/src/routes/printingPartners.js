@@ -55,6 +55,14 @@ async function loadPartnerAccount(id) {
     include: { recordedBy: { select: { name: true } } },
   });
 
+  // Bills the partner has raised against us (their invoices). Once present these
+  // drive the payable and the ledger; until then we fall back to derived cost.
+  const bills = await prisma.partnerBill.findMany({
+    where: { partnerId: id },
+    orderBy: { billDate: 'desc' },
+    include: { recordedBy: { select: { name: true } } },
+  });
+
   // Each material carries its own cost-per-sqft (what the partner charges US for
   // that material): White Base ₹5.5/sqft, Black Base ₹7.5/sqft. `rate` on the
   // material is the CUSTOMER charge and is not a cost.
@@ -118,6 +126,7 @@ async function loadPartnerAccount(id) {
   const totalPrintingValue = Math.round(counted.reduce((s, j) => s + (j.printingTotal || 0), 0));
   const totalPrintCost = Math.round(counted.reduce((s, j) => s + (j.printCost || 0), 0));
   const totalPaid = Math.round(payments.reduce((s, p) => s + (p.amount || 0), 0));
+  const totalBilled = Math.round(bills.reduce((s, b) => s + (b.amount || 0), 0));
   const summary = {
     totalOrders: jobs.length,
     countedOrders: counted.length,
@@ -127,9 +136,15 @@ async function loadPartnerAccount(id) {
     // Cost owed to the partner for those same jobs, and the resulting margin.
     totalPrintCost,
     printingMargin: totalPrintingValue - totalPrintCost,
-    // Partner payable: what we owe (job cost) minus what we've already paid them.
+    // AP reconciliation: what we EXPECT to pay (derived) vs what the partner has
+    // actually BILLED us, and the variance (positive = they billed more).
+    expectedCost: totalPrintCost,
+    totalBilled,
+    billedVariance: totalBilled - totalPrintCost,
+    // Partner payable: their actual bills drive it once recorded, else the
+    // derived expected cost — minus what we've already paid them.
     totalPaid,
-    balanceOwed: totalPrintCost - totalPaid,
+    balanceOwed: (totalBilled > 0 ? totalBilled : totalPrintCost) - totalPaid,
     totalSqft: Math.round(counted.reduce((s, j) => s + j.totalSqft, 0) * 100) / 100,
     totalSites: counted.reduce((s, j) => s + j.sites.length, 0),
   };
@@ -137,7 +152,7 @@ async function loadPartnerAccount(id) {
     ? Math.round(summary.totalPrintingValue / summary.totalPrints)
     : 0;
 
-  return { ...partner, summary, jobs, payments, ledger: buildLedger(counted, payments) };
+  return { ...partner, summary, jobs, payments, bills, ledger: buildLedger(counted, payments, bills) };
 }
 
 router.get('/:id', async (req, res) => {
@@ -198,8 +213,9 @@ router.get('/:id/statement/pdf', requireRole('FINANCE', 'MANAGER'), async (req, 
   doc.moveTo(45, y).lineTo(550, y).strokeColor('#ddd').stroke();
   y += 8;
   const s = acc.summary;
+  const billedForPdf = s.totalBilled > 0 ? s.totalBilled : s.expectedCost;
   doc.font('Helvetica-Bold').fontSize(10).fillColor('#000')
-    .text(`Total billed: ${INR(s.totalPrintCost)}   Paid: ${INR(s.totalPaid)}`, 45, y);
+    .text(`${s.totalBilled > 0 ? 'Billed by partner' : 'Expected cost'}: ${INR(billedForPdf)}   Paid: ${INR(s.totalPaid)}`, 45, y);
   doc.fontSize(12).fillColor(s.balanceOwed > 0 ? '#b91c1c' : '#15803d')
     .text(`Balance payable: ${INR(s.balanceOwed)}`, 45, y + 16);
 
@@ -227,18 +243,33 @@ router.post('/:id/statement/share', requireRole('FINANCE', 'MANAGER'), async (re
 // Account-based statement: each printed job is a DEBIT (cost we owe the partner),
 // each payment a CREDIT, in date order, with a running balance. The closing
 // balance is what's still outstanding. Shared by the JSON detail and the PDF.
-function buildLedger(countedJobs, payments) {
+function buildLedger(countedJobs, payments, bills = []) {
   const rows = [];
-  for (const j of countedJobs) {
-    if (!(j.printCost > 0)) continue;
-    rows.push({
-      date: j.bookingDate,
-      type: 'DEBIT',
-      ref: j.orderNo,
-      particulars: `Printing — ${j.orderNo}${j.costNote && j.costSource !== 'entered' ? ` (${j.costNote})` : ''}`,
-      debit: j.printCost,
-      credit: 0,
-    });
+  if (bills.length) {
+    // Their actual invoices drive the payable once recorded.
+    for (const b of bills) {
+      rows.push({
+        date: b.billDate,
+        type: 'DEBIT',
+        ref: b.billNo || '',
+        particulars: `Partner bill${b.billNo ? ` ${b.billNo}` : ''}${b.notes ? ` — ${b.notes}` : ''}`,
+        debit: Math.round(b.amount || 0),
+        credit: 0,
+      });
+    }
+  } else {
+    // No bills recorded yet — fall back to our derived job costs.
+    for (const j of countedJobs) {
+      if (!(j.printCost > 0)) continue;
+      rows.push({
+        date: j.bookingDate,
+        type: 'DEBIT',
+        ref: j.orderNo,
+        particulars: `Printing — ${j.orderNo}${j.costNote && j.costSource !== 'entered' ? ` (${j.costNote})` : ''}`,
+        debit: j.printCost,
+        credit: 0,
+      });
+    }
   }
   for (const p of payments) {
     rows.push({
@@ -304,6 +335,56 @@ router.delete('/payments/:pid', requireRole('MANAGER', 'FINANCE'), async (req, r
   const pid = Number(req.params.pid);
   if (!Number.isInteger(pid)) return res.status(400).json({ error: 'Invalid payment id' });
   await prisma.partnerPayment.delete({ where: { id: pid } });
+  res.json({ ok: true });
+});
+
+// ── Partner bills (their invoices to us) ──────────────────────────────────────
+// Record the amount the partner charges us so it can be matched against our
+// derived expected cost, and so the payable reflects their actual invoices.
+router.post('/:id/bills', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const partnerId = Number(req.params.id);
+  if (!Number.isInteger(partnerId)) return res.status(400).json({ error: 'Invalid partner id' });
+  const { billNo, billDate, amount, notes } = req.body || {};
+  const amt = Math.round(Number(amount) || 0);
+  if (!(amt > 0)) return res.status(400).json({ error: 'Amount must be greater than zero' });
+
+  const partner = await prisma.printingPartner.findUnique({ where: { id: partnerId } });
+  if (!partner) return res.status(404).json({ error: 'Printing partner not found' });
+
+  let when;
+  if (billDate) { const d = new Date(billDate); if (!Number.isNaN(d.getTime())) when = d; }
+
+  const bill = await prisma.partnerBill.create({
+    data: {
+      partnerId, billNo: billNo || null, amount: amt, notes: notes || null,
+      recordedById: req.user.id, ...(when ? { billDate: when } : {}),
+    },
+  });
+  logActivity({
+    type: 'PARTNER_BILL', user: req.user,
+    summary: `Partner bill recorded · ${partner.name}`,
+    detail: `₹${amt.toLocaleString('en-IN')}${billNo ? ` · ${billNo}` : ''}`,
+  });
+  res.status(201).json(bill);
+});
+
+router.patch('/bills/:bid', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const bid = Number(req.params.bid);
+  if (!Number.isInteger(bid)) return res.status(400).json({ error: 'Invalid bill id' });
+  const { billNo, billDate, amount, notes } = req.body || {};
+  const data = {};
+  if (amount !== undefined) { const a = Math.round(Number(amount) || 0); if (!(a > 0)) return res.status(400).json({ error: 'Amount must be greater than zero' }); data.amount = a; }
+  if (billNo !== undefined) data.billNo = billNo || null;
+  if (notes !== undefined) data.notes = notes || null;
+  if (billDate !== undefined) { const d = new Date(billDate); if (!Number.isNaN(d.getTime())) data.billDate = d; }
+  const bill = await prisma.partnerBill.update({ where: { id: bid }, data });
+  res.json(bill);
+});
+
+router.delete('/bills/:bid', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const bid = Number(req.params.bid);
+  if (!Number.isInteger(bid)) return res.status(400).json({ error: 'Invalid bill id' });
+  await prisma.partnerBill.delete({ where: { id: bid } });
   res.json({ ok: true });
 });
 
