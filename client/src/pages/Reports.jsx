@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Download, ChevronRight } from 'lucide-react';
+import { Download, ChevronRight, TrendingUp, TrendingDown } from 'lucide-react';
+import dayjs from 'dayjs';
 import api, { downloadFile } from '../api';
 import { useCompany } from '../CompanyContext';
 import { Money, Spinner, StatTile } from '../components/ui';
@@ -10,6 +11,29 @@ import {
 
 const COLORS = ['#1e3a8a', '#f59e0b', '#059669', '#7c3aed', '#dc2626'];
 
+// Financial-year start (1 Apr) for the current year.
+const fyStart = () => (dayjs().month() >= 3 ? dayjs().month(3) : dayjs().subtract(1, 'year').month(3)).date(1);
+// Date-range presets for the whole dashboard.
+const RANGES = {
+  MONTH: { label: 'This month', from: () => dayjs().startOf('month'), to: () => dayjs() },
+  FY: { label: 'This FY', from: () => fyStart(), to: () => dayjs() },
+  LAST_FY: { label: 'Last FY', from: () => fyStart().subtract(1, 'year'), to: () => fyStart().subtract(1, 'day') },
+  ALL: { label: 'All time', from: () => null, to: () => null },
+};
+
+// Percentage-change badge vs the previous equal-length period.
+function Delta({ curr, prev }) {
+  if (prev == null || prev === 0) return null;
+  const pct = Math.round(((curr - prev) / Math.abs(prev)) * 100);
+  if (pct === 0) return <span className="text-[11px] text-slate-400">0%</span>;
+  const up = pct > 0;
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-[11px] font-medium ${up ? 'text-emerald-600' : 'text-red-600'}`}>
+      {up ? <TrendingUp size={11} /> : <TrendingDown size={11} />}{Math.abs(pct)}%
+    </span>
+  );
+}
+
 export default function Reports() {
   const { companies, activeCompany } = useCompany();
   // Default to the globally active company, or 'ALL' if none
@@ -19,9 +43,16 @@ export default function Reports() {
   const [series, setSeries] = useState([]);
   const [topClients, setTopClients] = useState([]);
   const [expandedCat, setExpandedCat] = useState(null);
+  const [rangeKey, setRangeKey] = useState('FY');
+  const [profit, setProfit] = useState(null);
+  const [receivables, setReceivables] = useState(null);
 
   // If localCid is 'ALL', we don't send companyId to the API
   const cid = localCid === 'ALL' ? undefined : localCid;
+  const r = RANGES[rangeKey];
+  const from = r.from() ? r.from().format('YYYY-MM-DD') : undefined;
+  const to = r.to() ? r.to().format('YYYY-MM-DD') : undefined;
+  const rangeParams = { companyId: cid, from, to };
 
   // Sync if activeCompany changes and we haven't explicitly set to 'ALL'
   useEffect(() => {
@@ -31,10 +62,12 @@ export default function Reports() {
   }, [activeCompany]);
 
   useEffect(() => {
-    api.get('/reports/overview', { params: { companyId: cid } }).then((r) => setOverview(r.data));
-    api.get('/reports/top-clients', { params: { companyId: cid } }).then((r) => setTopClients(r.data));
-  }, [cid]);
-  useEffect(() => { api.get('/reports/timeseries', { params: { period, companyId: cid } }).then((r) => setSeries(r.data)); }, [period, cid]);
+    api.get('/reports/overview', { params: rangeParams }).then((r) => setOverview(r.data));
+    api.get('/reports/top-clients', { params: rangeParams }).then((r) => setTopClients(r.data));
+    api.get('/reports/profitability', { params: rangeParams }).then((r) => setProfit(r.data)).catch(() => setProfit(null));
+    api.get('/reports/receivables', { params: { companyId: cid } }).then((r) => setReceivables(r.data)).catch(() => setReceivables(null));
+  }, [cid, from, to]);
+  useEffect(() => { api.get('/reports/timeseries', { params: { period, ...rangeParams } }).then((r) => setSeries(r.data)); }, [period, cid, from, to]);
 
   if (!overview) return <Spinner />;
 
@@ -49,6 +82,9 @@ export default function Reports() {
           <p className="text-sm text-slate-500">{localCid === 'ALL' ? 'Combined performance across all companies' : `${companies.find(c => c.id === Number(localCid))?.name} — Company performance overview`}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <select className="input w-auto py-1.5" value={rangeKey} onChange={(e) => setRangeKey(e.target.value)} title="Date range">
+            {Object.entries(RANGES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
           <select
             className="input w-auto py-1.5"
             value={localCid}
@@ -65,12 +101,12 @@ export default function Reports() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4">
         <StatTile label="Occupancy" value={`${overview.occupancy}%`} accent="text-brand" sub={`${overview.siteStatus.BOOKED || 0}/${overview.siteCount} booked`} />
-        <StatTile label="Booked Value" value={<Money value={overview.bookedValue} />} accent="text-emerald-600" sub="incl. GST · confirmed onward" />
-        <StatTile label="Collected" value={<Money value={overview.paidRevenue} />} accent="text-emerald-600" />
+        <StatTile label="Booked Value" value={<Money value={overview.bookedValue} />} accent="text-emerald-600" sub={<span className="flex items-center gap-1.5">incl. GST <Delta curr={overview.bookedValue} prev={overview.prev?.bookedValue} /></span>} />
+        <StatTile label="Collected" value={<Money value={overview.paidRevenue} />} accent="text-emerald-600" sub={<Delta curr={overview.paidRevenue} prev={overview.prev?.paidRevenue} />} />
         <StatTile label="Outstanding" value={<Money value={overview.outstanding} />} accent="text-red-600" />
         {/* Quotations are pipeline, deliberately kept out of booked value. */}
         <StatTile label="Quotation Pipeline" value={<Money value={overview.quotationValue || 0} />} accent="text-amber-600" sub={`${overview.quotationCount || 0} open`} />
-        <StatTile label="Orders" value={overview.totalOrders} sub={`${overview.totalBookings} site bookings`} />
+        <StatTile label="Orders" value={overview.totalOrders} sub={<span className="flex items-center gap-1.5">{overview.totalBookings} bookings <Delta curr={overview.totalOrders} prev={overview.prev?.totalOrders} /></span>} />
         <StatTile label="Clients" value={overview.totalClients} sub={`${overview.repeatClients} repeat`} />
       </div>
 
@@ -84,6 +120,72 @@ export default function Reports() {
           <StatTile label="Mounting" value={<Money value={overview.mountingValue || 0} />} accent="text-amber-600" />
         </div>
       </div>
+
+      {/* Profitability — revenue vs the costs we track (printing paid out) + discounts. */}
+      {profit && (
+        <div className="card p-4 mb-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">Profitability (ex-GST)</div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <StatTile label="Revenue (ex-GST)" value={<Money value={profit.revenueExGst} />} accent="text-slate-700" />
+            <StatTile label="Printing charged" value={<Money value={profit.printingCharged} />} accent="text-purple-600" />
+            <StatTile label="Printing cost" value={<Money value={profit.printingCost} />} accent="text-slate-600" sub="paid to partners" />
+            <StatTile label="Printing margin" value={<Money value={profit.printingMargin} />} accent={profit.printingMargin >= 0 ? 'text-emerald-600' : 'text-red-600'} />
+            <StatTile label="Discounts given" value={<Money value={profit.discounts} />} accent="text-amber-600" />
+          </div>
+          <p className="text-[11px] text-slate-400 mt-2">Contribution (revenue − printing cost): <b className="text-slate-600"><Money value={profit.contribution} /></b>. Rental &amp; mounting vendor costs aren't tracked, so this is an upper bound, not net profit.</p>
+          {profit.byCategory?.length > 0 && (
+            <div className="overflow-x-auto mt-3">
+              <table className="w-full text-sm">
+                <thead className="text-xs text-slate-500 uppercase"><tr><th className="text-left py-1">Category</th><th className="text-right py-1">Revenue</th><th className="text-right py-1">Printing margin</th></tr></thead>
+                <tbody>
+                  {profit.byCategory.map((c) => (
+                    <tr key={c.category} className="border-t border-slate-100">
+                      <td className="py-1.5">{c.category}</td>
+                      <td className="py-1.5 text-right"><Money value={c.revenue} /></td>
+                      <td className={`py-1.5 text-right ${c.printingMargin >= 0 ? 'text-emerald-600' : 'text-red-600'}`}><Money value={c.printingMargin} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Accounts-receivable aging + DSO (as of today, across all periods). */}
+      {receivables && (
+        <div className="card p-4 mb-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Receivables aging (as of today)</div>
+            <div className="text-xs text-slate-500">DSO <span className="font-semibold text-slate-700">{receivables.dso} days</span></div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+            <StatTile label="Outstanding" value={<Money value={receivables.totalOutstanding} />} accent="text-red-600" sub={`${receivables.overdueCount} overdue`} />
+            <StatTile label="Not due" value={<Money value={receivables.buckets.current} />} accent="text-slate-600" />
+            <StatTile label="1–30 d" value={<Money value={receivables.buckets.d1_30} />} accent="text-amber-600" />
+            <StatTile label="31–60 d" value={<Money value={receivables.buckets.d31_60} />} accent="text-orange-600" />
+            <StatTile label="61–90 d" value={<Money value={receivables.buckets.d61_90} />} accent="text-red-500" />
+            <StatTile label="90+ d" value={<Money value={receivables.buckets.d90plus} />} accent="text-red-700" />
+          </div>
+          {receivables.overdue?.length > 0 && (
+            <div className="overflow-x-auto mt-3">
+              <table className="w-full text-sm">
+                <thead className="text-xs text-slate-500 uppercase"><tr><th className="text-left py-1">Overdue campaign</th><th className="text-left py-1">Client</th><th className="text-right py-1">Days</th><th className="text-right py-1">Outstanding</th></tr></thead>
+                <tbody>
+                  {receivables.overdue.slice(0, 10).map((o) => (
+                    <tr key={o.orderId} className="border-t border-slate-100">
+                      <td className="py-1.5">{o.orderNo}</td>
+                      <td className="py-1.5 text-slate-600">{o.client}</td>
+                      <td className="py-1.5 text-right text-red-600">{o.daysPast}d</td>
+                      <td className="py-1.5 text-right font-medium"><Money value={o.outstanding} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
         <StatTile label="Top Media Type" value={overview.topCategory || '—'} accent="text-brand" />

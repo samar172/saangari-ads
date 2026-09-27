@@ -1,12 +1,22 @@
 const router = require('express').Router();
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
+const { computePrintCost } = require('../utils/printingCost');
 
 const NON_CANCELLED = { notIn: ['CANCELLED'] };
 
+// Parse ?from&to into a Prisma date filter (inclusive of the whole `to` day).
+function dateRange(from, to) {
+  const r = {};
+  if (from) r.gte = new Date(from);
+  if (to) { const d = new Date(to); d.setHours(23, 59, 59, 999); r.lte = d; }
+  return Object.keys(r).length ? r : null;
+}
+
 // Super Admin analytics: occupancy, revenue, category profitability, GST, repeat clients
 router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
-  const { companyId } = req.query;
+  const { companyId, from, to } = req.query;
+  const range = dateRange(from, to);
   const orderWhere = { status: NON_CANCELLED };
   const bookingWhere = { status: NON_CANCELLED };
   const paymentWhere = {};
@@ -14,6 +24,9 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
     orderWhere.companyId = Number(companyId);
     paymentWhere.companyId = Number(companyId);
   }
+  // Scope the money figures to the selected window: orders by booking date,
+  // payments by receipt date. Occupancy/site counts stay "as of now".
+  if (range) { orderWhere.bookingDate = range; paymentWhere.receivedAt = range; }
 
   const [siteCount, byStatus, byType, orders, lines, payments, clients] = await Promise.all([
     prisma.site.count({ where: { active: true } }),
@@ -101,7 +114,30 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   for (const o of orders) perClient[o.clientId] = (perClient[o.clientId] || 0) + 1;
   const repeatClients = Object.values(perClient).filter((n) => n >= 2).length;
 
+  // Period-over-period: compare against the equal-length window immediately
+  // before `from`, so KPI cards can show growth arrows. Only when a range is set.
+  let prev = null;
+  if (range && from && to) {
+    const start = new Date(from); const end = new Date(to);
+    const len = end - start;
+    const prevEnd = new Date(start.getTime() - 1);
+    const prevStart = new Date(prevEnd.getTime() - len);
+    const pWhere = { ...orderWhere, bookingDate: { gte: prevStart, lte: prevEnd } };
+    const payWhere = { ...paymentWhere, receivedAt: { gte: prevStart, lte: prevEnd } };
+    const [pOrders, pPay] = await Promise.all([
+      prisma.order.findMany({ where: pWhere, select: { grandTotal: true, status: true } }),
+      prisma.payment.aggregate({ where: payWhere, _sum: { amount: true } }),
+    ]);
+    const pConfirmed = pOrders.filter((o) => o.status !== 'QUOTATION');
+    prev = {
+      bookedValue: pConfirmed.reduce((s, o) => s + o.grandTotal, 0),
+      paidRevenue: pPay._sum.amount || 0,
+      totalOrders: pOrders.length,
+    };
+  }
+
   res.json({
+    prev,
     siteCount, occupancy, siteStatus: statusMap,
     siteByType: Object.fromEntries(byType.map((t) => [t.type, t._count._all])),
     bookedValue, bookedExclGst, rentalValue, printingValue, mountingValue, addOnValue,
@@ -118,10 +154,12 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
 
 // Time-series booked value & orders, grouped by week/month/year (by booking date)
 router.get('/timeseries', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
-  const { period: periodParam, companyId } = req.query;
+  const { period: periodParam, companyId, from, to } = req.query;
   const period = periodParam || 'month';
   const where = { status: NON_CANCELLED };
   if (companyId) where.companyId = Number(companyId);
+  const range = dateRange(from, to);
+  if (range) where.bookingDate = range;
 
   const orders = await prisma.order.findMany({
     where,
@@ -151,9 +189,11 @@ router.get('/timeseries', requireRole('MANAGER', 'FINANCE'), async (req, res) =>
 
 // Top clients by booked value
 router.get('/top-clients', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
-  const { companyId } = req.query;
+  const { companyId, from, to } = req.query;
   const where = { status: NON_CANCELLED };
   if (companyId) where.companyId = Number(companyId);
+  const range = dateRange(from, to);
+  if (range) where.bookingDate = range;
 
   const orders = await prisma.order.findMany({
     where,
@@ -170,6 +210,125 @@ router.get('/top-clients', requireRole('MANAGER', 'FINANCE'), async (req, res) =
     map[id].orders += 1;
   }
   res.json(Object.values(map).sort((a, b) => b.revenue - a.revenue).slice(0, 10));
+});
+
+// Profitability: revenue (ex-GST) vs the costs we actually track (printing paid
+// to partners) and discounts given. Rental/mounting have no vendor cost recorded,
+// so we surface printing margin + discount leakage + a contribution proxy, broken
+// down by category and month. Booking-date scoped.
+router.get('/profitability', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const { companyId, from, to } = req.query;
+  const where = { status: { in: ['CONFIRMED', 'LIVE', 'COMPLETED'] } };
+  if (companyId) where.companyId = Number(companyId);
+  const range = dateRange(from, to);
+  if (range) where.bookingDate = range;
+
+  const orders = await prisma.order.findMany({
+    where,
+    select: {
+      grandTotal: true, taxableAmount: true, printingTotal: true, printCost: true,
+      discountAmount: true, mountingCost: true, bookingDate: true, printMaterial: true,
+      category: { select: { name: true } },
+      printingPartner: { select: { ratePerSqft: true, materials: { select: { name: true, costPerSqft: true } } } },
+      items: { select: { status: true, site: { select: { sqft: true } } } },
+    },
+  });
+
+  let revenueExGst = 0, grossBooked = 0, printingCharged = 0, printingCost = 0, discounts = 0, mountingCharged = 0;
+  const byCat = {}; // { cat: { revenue, printingMargin } }
+  const byMonth = {}; // { 'YYYY-MM': { revenue, printingMargin } }
+  for (const o of orders) {
+    const totalSqft = (o.items || []).filter((i) => i.status !== 'CANCELLED').reduce((s, i) => s + (i.site?.sqft || 0), 0);
+    const { cost } = computePrintCost({ printCost: o.printCost, printMaterial: o.printMaterial, totalSqft }, o.printingPartner);
+    const pMargin = Math.round((o.printingTotal || 0) - cost);
+    revenueExGst += o.taxableAmount || 0;
+    grossBooked += o.grandTotal || 0;
+    printingCharged += o.printingTotal || 0;
+    printingCost += cost;
+    discounts += o.discountAmount || 0;
+    mountingCharged += o.mountingCost || 0;
+    const cat = o.category?.name || 'Uncategorised';
+    byCat[cat] = byCat[cat] || { category: cat, revenue: 0, printingMargin: 0 };
+    byCat[cat].revenue += o.taxableAmount || 0;
+    byCat[cat].printingMargin += pMargin;
+    const mk = `${new Date(o.bookingDate).getFullYear()}-${String(new Date(o.bookingDate).getMonth() + 1).padStart(2, '0')}`;
+    byMonth[mk] = byMonth[mk] || { period: mk, revenue: 0, printingMargin: 0 };
+    byMonth[mk].revenue += o.taxableAmount || 0;
+    byMonth[mk].printingMargin += pMargin;
+  }
+
+  res.json({
+    revenueExGst: Math.round(revenueExGst),
+    grossBooked: Math.round(grossBooked),
+    printingCharged: Math.round(printingCharged),
+    printingCost: Math.round(printingCost),
+    printingMargin: Math.round(printingCharged - printingCost),
+    discounts: Math.round(discounts),
+    mountingCharged: Math.round(mountingCharged),
+    // Contribution after the costs we can see (printing paid out). Rental &
+    // mounting vendor costs are not tracked, so this is an upper bound, not net profit.
+    contribution: Math.round(revenueExGst - printingCost),
+    orders: orders.length,
+    byCategory: Object.values(byCat).map((c) => ({ ...c, revenue: Math.round(c.revenue), printingMargin: Math.round(c.printingMargin) })).sort((a, b) => b.revenue - a.revenue),
+    byMonth: Object.values(byMonth).map((m) => ({ ...m, revenue: Math.round(m.revenue), printingMargin: Math.round(m.printingMargin) })).sort((a, b) => a.period.localeCompare(b.period)),
+  });
+});
+
+// Accounts-receivable aging + DSO. Aging is always "as of now": each receivable
+// order (invoiced more than paid) is aged by its earliest live invoice's due date.
+router.get('/receivables', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const { companyId } = req.query;
+  const where = { status: { in: ['CONFIRMED', 'LIVE', 'COMPLETED'] } };
+  if (companyId) where.companyId = Number(companyId);
+
+  const orders = await prisma.order.findMany({
+    where,
+    select: {
+      id: true, orderNo: true,
+      client: { select: { name: true, company: true } },
+      payments: { select: { amount: true } },
+      invoices: { select: { total: true, status: true, issuedAt: true, dueDate: true } },
+    },
+  });
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const DAY = 86400000;
+  const buckets = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
+  let totalOutstanding = 0;
+  const overdue = [];
+  // For DSO: total invoiced in the last 365 days (credit sales denominator).
+  let invoicedLast365 = 0;
+  const yearAgo = new Date(today.getTime() - 365 * DAY);
+
+  for (const o of orders) {
+    const live = o.invoices.filter((i) => i.status !== 'CANCELLED');
+    const invoiced = live.reduce((s, i) => s + (i.total || 0), 0);
+    for (const i of live) if (i.issuedAt && new Date(i.issuedAt) >= yearAgo) invoicedLast365 += i.total || 0;
+    const paid = o.payments.reduce((s, p) => s + p.amount, 0);
+    const outstanding = Math.round(invoiced - paid);
+    if (outstanding <= 0) continue;
+    // Age by the oldest live invoice's due date (fallback to issue date).
+    const dates = live.map((i) => new Date(i.dueDate || i.issuedAt)).filter((d) => !Number.isNaN(d.getTime()));
+    const ageDate = dates.length ? new Date(Math.min(...dates.map((d) => +d))) : today;
+    const daysPast = Math.floor((today - ageDate) / DAY);
+    if (daysPast <= 0) buckets.current += outstanding;
+    else if (daysPast <= 30) buckets.d1_30 += outstanding;
+    else if (daysPast <= 60) buckets.d31_60 += outstanding;
+    else if (daysPast <= 90) buckets.d61_90 += outstanding;
+    else buckets.d90plus += outstanding;
+    totalOutstanding += outstanding;
+    if (daysPast > 0) overdue.push({ orderId: o.id, orderNo: o.orderNo, client: o.client.company?.trim() || o.client.name, outstanding, daysPast });
+  }
+
+  const dso = invoicedLast365 > 0 ? Math.round(totalOutstanding / (invoicedLast365 / 365)) : 0;
+  overdue.sort((a, b) => b.outstanding - a.outstanding);
+  res.json({
+    buckets: Object.fromEntries(Object.entries(buckets).map(([k, v]) => [k, Math.round(v)])),
+    totalOutstanding: Math.round(totalOutstanding),
+    dso,
+    overdue: overdue.slice(0, 25),
+    overdueCount: overdue.length,
+  });
 });
 
 module.exports = router;
