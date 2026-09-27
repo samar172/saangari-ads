@@ -22,6 +22,7 @@ import InvoiceGenerate from './pages/InvoiceGenerate';
 import InvoiceEdit from './pages/InvoiceEdit';
 import BookingAnalysis from './pages/BookingAnalysis';
 import Dashboard from './pages/Dashboard';
+import WhatsAppSettings from './pages/WhatsAppSettings';
 import PaymentRecord from './pages/PaymentRecord';
 import UserForm from './pages/UserForm';
 import CompanyForm from './pages/CompanyForm';
@@ -81,6 +82,7 @@ export default function App() {
             <Route path="/settings/companies" element={<Protected><Companies /></Protected>} />
             <Route path="/settings/companies/new" element={<Protected><CompanyForm /></Protected>} />
             <Route path="/settings/companies/:id/edit" element={<Protected><CompanyForm /></Protected>} />
+            <Route path="/settings/whatsapp" element={<Protected><WhatsAppSettings /></Protected>} />
             <Route path="/users" element={<Protected><Users /></Protected>} />
             <Route path="/users/new" element={<Protected><UserForm /></Protected>} />
             <Route path="/users/:id/edit" element={<Protected><UserForm /></Protected>} />

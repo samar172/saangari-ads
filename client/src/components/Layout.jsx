@@ -5,7 +5,7 @@ import { useCompany } from '../CompanyContext';
 import api from '../api';
 import NotificationBar from './NotificationBar';
 import SearchPalette from './SearchPalette';
-import { Map, ClipboardList, PlusSquare, Bell, Users, Printer, Receipt, Banknote, BarChart3, Building2, Settings, LogOut, FileText, Menu, X, ShieldCheck, BookOpen, TrendingUp, LayoutDashboard, Search } from 'lucide-react';
+import { Map, ClipboardList, PlusSquare, Bell, Users, Printer, Receipt, Banknote, BarChart3, Building2, Settings, LogOut, FileText, Menu, X, ShieldCheck, BookOpen, TrendingUp, LayoutDashboard, Search, MessageCircle } from 'lucide-react';
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, show: () => true },
@@ -22,6 +22,7 @@ const NAV = [
   { to: '/accounts', label: 'Accounts', icon: BookOpen, show: (u) => can(u, 'viewReports') },
   { to: '/approvals', label: 'Approvals', icon: ShieldCheck, show: (u) => u.role === 'MANAGER' || u.role === 'SUPER_ADMIN', badge: 'approvals' },
   { to: '/settings/companies', label: 'Business Setup', icon: Building2, show: (u) => can(u, 'manageCategories') },
+  { to: '/settings/whatsapp', label: 'WhatsApp', icon: MessageCircle, show: (u) => u.role === 'MANAGER' || u.role === 'SUPER_ADMIN' },
   { to: '/users', label: 'Users', icon: Settings, show: (u) => u.role === 'SUPER_ADMIN' },
 ];
 

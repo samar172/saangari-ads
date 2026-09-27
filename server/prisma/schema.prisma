@@ -620,3 +620,28 @@ model ActivityLog {
 
   @@index([createdAt])
 }
+
+// WhatsApp messaging config (single row, id=1). Phase 1 is MANUAL (click-to-chat
+// via wa.me — a person presses send); CLOUD_API / BSP enable automatic template
+// sends + the reminder cron once credentials are filled in. Per-event toggles and
+// editable templates ({{placeholders}}) drive both which manual buttons appear and,
+// later, what auto-sends.
+model WhatsAppSetting {
+  id            Int      @id @default(1)
+  provider      String   @default("MANUAL") // MANUAL | CLOUD_API | BSP
+  fromNumber    String?
+  apiToken      String?
+  phoneNumberId String?
+  bspBaseUrl    String?
+  onInvoice     Boolean  @default(true)
+  onBooking     Boolean  @default(true)
+  onPayment     Boolean  @default(false)
+  onExpiry      Boolean  @default(true)
+  onBillingDue  Boolean  @default(true)
+  tplInvoice    String?
+  tplBooking    String?
+  tplPayment    String?
+  tplExpiry     String?
+  tplBillingDue String?
+  updatedAt     DateTime @updatedAt @default(now())
+}

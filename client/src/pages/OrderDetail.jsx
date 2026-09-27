@@ -10,6 +10,8 @@ import { tdsAmountOf } from '../lib/tds';
 const PHASES = ['START', 'MID', 'END'];
 const KINDS = [['GPS', <><MapPin size={14} className="inline mr-1" /> GPS</>], ['NORMAL', <><ImageIcon size={14} className="inline mr-1" /> Normal</>], ['NEWSPAPER', <><Newspaper size={14} className="inline mr-1" /> Newspaper</>]];
 const TDS_RATES = [1, 2, 5, 10];
+// Indian numbers are stored with/without country code; wa.me wants 91XXXXXXXXXX.
+const waDigits = (phone) => { const d = String(phone || '').replace(/\D/g, ''); return d.length === 10 ? '91' + d : d.replace(/^0+/, ''); };
 
 export default function OrderDetail() {
   const { id } = useParams();
@@ -60,6 +62,17 @@ export default function OrderDetail() {
         {/* Monitoring proofs as a shareable deck / document */}
         <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/exports/orders/${id}/photos.pdf`, `Monitoring-${o.orderNo}.pdf`)}><Camera size={16} /> Photos PDF</button>
         <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/exports/orders/${id}/photos.pptx`, `Monitoring-${o.orderNo}.pptx`)}><Camera size={16} /> Photos PPT</button>
+        {/* One-tap booking confirmation on WhatsApp (manual click-to-chat). */}
+        {o.client?.phone && (
+          <button className="btn-ghost text-sm flex items-center gap-1.5" title="Send booking confirmation on WhatsApp"
+            onClick={() => {
+              const who = o.client.company?.trim() || o.client.name;
+              const text = `Dear ${who}, your booking ${o.orderNo} (${o.items.length} site${o.items.length !== 1 ? 's' : ''}) is confirmed. — ${o.company?.name || 'Saangari Ads'}`;
+              window.open(`https://wa.me/${waDigits(o.client.phone)}?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+            }}>
+            <Send size={16} /> WhatsApp
+          </button>
+        )}
         {/* GST campaigns can be flagged to settle in cash — a manager approves it. */}
         {o.taxCategory === 'GST' && o.status !== 'CANCELLED' && (
           <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => setRequest({ action: 'SETTLE_CASH', label: `${o.orderNo} · settle in cash (Non-GST)` })}>
