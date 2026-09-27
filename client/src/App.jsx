@@ -14,6 +14,10 @@ import InvoiceDetail from './pages/InvoiceDetail';
 import Reports from './pages/Reports';
 import Payments from './pages/Payments';
 import Accounts from './pages/Accounts';
+import ClientDetail from './pages/ClientDetail';
+import ClientForm from './pages/ClientForm';
+import PartnerDetail from './pages/PartnerDetail';
+import PartnerForm from './pages/PartnerForm';
 import Reminders from './pages/Reminders';
 import PrintingPartners from './pages/PrintingPartners';
 import Companies from './pages/Companies';
@@ -44,7 +48,13 @@ export default function App() {
             <Route path="/orders/:id/edit" element={<Protected><EditCampaign /></Protected>} />
             <Route path="/reminders" element={<Protected><Reminders /></Protected>} />
             <Route path="/clients" element={<Protected><Clients /></Protected>} />
+            <Route path="/clients/new" element={<Protected><ClientForm /></Protected>} />
+            <Route path="/clients/:id" element={<Protected><ClientDetail /></Protected>} />
+            <Route path="/clients/:id/edit" element={<Protected><ClientForm /></Protected>} />
             <Route path="/printing-partners" element={<Protected><PrintingPartners /></Protected>} />
+            <Route path="/printing-partners/new" element={<Protected><PartnerForm /></Protected>} />
+            <Route path="/printing-partners/:id" element={<Protected><PartnerDetail /></Protected>} />
+            <Route path="/printing-partners/:id/edit" element={<Protected><PartnerForm /></Protected>} />
             {/* Categories moved into Business Setup; keep old links working. */}
             <Route path="/categories" element={<Navigate to="/settings/companies" replace />} />
             <Route path="/invoices" element={<Protected><Invoices /></Protected>} />
