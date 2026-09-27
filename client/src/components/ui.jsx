@@ -53,10 +53,13 @@ export function Spinner() {
   return <div className="flex justify-center p-10"><div className="h-8 w-8 animate-spin rounded-full border-4 border-brand border-t-transparent" /></div>;
 }
 
-export function StatTile({ label, value, sub, accent }) {
+export function StatTile({ label, value, sub, accent, onClick }) {
   return (
-    <div className="card p-4">
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+    <div
+      className={`card p-4${onClick ? ' cursor-pointer transition hover:border-brand/40 hover:shadow-md' : ''}`}
+      {...(onClick ? { onClick, role: 'button', tabIndex: 0, onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e); } } } : {})}
+    >
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 flex items-center justify-between">{label}{onClick && <span className="text-slate-300">→</span>}</div>
       <div className={`mt-1 text-2xl font-bold ${accent || 'text-slate-800'}`}>{value}</div>
       {sub && <div className="mt-0.5 text-xs text-slate-500">{sub}</div>}
     </div>

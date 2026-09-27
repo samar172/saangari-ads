@@ -94,13 +94,15 @@ export default function Dashboard() {
       {!overview ? <Spinner /> : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
           <StatTile label="Booked Value" value={<Money value={overview.bookedValue} />} accent="text-emerald-600"
+            onClick={() => navigate('/orders')}
             sub={<span className="flex items-center gap-1.5">FY, incl. GST <Delta curr={overview.bookedValue} prev={overview.prev?.bookedValue} /></span>} />
           <StatTile label="Collected" value={<Money value={overview.paidRevenue} />} accent="text-emerald-600"
+            onClick={() => navigate('/payments')}
             sub={<Delta curr={overview.paidRevenue} prev={overview.prev?.paidRevenue} />} />
-          <StatTile label="Outstanding" value={<Money value={overview.outstanding} />} accent="text-red-600" />
-          <StatTile label="Occupancy" value={`${overview.occupancy}%`} accent="text-brand" sub={`${overview.siteStatus?.BOOKED || 0}/${overview.siteCount} booked`} />
-          <StatTile label="Quotation Pipeline" value={<Money value={overview.quotationValue || 0} />} accent="text-amber-600" sub={`${overview.quotationCount || 0} open`} />
-          <StatTile label="Orders" value={overview.totalOrders}
+          <StatTile label="Outstanding" value={<Money value={overview.outstanding} />} accent="text-red-600" onClick={() => navigate('/orders?pay=OUTSTANDING')} sub="campaigns owing" />
+          <StatTile label="Occupancy" value={`${overview.occupancy}%`} accent="text-brand" onClick={() => navigate('/')} sub={`${overview.siteStatus?.BOOKED || 0}/${overview.siteCount} booked`} />
+          <StatTile label="Quotation Pipeline" value={<Money value={overview.quotationValue || 0} />} accent="text-amber-600" onClick={() => navigate('/quotations')} sub={`${overview.quotationCount || 0} open`} />
+          <StatTile label="Orders" value={overview.totalOrders} onClick={() => navigate('/orders')}
             sub={<span className="flex items-center gap-1.5">FY <Delta curr={overview.totalOrders} prev={overview.prev?.totalOrders} /></span>} />
         </div>
       )}

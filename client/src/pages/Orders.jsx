@@ -106,7 +106,8 @@ export default function Orders() {
   const [q, setQ] = useState('');
   const [typeFilter, setTypeFilter] = useState(''); // '' | REGULAR | LOOSE
   const [termsFilter, setTermsFilter] = useState(''); // '' | ADVANCE | POSTPAID
-  const [payFilter, setPayFilter] = useState(''); // '' | PAID | OUTSTANDING
+  // Deep-link from the dashboard: /orders?pay=OUTSTANDING pre-filters the list.
+  const [payFilter, setPayFilter] = useState(['PAID', 'OUTSTANDING'].includes(params.get('pay')) ? params.get('pay') : '');
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
   // Admin-chosen visible columns, persisted so the choice survives reloads.
