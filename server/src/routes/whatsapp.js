@@ -71,29 +71,59 @@ router.get('/log', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) 
   res.json(rows);
 });
 
-// Outbox: sendable items (invoices + confirmed bookings) with sent/not-sent status.
+// Outbox: action lists — Invoices (send bill), Campaigns (booking confirmation),
+// Ending soon (expiry reminder, campaigns ending ≤30d), Invoice due (payment
+// reminder, unpaid invoices) — each with its own sent/not-sent status by kind.
 router.get('/outbox', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) => {
   const { companyId } = req.query;
   const cw = companyId ? { companyId: Number(companyId) } : {};
-  const [invoices, orders, logs] = await Promise.all([
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const horizon = new Date(today.getTime() + 30 * 86400000);
+
+  const [invoices, orders, dueInvoices, logs] = await Promise.all([
     prisma.invoice.findMany({
       where: { status: { not: 'CANCELLED' }, ...cw },
-      orderBy: { issuedAt: 'desc' }, take: 200,
+      orderBy: { issuedAt: 'desc' }, take: 300,
       select: { id: true, invoiceNo: true, total: true, issuedAt: true, client: { select: { name: true, company: true, phone: true } } },
     }),
     prisma.order.findMany({
       where: { status: { in: ['CONFIRMED', 'LIVE', 'COMPLETED'] }, ...cw },
-      orderBy: { bookingDate: 'desc' }, take: 200,
-      select: { id: true, orderNo: true, bookingDate: true, client: { select: { name: true, company: true, phone: true } }, items: { select: { id: true } } },
+      orderBy: { bookingDate: 'desc' }, take: 300,
+      select: { id: true, orderNo: true, bookingDate: true, client: { select: { name: true, company: true, phone: true } }, items: { select: { id: true, endDate: true, status: true } } },
+    }),
+    prisma.invoice.findMany({
+      where: { status: { notIn: ['PAID', 'CANCELLED'] }, ...cw },
+      orderBy: { dueDate: 'asc' }, take: 300,
+      select: { id: true, invoiceNo: true, total: true, dueDate: true, client: { select: { name: true, company: true, phone: true } } },
     }),
     prisma.whatsAppLog.findMany({ select: { kind: true, entityId: true, sentAt: true } }),
   ]);
-  const lastSent = {}; // `${kind}:${entityId}` -> sentAt
+  const lastSent = {};
   for (const l of logs) { const k = `${l.kind}:${l.entityId}`; if (!lastSent[k] || l.sentAt > lastSent[k]) lastSent[k] = l.sentAt; }
   const who = (c) => c?.company?.trim() || c?.name || '';
+  const DAY = 86400000;
+
+  // Campaigns ending within 30 days (by their latest active line's end date).
+  const endingSoon = [];
+  for (const o of orders) {
+    const live = (o.items || []).filter((it) => it.status !== 'CANCELLED' && it.endDate);
+    if (!live.length) continue;
+    const end = new Date(Math.max(...live.map((it) => +new Date(it.endDate)))); end.setHours(0, 0, 0, 0);
+    if (end >= today && end <= horizon) {
+      endingSoon.push({ id: o.id, orderNo: o.orderNo, client: who(o.client), phone: o.client?.phone, endDate: end, daysLeft: Math.round((end - today) / DAY), sentAt: lastSent[`EXPIRY:${o.id}`] || null });
+    }
+  }
+  endingSoon.sort((a, b) => a.daysLeft - b.daysLeft);
+
   res.json({
     invoices: invoices.map((i) => ({ id: i.id, invoiceNo: i.invoiceNo, client: who(i.client), phone: i.client?.phone, total: i.total, issuedAt: i.issuedAt, sentAt: lastSent[`INVOICE:${i.id}`] || null })),
     bookings: orders.map((o) => ({ id: o.id, orderNo: o.orderNo, client: who(o.client), phone: o.client?.phone, sites: o.items.length, bookingDate: o.bookingDate, sentAt: lastSent[`BOOKING:${o.id}`] || null })),
+    endingSoon,
+    invoiceDue: dueInvoices.map((i) => {
+      const due = i.dueDate ? new Date(i.dueDate) : null; if (due) due.setHours(0, 0, 0, 0);
+      const overdueDays = due && due < today ? Math.round((today - due) / DAY) : 0;
+      return { id: i.id, invoiceNo: i.invoiceNo, client: who(i.client), phone: i.client?.phone, total: i.total, dueDate: i.dueDate, overdueDays, sentAt: lastSent[`DUE:${i.id}`] || null };
+    }),
   });
 });
 
