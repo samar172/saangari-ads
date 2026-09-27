@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Tag, Download, Receipt, FileText, StopCircle, ArrowRightLeft, Camera, MapPin, Image as ImageIcon, Newspaper, Banknote, Check, Plus, Trash2, Pencil, ChevronRight } from 'lucide-react';
+import { Tag, Download, Receipt, FileText, StopCircle, ArrowRightLeft, Camera, MapPin, Image as ImageIcon, Newspaper, Banknote, Check, Plus, Trash2, Pencil, ChevronRight, Send } from 'lucide-react';
 import dayjs from 'dayjs';
 import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
