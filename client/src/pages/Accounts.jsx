@@ -6,6 +6,16 @@ import { useCompany } from '../CompanyContext';
 import { useAuth, can } from '../auth';
 import { Money, Spinner, StatTile } from '../components/ui';
 
+// A ledger balance shown the accounting way: absolute value + Dr/Cr, never a
+// bare minus. Dr = the party owes us (receivable); Cr = they're in advance (an
+// advance payment before invoicing sits here until the invoice squares it off).
+function Bal({ value }) {
+  const v = Math.round(value || 0);
+  if (v === 0) return <span className="text-slate-500"><Money value={0} /></span>;
+  const cr = v < 0;
+  return <span className={cr ? 'text-emerald-600' : 'text-red-600'}><Money value={Math.abs(v)} /> {cr ? 'Cr' : 'Dr'}</span>;
+}
+
 // Financial-year start (1 Apr) for the current year — mirrors Reports.jsx.
 const fyStart = () => (dayjs().month() >= 3 ? dayjs().month(3) : dayjs().subtract(1, 'year').month(3)).date(1);
 const RANGES = {
@@ -209,7 +219,7 @@ function Statement({ cid, from, to, clients, partyId, setPartyId, refreshKey }) 
               <tbody>
                 <tr className="border-t border-slate-100 text-slate-500">
                   <td className="px-4 py-1.5" colSpan="4">Opening balance</td>
-                  <td className="px-4 py-1.5 text-right"><Money value={data.opening || 0} /></td>
+                  <td className="px-4 py-1.5 text-right"><Bal value={data.opening || 0} /></td>
                 </tr>
                 {(data.entries || []).map((e) => (
                   <tr key={e.id} className="border-t border-slate-100">
@@ -217,7 +227,7 @@ function Statement({ cid, from, to, clients, partyId, setPartyId, refreshKey }) 
                     <td className="px-4 py-1.5">{e.narration}{e.invoiceNo ? <span className="text-slate-400"> · {e.invoiceNo}</span> : ''}</td>
                     <td className="px-4 py-1.5 text-right">{e.debit ? <Money value={e.debit} /> : '—'}</td>
                     <td className="px-4 py-1.5 text-right text-emerald-700">{e.credit ? <Money value={e.credit} /> : '—'}</td>
-                    <td className="px-4 py-1.5 text-right font-medium"><Money value={e.balance} /></td>
+                    <td className="px-4 py-1.5 text-right font-medium"><Bal value={e.balance} /></td>
                   </tr>
                 ))}
                 {(data.entries || []).length === 0 && <tr><td colSpan="5" className="px-4 py-8 text-center text-slate-400">No entries in this period.</td></tr>}
@@ -225,7 +235,7 @@ function Statement({ cid, from, to, clients, partyId, setPartyId, refreshKey }) 
               <tfoot className="bg-slate-50 font-semibold">
                 <tr>
                   <td className="px-4 py-2" colSpan="4">Closing balance</td>
-                  <td className={`px-4 py-2 text-right ${(data.closing || 0) > 0 ? 'text-red-600' : 'text-emerald-600'}`}><Money value={data.closing || 0} /></td>
+                  <td className="px-4 py-2 text-right"><Bal value={data.closing || 0} /></td>
                 </tr>
               </tfoot>
             </table>
