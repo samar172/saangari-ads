@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
+const { computePrintCost } = require('../utils/printingCost');
 
 // Parse ?from&to into a Prisma date filter (inclusive of the whole `to` day).
 function dateRange(from, to) {
@@ -143,6 +144,71 @@ router.post('/journal', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
     },
   });
   res.status(201).json(entry);
+});
+
+// Financial statements — a Profit & Loss (accrual, ex-GST, on confirmed bookings
+// in the period) plus a position summary (receivables, advances, GST collected,
+// partner payable, cash movement). Honest scope: operating expenses, capital and
+// bank opening balances aren't captured, so this is NOT a fully-balancing trial
+// balance — it's a P&L + working-capital position derived from real transactions.
+router.get('/financials', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const { companyId, from, to } = req.query;
+  const range = dateRange(from, to);
+  const orderWhere = { status: { in: ['CONFIRMED', 'LIVE', 'COMPLETED'] } };
+  if (companyId) orderWhere.companyId = Number(companyId);
+  if (range) orderWhere.bookingDate = range;
+
+  const orders = await prisma.order.findMany({
+    where: orderWhere,
+    select: {
+      grandTotal: true, taxableAmount: true, gstAmount: true,
+      rentalSubtotal: true, printingTotal: true, mountingCost: true, addOnTotal: true, discountAmount: true,
+      printCost: true, printMaterial: true, taxCategory: true,
+      payments: { select: { amount: true } },
+      invoices: { select: { total: true, status: true } },
+      printingPartner: { select: { ratePerSqft: true, materials: { select: { name: true, costPerSqft: true } } } },
+      items: { where: { status: { notIn: ['CANCELLED'] } }, select: { site: { select: { sqft: true } } } },
+    },
+  });
+
+  let rental = 0, printing = 0, mounting = 0, addons = 0, discounts = 0, netRevenue = 0, gstCollected = 0;
+  let printingCost = 0, invoiced = 0, received = 0;
+  for (const o of orders) {
+    rental += o.rentalSubtotal || 0; printing += o.printingTotal || 0;
+    mounting += o.mountingCost || 0; addons += o.addOnTotal || 0;
+    discounts += o.discountAmount || 0; netRevenue += o.taxableAmount || 0; gstCollected += o.gstAmount || 0;
+    const totalSqft = (o.items || []).reduce((s, i) => s + (i.site?.sqft || 0), 0);
+    printingCost += computePrintCost({ printCost: o.printCost, printMaterial: o.printMaterial, totalSqft }, o.printingPartner).cost;
+    invoiced += (o.invoices || []).filter((i) => i.status !== 'CANCELLED').reduce((s, i) => s + (i.total || 0), 0);
+    received += (o.payments || []).reduce((s, p) => s + p.amount, 0);
+  }
+
+  // Partner payments made (position as of now).
+  const partnerPaidAgg = await prisma.partnerPayment.aggregate({ _sum: { amount: true } });
+  const partnerPaid = partnerPaidAgg._sum.amount || 0;
+
+  const R = (n) => Math.round(n);
+  const grossProfit = R(netRevenue - printingCost);
+  res.json({
+    pnl: {
+      revenue: { rental: R(rental), printing: R(printing), mounting: R(mounting), addons: R(addons), grossExGst: R(rental + printing + mounting + addons) },
+      discounts: R(discounts),
+      netRevenueExGst: R(netRevenue),
+      directCosts: { printing: R(printingCost) },
+      grossProfit,
+      grossMarginPct: netRevenue > 0 ? grossProfit / netRevenue : 0,
+      note: 'Operating expenses, salaries and capital are not tracked, so this is gross profit (revenue − printing cost), not net profit.',
+    },
+    position: {
+      receivable: R(Math.max(0, invoiced - received)),
+      invoiced: R(invoiced),
+      received: R(received),
+      gstCollected: R(gstCollected),
+      partnerPayable: R(printingCost - partnerPaid),
+      partnerPaid: R(partnerPaid),
+      note: 'Position derived from live transactions; not a balancing trial balance (no capital/expense/bank-opening accounts).',
+    },
+  });
 });
 
 module.exports = router;

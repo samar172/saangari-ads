@@ -21,6 +21,7 @@ import PartnerForm from './pages/PartnerForm';
 import InvoiceGenerate from './pages/InvoiceGenerate';
 import InvoiceEdit from './pages/InvoiceEdit';
 import BookingAnalysis from './pages/BookingAnalysis';
+import Dashboard from './pages/Dashboard';
 import PaymentRecord from './pages/PaymentRecord';
 import UserForm from './pages/UserForm';
 import CompanyForm from './pages/CompanyForm';
@@ -48,6 +49,7 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<Protected><Inventory /></Protected>} />
+            <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/new-booking" element={<Protected><NewBooking /></Protected>} />
             <Route path="/inventory/new" element={<Protected><SiteForm /></Protected>} />
             <Route path="/inventory/:id" element={<Protected><SiteDetail /></Protected>} />

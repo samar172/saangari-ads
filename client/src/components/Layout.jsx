@@ -4,9 +4,11 @@ import { useAuth, can } from '../auth';
 import { useCompany } from '../CompanyContext';
 import api from '../api';
 import NotificationBar from './NotificationBar';
-import { Map, ClipboardList, PlusSquare, Bell, Users, Printer, Receipt, Banknote, BarChart3, Building2, Settings, LogOut, FileText, Menu, X, ShieldCheck, BookOpen, TrendingUp } from 'lucide-react';
+import SearchPalette from './SearchPalette';
+import { Map, ClipboardList, PlusSquare, Bell, Users, Printer, Receipt, Banknote, BarChart3, Building2, Settings, LogOut, FileText, Menu, X, ShieldCheck, BookOpen, TrendingUp, LayoutDashboard, Search } from 'lucide-react';
 
 const NAV = [
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, show: () => true },
   { to: '/', label: 'Inventory', icon: Map, show: () => true },
   { to: '/quotations', label: 'Quotations', icon: FileText, show: () => true },
   { to: '/new-booking', label: 'New Booking', icon: PlusSquare, show: (u) => can(u, 'createBooking') },
@@ -164,13 +166,21 @@ export default function Layout({ children }) {
             <img src="/icon-192.png" alt="Saangari Ads" className="h-7 w-7 rounded-md object-cover" />
             <span className="font-bold tracking-tight text-slate-800">Saangari Ads</span>
           </div>
-          <div className="flex-1" />
+          <button
+            onClick={() => window.dispatchEvent(new Event('open-search'))}
+            className="ml-auto flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-50 transition"
+            aria-label="Search"
+            title="Search (Ctrl/⌘ K)"
+          >
+            <Search size={16} /> <span className="hidden sm:inline">Search…</span>
+          </button>
           <NotificationBar onCount={setDueCount} />
         </header>
         <div className="flex-1 p-4 sm:p-6">
           {children}
         </div>
       </main>
+      <SearchPalette />
     </div>
   );
 }

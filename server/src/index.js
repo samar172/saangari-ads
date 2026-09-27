@@ -45,6 +45,7 @@ app.use('/api/payments', require('./routes/payments'));
 app.use('/api/notes', require('./routes/notes'));
 app.use('/api/approvals', require('./routes/approvals'));
 app.use('/api/accounts', require('./routes/accounts'));
+app.use('/api/search', require('./routes/search'));
 // Central error handler
 app.use((err, req, res, next) => {
   console.error(err);

@@ -36,6 +36,7 @@ const TABS = [
   ['receivables', 'Receivables', Users],
   ['statement', 'Party statement', BookOpen],
   ['daybook', 'Day book', NotebookPen],
+  ['financials', 'Financials', BookOpen],
 ];
 
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -107,6 +108,7 @@ export default function Accounts() {
         <Statement cid={cid} from={from} to={to} clients={clients} partyId={partyId} setPartyId={setPartyId} refreshKey={refreshKey} />
       )}
       {tab === 'daybook' && <DayBook cid={cid} from={from} to={to} refreshKey={refreshKey} />}
+      {tab === 'financials' && <Financials cid={cid} from={from} to={to} refreshKey={refreshKey} />}
 
       {postOpen && (
         <PostEntryModal clients={clients} defaultCompanyId={cid} onClose={() => setPostOpen(false)} onSaved={() => { setPostOpen(false); refresh(); }} />
@@ -295,6 +297,54 @@ function DayBook({ cid, from, to, refreshKey }) {
 }
 
 // ---- Post a manual journal entry (credit/debit note, adjustment, opening) ----
+// Financial statements — P&L (accrual, ex-GST, confirmed bookings in the period)
+// + a working-capital position. Honest scope note surfaced from the API.
+function Financials({ cid, from, to, refreshKey }) {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    setD(null);
+    api.get('/accounts/financials', { params: { companyId: cid, from, to } }).then((r) => setD(r.data)).catch(() => setD(null));
+  }, [cid, from, to, refreshKey]);
+  if (!d) return <Spinner />;
+  const p = d.pnl, pos = d.position;
+  const Row = ({ k, v, bold, indent, accent }) => (
+    <div className={`flex justify-between py-1.5 ${bold ? 'font-semibold border-t border-slate-200 mt-1 pt-2' : ''} ${indent ? 'pl-4 text-slate-600' : ''}`}>
+      <span>{k}</span><span className={accent || ''}><Money value={v} /></span>
+    </div>
+  );
+  return (
+    <div className="grid md:grid-cols-2 gap-4">
+      <div className="card p-4">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Profit & Loss (ex-GST)</div>
+        <div className="text-sm">
+          <div className="text-slate-400 text-xs uppercase mt-1">Revenue</div>
+          <Row k="Rental" v={p.revenue.rental} indent />
+          <Row k="Printing" v={p.revenue.printing} indent />
+          <Row k="Mounting" v={p.revenue.mounting} indent />
+          <Row k="Add-ons / other" v={p.revenue.addons} indent />
+          <Row k="Gross revenue" v={p.revenue.grossExGst} bold />
+          <Row k="Less: discounts" v={-p.discounts} indent accent="text-amber-600" />
+          <Row k="Net revenue" v={p.netRevenueExGst} bold />
+          <div className="text-slate-400 text-xs uppercase mt-3">Direct costs</div>
+          <Row k="Printing (paid to partners)" v={-p.directCosts.printing} indent accent="text-slate-600" />
+          <Row k={`Gross profit (${Math.round(p.grossMarginPct * 100)}% margin)`} v={p.grossProfit} bold accent={p.grossProfit >= 0 ? 'text-emerald-600' : 'text-red-600'} />
+        </div>
+        <p className="text-[11px] text-slate-400 mt-3 leading-tight">{p.note}</p>
+      </div>
+      <div className="card p-4">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Position (as of today)</div>
+        <div className="grid grid-cols-2 gap-3">
+          <StatTile label="Receivable" value={<Money value={pos.receivable} />} accent="text-red-600" sub="invoiced − received" />
+          <StatTile label="Received" value={<Money value={pos.received} />} accent="text-emerald-600" sub={`of ₹${(pos.invoiced || 0).toLocaleString('en-IN')} invoiced`} />
+          <StatTile label="GST collected" value={<Money value={pos.gstCollected} />} sub="output GST" />
+          <StatTile label="Partner payable" value={<Money value={pos.partnerPayable} />} accent={pos.partnerPayable > 0 ? 'text-red-600' : 'text-slate-700'} sub={`paid ₹${(pos.partnerPaid || 0).toLocaleString('en-IN')}`} />
+        </div>
+        <p className="text-[11px] text-slate-400 mt-3 leading-tight">{pos.note}</p>
+      </div>
+    </div>
+  );
+}
+
 function PostEntryModal({ clients, defaultCompanyId, onClose, onSaved }) {
   const [clientId, setClientId] = useState('');
   const [kind, setKind] = useState('CREDIT_NOTE');
