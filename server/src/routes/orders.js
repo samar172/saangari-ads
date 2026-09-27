@@ -118,11 +118,21 @@ const RECEIVABLE = ['CONFIRMED', 'LIVE', 'COMPLETED'];
 function withDerived(order) {
   const paid = (order.payments || []).reduce((s, p) => s + p.amount, 0);
   const receivable = RECEIVABLE.includes(order.status);
+  // How much of the campaign has actually been billed so far (live invoices).
+  const invoicedToDate = (order.invoices || [])
+    .filter((i) => i.status !== 'CANCELLED')
+    .reduce((s, i) => s + (i.total || 0), 0);
   return {
     ...order,
     amountPaid: paid,
     receivable,
+    // Whole-contract balance (total − paid) kept for existing callers.
     balanceDue: receivable ? Math.max(0, (order.grandTotal || 0) - paid) : 0,
+    // Invoice-based view: what's been billed, and what's outstanding on billed
+    // amounts (invoiced − paid). unbilled = contract value not yet invoiced.
+    invoicedToDate,
+    outstanding: receivable ? Math.max(0, invoicedToDate - paid) : 0,
+    unbilled: receivable ? Math.max(0, (order.grandTotal || 0) - invoicedToDate) : 0,
   };
 }
 
@@ -156,10 +166,18 @@ router.get('/', async (req, res) => {
         },
       },
       payments: { select: { amount: true } },
-      invoices: { select: { id: true, invoiceNo: true, status: true, issuedAt: true } },
+      invoices: { select: { id: true, invoiceNo: true, status: true, issuedAt: true, total: true } },
     },
   });
-  res.json(orders.map(withDerived));
+  // Flag orders that have an open Sales-raised approval (confirm/invoice) so the
+  // list can show a "Pending approval" badge without a per-row query.
+  const pending = await prisma.approvalRequest.findMany({
+    where: { status: 'PENDING', action: { in: ['CONFIRM_ORDER', 'GENERATE_INVOICE'] }, entityType: 'order' },
+    select: { entityId: true, action: true },
+  });
+  const pendingByOrder = {};
+  for (const p of pending) (pendingByOrder[p.entityId] ||= []).push(p.action);
+  res.json(orders.map((o) => ({ ...withDerived(o), pendingApprovals: pendingByOrder[o.id] || [] })));
 });
 
 // Campaign access is open to all internal roles (Sales included) — cancellation
@@ -170,10 +188,15 @@ function salesForbidden() {
 }
 
 router.get('/:id', async (req, res) => {
-  const order = await prisma.order.findUnique({ where: { id: Number(req.params.id) }, include: orderInclude });
+  const id = Number(req.params.id);
+  const order = await prisma.order.findUnique({ where: { id }, include: orderInclude });
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (salesForbidden(req, order)) return res.status(404).json({ error: 'Order not found' });
-  res.json(withDerived(order));
+  const pending = await prisma.approvalRequest.findMany({
+    where: { status: 'PENDING', action: { in: ['CONFIRM_ORDER', 'GENERATE_INVOICE'] }, entityType: 'order', entityId: id },
+    select: { action: true },
+  });
+  res.json({ ...withDerived(order), pendingApprovals: pending.map((p) => p.action) });
 });
 
 // Live quote (no persistence) for the order form
@@ -226,10 +249,17 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
     taxCategory: rawTaxCategory = 'NON_GST', interState = false, placeOfSupply,
     paymentTerms: rawPaymentTerms = 'ADVANCE',
     discountPct = 0, discountRemarks, addOns = [], notes, status = 'QUOTATION',
+    billingCycle = null, nextBillingDate = null,
   } = body;
 
   // Only the two known terms are allowed; anything else falls back to ADVANCE.
   const paymentTerms = rawPaymentTerms === 'POSTPAID' ? 'POSTPAID' : 'ADVANCE';
+
+  // Sales cannot confirm a booking directly — a Sales-created CONFIRMED booking
+  // is saved as a quotation (which still holds the sites as TENTATIVE) and a
+  // CONFIRM_ORDER approval is filed for a Manager/Admin to activate it.
+  const needsConfirmApproval = status === 'CONFIRMED' && req.user.role === 'SALES';
+  const effectiveStatus = needsConfirmApproval ? 'QUOTATION' : status;
 
   // Look up the company and enforce GST rules
   if (!companyId) return res.status(400).json({ error: 'Company is required' });
@@ -308,7 +338,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
       const conflict = await findConflict(tx, Number(it.siteId), it.startDate, it.endDate);
       if (conflict && type === 'REGULAR')
         throw new BookingConflict(`${priced.sites[Number(it.siteId)]?.code || 'Site'} is already booked for these dates by ${conflict.order.client.name}. Use a Loose booking to waitlist.`);
-      lineStatus.push(conflict && type === 'LOOSE' ? 'WAITLIST' : (status === 'CONFIRMED' ? 'CONFIRMED' : 'TENTATIVE'));
+      lineStatus.push(conflict && type === 'LOOSE' ? 'WAITLIST' : (effectiveStatus === 'CONFIRMED' ? 'CONFIRMED' : 'TENTATIVE'));
     }
 
     // Allocate the order number only after the checks pass, so a rejected
@@ -319,9 +349,11 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
         orderNo, clientId: Number(clientId), createdById: req.user.id,
         companyId: Number(companyId),
         categoryId: effectiveCategoryId,
-        status: status === 'CONFIRMED' ? 'CONFIRMED' : 'QUOTATION',
+        status: effectiveStatus === 'CONFIRMED' ? 'CONFIRMED' : 'QUOTATION',
         bookingDate: bookingDate ? new Date(bookingDate) : new Date(),
         description,
+        billingCycle: billingCycle || null,
+        nextBillingDate: nextBillingDate ? new Date(nextBillingDate) : null,
         printingPartnerId: printingPartnerId ? Number(printingPartnerId) : null,
         printMaterial: printMaterial || null,
         noOfPrints: Number(noOfPrints) || 0, printRate: Number(printRate) || 0, printingTotal: r.printingTotal,
@@ -377,12 +409,25 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
     } catch (e) { console.error('[lifecycle] post-create failed:', e.message); }
   }
 
+  // Sales asked to confirm → file the approval instead of activating.
+  let pendingApprovals = [];
+  if (needsConfirmApproval) {
+    await prisma.approvalRequest.create({
+      data: {
+        action: 'CONFIRM_ORDER', entityType: 'order', entityId: order.id,
+        label: `${order.orderNo} · ${order.client?.company?.trim() || order.client?.name || ''} · confirm booking`,
+        requestedById: req.user.id,
+      },
+    });
+    pendingApprovals = ['CONFIRM_ORDER'];
+  }
+
   logActivity({
     type: 'BOOKING', user: req.user, orderId: order.id, orderNo: order.orderNo,
-    summary: `New booking · ${order.orderNo}`,
+    summary: needsConfirmApproval ? `Booking awaiting approval · ${order.orderNo}` : `New booking · ${order.orderNo}`,
     detail: `${order.items?.length || 0} site${(order.items?.length || 0) !== 1 ? 's' : ''} · ₹${Number(order.grandTotal || 0).toLocaleString('en-IN')}`,
   });
-  res.status(201).json(withDerived(order));
+  res.status(201).json({ ...withDerived(order), pendingApprovals });
 });
 
 // Full campaign edit — SUPER_ADMIN only. Rewrites order-level fields, printing,
@@ -410,6 +455,7 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
     taxCategory: rawTaxCategory = 'NON_GST', interState = false, placeOfSupply,
     paymentTerms: rawPaymentTerms = 'ADVANCE',
     discountPct = 0, discountRemarks, addOns = [], notes,
+    billingCycle = existing.billingCycle, nextBillingDate = existing.nextBillingDate,
   } = body;
 
   const paymentTerms = rawPaymentTerms === 'POSTPAID' ? 'POSTPAID' : 'ADVANCE';
@@ -542,6 +588,8 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
           monitoring: !!monitoring, monitorStart: !!monitorStart, monitorMid: !!monitorMid, monitorEnd: !!monitorEnd,
           taxCategory, interState: !!interState, placeOfSupply: placeOfSupply || 'Rajasthan',
           paymentTerms,
+          billingCycle: billingCycle || null,
+          nextBillingDate: nextBillingDate ? new Date(nextBillingDate) : null,
           discountPct: Math.min(100, Math.max(0, Number(discountPct) || 0)), discountRemarks,
           rentalSubtotal: r.rentalSubtotal, addOnTotal: r.addOnTotal, discountAmount: r.discountAmount,
           taxableAmount: r.taxableAmount, cgst: r.cgst, sgst: r.sgst, igst: r.igst,
@@ -588,6 +636,23 @@ router.post('/:id/status', requireRole('SALES', 'MANAGER', 'FINANCE'), async (re
   // through the approval queue for a manager/super-admin to sign off.
   if (status === 'CANCELLED' && req.user.role === 'SALES') {
     return res.status(403).json({ error: 'Sales cannot cancel a campaign directly. File a cancellation request for approval.', needsApproval: true });
+  }
+
+  // Sales cannot confirm a booking directly either — file a CONFIRM_ORDER
+  // approval; the sites stay held (TENTATIVE) until a Manager/Admin signs off.
+  if (status === 'CONFIRMED' && req.user.role === 'SALES') {
+    const existing = await prisma.approvalRequest.findFirst({
+      where: { status: 'PENDING', action: 'CONFIRM_ORDER', entityType: 'order', entityId: id },
+    });
+    if (!existing) {
+      await prisma.approvalRequest.create({
+        data: {
+          action: 'CONFIRM_ORDER', entityType: 'order', entityId: id,
+          label: `${order.orderNo} · confirm booking`, requestedById: req.user.id,
+        },
+      });
+    }
+    return res.status(202).json({ pending: true, message: 'Sent for Manager/Admin approval. The sites stay held until it is approved.' });
   }
 
   const lineFor = { CONFIRMED: 'CONFIRMED', LIVE: 'LIVE', COMPLETED: 'COMPLETED', CANCELLED: 'CANCELLED' };

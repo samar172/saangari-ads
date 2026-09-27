@@ -27,7 +27,12 @@ export default function OrderDetail() {
 
   async function changeStatus(s) {
     setBusy(true);
-    try { await api.post(`/orders/${id}/status`, { status: s }); load(); }
+    try {
+      const r = await api.post(`/orders/${id}/status`, { status: s });
+      // Sales confirm → the server files an approval instead of activating.
+      if (r.data?.pending) alert(r.data.message || 'Sent for approval.');
+      load();
+    }
     catch (e) { alert(e.response?.data?.error || 'Could not update the campaign status'); }
     finally { setBusy(false); }
   }
@@ -70,6 +75,17 @@ export default function OrderDetail() {
           <button className="btn-ghost text-sm flex items-center gap-1.5 text-red-600 hover:bg-red-50" onClick={() => setRequest({ action: 'DELETE_ORDER', label: `${o.orderNo} · ${o.client.name}` })}><Trash2 size={16} /> Request delete</button>
         )}
       </div>
+
+      {o.pendingApprovals?.includes('CONFIRM_ORDER') && (
+        <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-4 py-2.5 text-sm text-amber-800">
+          Awaiting Manager/Admin approval to confirm this booking. The sites stay held until it's approved.
+        </div>
+      )}
+      {o.pendingApprovals?.includes('GENERATE_INVOICE') && (
+        <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-4 py-2.5 text-sm text-amber-800">
+          An invoice has been requested and is awaiting Manager/Admin approval.
+        </div>
+      )}
 
       <div className="card">
         <OrderTabs o={o} user={user} busy={busy} changeStatus={changeStatus} onChanged={load} tab={tab} setTab={setTab} />
@@ -186,7 +202,7 @@ export function OrderTabs({ o, user, busy, changeStatus, onChanged, tab, setTab,
   return (
     <>
       <div className={`flex gap-1 overflow-x-auto border-b border-slate-200 px-2 pt-2 bg-slate-50/50 ${compact ? '' : 'rounded-t-xl'}`}>
-        {[['overview', 'Overview'], ['sites', `Sites (${o.items.length})`], ['monitoring', `Monitoring (${o.items.reduce((a, it) => a + it.photos.length, 0)})`], ['invoices', `Invoices (${o.invoices?.length || 0})`], ['payments', 'Payments']].map(([k, l]) => (
+        {[['overview', 'Overview'], ['sites', `Sites (${o.items.length})`], ['monitoring', `Monitoring (${o.items.reduce((a, it) => a + it.photos.length, 0)})`], ['invoices', `Invoices (${o.invoices?.length || 0})`], ['payments', 'Payments'], ['timeline', 'Timeline']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`shrink-0 px-4 ${compact ? 'py-2 text-xs' : 'py-3 text-sm'} font-medium border-b-2 -mb-px transition ${tab === k ? 'border-brand text-brand bg-white rounded-t-lg' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{l}</button>
         ))}
@@ -202,6 +218,7 @@ export function OrderTabs({ o, user, busy, changeStatus, onChanged, tab, setTab,
         {tab === 'monitoring' && <MonitoringTab o={o} onChanged={onChanged} />}
         {tab === 'invoices' && <InvoicesPanel o={o} user={user} onChanged={onChanged} />}
         {tab === 'payments' && <Payments o={o} user={user} onChanged={onChanged} />}
+        {tab === 'timeline' && <TimelineTab o={o} />}
       </div>
     </>
   );
@@ -384,7 +401,12 @@ function Overview({ o, user, busy, changeStatus, onChanged }) {
         </dl>
         {o.addOns?.length > 0 && (
           <div className="mt-4 text-xs text-slate-500 space-y-1">
-            {o.addOns.map((a) => <div key={a.id} className="flex justify-between"><span>{a.label}</span><Money value={a.amount} /></div>)}
+            {o.addOns.map((a) => (
+              <div key={a.id} className="flex justify-between">
+                <span>{a.label}{a.createdAt ? <span className="text-slate-400"> · {new Date(a.createdAt).toLocaleDateString('en-IN')}</span> : ''}</span>
+                <Money value={a.amount} />
+              </div>
+            ))}
           </div>
         )}
         {can(user, 'changeBookingStatus') && o.status !== 'CANCELLED' && (
@@ -593,6 +615,12 @@ function PhotoSection({ booking, monitoring, onUploaded }) {
   const [uploadTarget, setUploadTarget] = useState({ phase: null, kind: null });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [preview, setPreview] = useState(null); // { photo, phase, kind } for the lightbox
+
+  async function deletePhoto(id) {
+    try { await api.delete(`/photos/${id}`); setPreview(null); onUploaded(); }
+    catch (e2) { setErr(e2.response?.data?.error || 'Could not delete photo'); }
+  }
 
   const at = (ph, k) => booking.photos.find((p) => p.phase === ph && p.kind === k);
   const have = booking.photos.length;
@@ -695,15 +723,13 @@ function PhotoSection({ booking, monitoring, onUploaded }) {
               return (
                 <div key={ph}>
                   {p ? (
-                    <div className="relative group cursor-pointer" onClick={() => triggerUpload(ph, k)}>
-                      <img src={p.filePath} alt={`${ph} ${k}`} className="rounded-lg border border-slate-200 aspect-square object-cover w-full transition group-hover:opacity-50" />
-                      {can(user, 'uploadPhoto') && (
-                        <div className="absolute inset-0 hidden group-hover:flex items-center justify-center pointer-events-none">
-                          <div className="bg-black/60 rounded-full p-2 text-white shadow-lg backdrop-blur-sm">
-                            <Camera size={20} />
-                          </div>
+                    <div className="relative group cursor-pointer" onClick={() => setPreview({ photo: p, phase: ph, kind: k })}>
+                      <img src={p.filePath} alt={`${ph} ${k}`} className="rounded-lg border border-slate-200 aspect-square object-cover w-full transition group-hover:opacity-70" />
+                      <div className="absolute inset-0 hidden group-hover:flex items-center justify-center pointer-events-none">
+                        <div className="bg-black/60 rounded-full p-2 text-white shadow-lg backdrop-blur-sm">
+                          <ImageIcon size={20} />
                         </div>
-                      )}
+                      </div>
                       <div className="text-[10px] text-slate-400 truncate mt-1 text-center flex items-center justify-center gap-0.5">
                         {new Date(p.takenAt).toLocaleDateString('en-IN')}{p.latitude ? <MapPin size={10} className="text-emerald-500" /> : ''}
                       </div>
@@ -731,6 +757,35 @@ function PhotoSection({ booking, monitoring, onUploaded }) {
         <p className="text-sm text-slate-400 mt-2">Only Ops uploads monitoring photos. A phase reminder clears once all 3 proofs are in.</p>
       )}
       {busy && <div className="text-sm text-brand-accent animate-pulse">Uploading photo...</div>}
+
+      {/* Image preview lightbox with change / delete actions. */}
+      {preview && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setPreview(null)}>
+          <div className="bg-white rounded-xl overflow-hidden max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100">
+              <div className="text-sm font-medium text-slate-700">{preview.phase} · {preview.kind}</div>
+              <button className="text-slate-400 hover:text-slate-600" onClick={() => setPreview(null)}>✕</button>
+            </div>
+            <img src={preview.photo.filePath} alt="" className="w-full max-h-[70vh] object-contain bg-slate-900" />
+            <div className="flex items-center justify-between px-4 py-3">
+              <div className="text-xs text-slate-500">
+                {new Date(preview.photo.takenAt).toLocaleDateString('en-IN')}
+                {preview.photo.latitude ? <span className="text-emerald-600"> · GPS tagged</span> : ''}
+              </div>
+              {can(user, 'uploadPhoto') && (
+                <div className="flex gap-2">
+                  <button className="btn-ghost text-xs flex items-center gap-1" onClick={() => { const t = { phase: preview.phase, kind: preview.kind }; setPreview(null); triggerUpload(t.phase, t.kind); }}>
+                    <Camera size={14} /> Change
+                  </button>
+                  <button className="btn-ghost text-xs text-red-600 flex items-center gap-1" onClick={() => deletePhoto(preview.photo.id)}>
+                    <Trash2 size={14} /> Delete
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -769,6 +824,21 @@ function InvoicesPanel({ o, user, onChanged }) {
       if (e.response?.status === 422 && d?.canForce) setWarn(d.error || 'Proof-of-display missing.');
       else setErr(d?.error || 'Failed to generate invoice');
     } finally { setBusy(false); }
+  }
+
+  // Sales cannot bill directly — they file a GENERATE_INVOICE approval for a
+  // Manager/Admin to raise the invoice.
+  async function requestInvoice() {
+    setBusy(true); setErr('');
+    try {
+      await api.post('/approvals', {
+        action: 'GENERATE_INVOICE', entityType: 'order', entityId: o.id,
+        label: `${o.orderNo} · ${o.client.company || o.client.name} · generate invoice`,
+        payload: { dueDate: dueDate || undefined },
+      });
+      onChanged();
+    } catch (e) { setErr(e.response?.data?.error || 'Could not request invoice'); }
+    finally { setBusy(false); }
   }
 
   return (
@@ -848,6 +918,25 @@ function InvoicesPanel({ o, user, onChanged }) {
                 <Plus size={16} /> {busy ? 'Generating…' : 'Generate invoice'}
               </button>
             )}
+          </div>
+        )
+      )}
+
+      {/* Sales path: request an invoice (Manager/Admin approves and raises it). */}
+      {!canGenerate && o.receivable && !hasInvoice && (
+        o.pendingApprovals?.includes('GENERATE_INVOICE') ? (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 text-sm text-amber-800">Invoice requested — awaiting Manager/Admin approval.</div>
+        ) : (
+          <div className="rounded-xl border border-slate-200 p-5 bg-slate-50">
+            <div className="flex items-center gap-2 text-base font-semibold text-slate-800 mb-3"><Receipt size={18} /> Request invoice for {o.orderNo}</div>
+            {err && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
+            <div className="sm:max-w-xs">
+              <label className="label">Due date (optional)</label>
+              <input type="date" className="input" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+            </div>
+            <button className="btn-primary mt-3 flex items-center gap-1.5" disabled={busy} onClick={requestInvoice}>
+              <Receipt size={16} /> {busy ? 'Requesting…' : 'Request invoice (approval)'}
+            </button>
           </div>
         )
       )}
@@ -936,6 +1025,39 @@ function PaymentEditModal({ order, payment, isReviewer, onClose, onDone }) {
   );
 }
 
+// Chronological timeline of everything that happened on this campaign — built
+// from the dated records already on the order (booking, add-ons, site shifts,
+// invoices, payments, monitoring photos). Newest first.
+function TimelineTab({ o }) {
+  const ev = [];
+  if (o.bookingDate) ev.push({ at: o.bookingDate, icon: Tag, title: 'Campaign booked', detail: `${o.orderNo} · ${o.items.length} site${o.items.length !== 1 ? 's' : ''}` });
+  for (const a of o.addOns || []) if (a.createdAt) ev.push({ at: a.createdAt, icon: Plus, title: 'Charge added', detail: `${a.label} · ₹${Number(a.amount).toLocaleString('en-IN')}` });
+  for (const it of o.items || []) for (const s of it.shifts || []) ev.push({ at: s.shiftedAt, icon: ArrowRightLeft, title: 'Site shifted', detail: `${s.fromSite?.code} → ${s.toSite?.code}${s.reason ? ` · ${s.reason}` : ''}` });
+  for (const inv of o.invoices || []) if (inv.issuedAt) ev.push({ at: inv.issuedAt, icon: Receipt, title: `Invoice ${inv.status === 'CANCELLED' ? 'voided' : 'raised'}`, detail: `${inv.invoiceNo} · ₹${Number(inv.total || 0).toLocaleString('en-IN')}` });
+  for (const p of o.payments || []) ev.push({ at: p.receivedAt, icon: Banknote, title: 'Payment received', detail: `₹${Number(p.amount).toLocaleString('en-IN')} · ${p.mode}${p.reference ? ` · ${p.reference}` : ''}` });
+  for (const it of o.items || []) for (const ph of it.photos || []) ev.push({ at: ph.takenAt, icon: Camera, title: 'Monitoring photo', detail: `${it.site?.code} · ${ph.phase} ${ph.kind}` });
+  ev.sort((a, b) => new Date(b.at) - new Date(a.at));
+
+  if (ev.length === 0) return <div className="text-sm text-slate-400">No activity recorded yet.</div>;
+  return (
+    <div className="space-y-3">
+      {ev.map((e, i) => {
+        const Icon = e.icon;
+        return (
+          <div key={i} className="flex items-start gap-3">
+            <div className="mt-0.5 h-7 w-7 shrink-0 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"><Icon size={14} /></div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-slate-800">{e.title}</div>
+              <div className="text-xs text-slate-500">{e.detail}</div>
+            </div>
+            <div className="text-xs text-slate-400 whitespace-nowrap">{new Date(e.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Payments({ o, user, onChanged }) {
   const [form, setForm] = useState({ amount: '', mode: 'CASH', reference: '', receivedAt: dayjs().format('YYYY-MM-DD'), tdsApplicable: false, tdsPct: 2 });
   const [busy, setBusy] = useState(false);
@@ -965,13 +1087,18 @@ function Payments({ o, user, onChanged }) {
     <div className="grid md:grid-cols-2 gap-8">
       <div>
         <div className="flex justify-between text-base mb-2">
-          <span className="text-slate-500">{o.receivable ? 'Grand Total' : 'Quoted Value'}</span>
+          <span className="text-slate-500">{o.receivable ? 'Total campaign value' : 'Quoted Value'}</span>
           <span className="font-semibold"><Money value={o.grandTotal} /></span>
         </div>
         {o.receivable ? (
           <>
-            <div className="flex justify-between text-base mb-2"><span className="text-slate-500">Paid</span><span className="text-emerald-700 font-semibold"><Money value={o.amountPaid} /></span></div>
-            <div className="flex justify-between text-base mb-5 border-t border-slate-200 pt-3"><span className="text-slate-500">Balance Due</span><span className="text-red-600 font-bold"><Money value={o.balanceDue} /></span></div>
+            {/* Invoice-based view: what's been billed so far, paid, and what's
+                outstanding on those bills — plus anything not yet invoiced. */}
+            <div className="flex justify-between text-sm mb-2"><span className="text-slate-500">Invoiced to date</span><span className="font-medium"><Money value={o.invoicedToDate || 0} /></span></div>
+            <div className="flex justify-between text-sm mb-2"><span className="text-slate-500">Paid</span><span className="text-emerald-700 font-semibold"><Money value={o.amountPaid} /></span></div>
+            <div className="flex justify-between text-base mb-2 border-t border-slate-200 pt-2"><span className="text-slate-500">Outstanding (billed − paid)</span><span className="text-red-600 font-bold"><Money value={o.outstanding || 0} /></span></div>
+            {(o.unbilled || 0) > 0 && <div className="flex justify-between text-xs mb-5 text-slate-400"><span>Not yet invoiced</span><span><Money value={o.unbilled} /></span></div>}
+            {(o.unbilled || 0) <= 0 && <div className="mb-5" />}
           </>
         ) : (
           <div className="mb-5 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700">

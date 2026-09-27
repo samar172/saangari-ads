@@ -13,7 +13,9 @@ export default function Payments() {
   const { activeCompany, companies } = useCompany();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [from, setFrom] = useState(dayjs().startOf('month').format('YYYY-MM-DD'));
+  // Indian financial year starts 1 April. Default the range to the current FY.
+  const fyStart = (dayjs().month() >= 3 ? dayjs().month(3) : dayjs().subtract(1, 'year').month(3)).date(1).format('YYYY-MM-DD');
+  const [from, setFrom] = useState(fyStart);
   const [to, setTo] = useState(dayjs().format('YYYY-MM-DD'));
   const [expandedDate, setExpandedDate] = useState(null);
   const [modal, setModal] = useState(false);
@@ -89,7 +91,8 @@ export default function Payments() {
             <button className="btn-ghost text-xs py-1.5" onClick={() => { const t = dayjs().format('YYYY-MM-DD'); setFrom(t); setTo(t); }}>Today</button>
             <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(dayjs().startOf('month').format('YYYY-MM-DD')); setTo(dayjs().format('YYYY-MM-DD')); }}>This month</button>
             <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(dayjs().subtract(1, 'month').startOf('month').format('YYYY-MM-DD')); setTo(dayjs().subtract(1, 'month').endOf('month').format('YYYY-MM-DD')); }}>Last month</button>
-            <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(dayjs().startOf('year').format('YYYY-MM-DD')); setTo(dayjs().format('YYYY-MM-DD')); }}>This year</button>
+            <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(fyStart); setTo(dayjs().format('YYYY-MM-DD')); }}>This FY</button>
+            <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(dayjs().startOf('year').format('YYYY-MM-DD')); setTo(dayjs().format('YYYY-MM-DD')); }}>Calendar year</button>
           </div>
         </div>
       </div>

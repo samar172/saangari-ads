@@ -53,6 +53,8 @@ export default function EditCampaign() {
         monitoring: o.monitoring, monitorStart: o.monitorStart, monitorMid: o.monitorMid, monitorEnd: o.monitorEnd,
         taxCategory: o.taxCategory, interState: o.interState, placeOfSupply: o.placeOfSupply || 'Rajasthan',
         paymentTerms: o.paymentTerms,
+        billingCycle: o.billingCycle || '',
+        nextBillingDate: o.nextBillingDate ? o.nextBillingDate.slice(0, 10) : '',
         discountPct: o.discountPct || 0, discountRemarks: o.discountRemarks || '',
         notes: o.notes || '',
       });
@@ -149,6 +151,8 @@ export default function EditCampaign() {
         interState: form.interState,
         placeOfSupply: form.placeOfSupply,
         paymentTerms: form.paymentTerms,
+        billingCycle: form.billingCycle || null,
+        nextBillingDate: form.nextBillingDate || null,
         discountPct: Number(form.discountPct) || 0,
         discountRemarks: form.discountRemarks,
         addOns: addOns.filter((a) => a.label),
@@ -375,6 +379,20 @@ export default function EditCampaign() {
                   <div className="text-xs text-slate-500 mt-0.5">{d}</div>
                 </button>
               ))}
+            </div>
+            <div className="grid sm:grid-cols-2 gap-4 pt-1">
+              <div>
+                <label className="label">Billing cycle</label>
+                <select className="input" value={form.billingCycle} onChange={(e) => set('billingCycle', e.target.value)}>
+                  <option value="">One-time</option>
+                  <option value="MONTHLY">Monthly</option>
+                  <option value="QUARTERLY">Quarterly</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Next billing date</label>
+                <input type="date" className="input" value={form.nextBillingDate} onChange={(e) => set('nextBillingDate', e.target.value)} />
+              </div>
             </div>
           </div>
 

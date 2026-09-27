@@ -26,7 +26,7 @@ export default function InvoiceDetail() {
         <button className="btn-ghost" onClick={() => navigate('/invoices')}>← Back</button>
         <div>
           <h1 className="text-2xl font-bold text-slate-800">{invoice.invoiceNo}</h1>
-          <p className="text-sm text-slate-500">{invoice.client.name}</p>
+          <p className="text-sm text-slate-500">{invoice.client.company || invoice.client.name}</p>
         </div>
         <div className="flex gap-2 ml-4">
           <Badge status={invoice.status} />
@@ -51,7 +51,7 @@ export default function InvoiceDetail() {
               <Row k="Date Issued">{new Date(invoice.issuedAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</Row>
               <Row k="Due Date">{invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('en-IN') : '—'}</Row>
               <Row k="Order Number">{invoice.order?.orderNo}</Row>
-              <Row k="Client">{invoice.client.name} · {invoice.client.phone}</Row>
+              <Row k="Client">{invoice.client.company || invoice.client.name}{invoice.client.company ? ` · ${invoice.client.name}` : ''} · {invoice.client.phone}</Row>
               <Row k="Company">{invoice.company.name}</Row>
               <Row k="Place of Supply">{invoice.order?.placeOfSupply || 'Rajasthan'}</Row>
             </dl>
@@ -208,6 +208,7 @@ function EditPricingModal({ invoice, onClose, onSaved }) {
     mountingCost: o.mountingCost || 0,
     discountRemarks: o.discountRemarks || '',
     dueDate: invoice.dueDate ? invoice.dueDate.slice(0, 10) : '',
+    issuedAt: invoice.issuedAt ? invoice.issuedAt.slice(0, 10) : '',
   });
   
   const [addOns, setAddOns] = useState(o.addOns?.map(a => ({ label: a.label, amount: a.amount, id: Math.random() })) || []);
@@ -251,6 +252,10 @@ function EditPricingModal({ invoice, onClose, onSaved }) {
           <div>
             <label className="label">Total Mounting Cost</label>
             <input type="number" min="0" className="input" value={form.mountingCost} onChange={e => setForm({...form, mountingCost: e.target.value})} />
+          </div>
+          <div>
+            <label className="label">Issue Date</label>
+            <input type="date" className="input" value={form.issuedAt} onChange={e => setForm({...form, issuedAt: e.target.value})} />
           </div>
           <div>
             <label className="label">Due Date</label>

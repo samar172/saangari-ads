@@ -124,7 +124,7 @@ function GenerateModal({ onClose, onDone }) {
         <option value="">Select order…</option>
         {orders.map((o) => {
           const photos = o.items.reduce((n, it) => n + it.photos.length, 0);
-          return <option key={o.id} value={o.id}>{o.orderNo} — {o.client.name} — {o.items.length} site(s) {photos === 0 ? '(no photo!)' : ''}</option>;
+          return <option key={o.id} value={o.id}>{o.orderNo} — {o.client.company || o.client.name} — {o.items.length} site(s) {photos === 0 ? '(no photo!)' : ''}</option>;
         })}
       </select>
 

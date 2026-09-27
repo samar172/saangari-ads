@@ -73,9 +73,10 @@ router.get('/', async (req, res) => {
       select: {
         id: true, orderNo: true, grandTotal: true, bookingDate: true, paymentTerms: true,
         rentalSubtotal: true, printingTotal: true, mountingCost: true, addOnTotal: true,
-        client: { select: { name: true } },
+        billingCycle: true, nextBillingDate: true,
+        client: { select: { name: true, company: true } },
         payments: { select: { amount: true } },
-        invoices: { select: { invoiceNo: true, issuedAt: true, status: true } },
+        invoices: { select: { invoiceNo: true, issuedAt: true, status: true, total: true } },
         items: { select: { status: true, startDate: true, endDate: true } },
       },
     }),
@@ -183,6 +184,29 @@ router.get('/', async (req, res) => {
       oneTime,
       months,
       paymentTerms: o.paymentTerms,
+      orderId: o.id,
+      orderNo: o.orderNo,
+    });
+  }
+
+  // ---- PAYMENT: billing-cycle reminders (a bill is due to be raised) ----
+  // Surfaces when a campaign's manual next-billing date is here or within the
+  // horizon. Overdue → pending/critical; upcoming → info.
+  for (const o of orders) {
+    if (!o.nextBillingDate) continue;
+    const due = new Date(o.nextBillingDate); due.setHours(0, 0, 0, 0);
+    if (due > horizon) continue; // still far off
+    const daysLate = daysBetween(today, due); // >0 overdue, 0 today, <0 upcoming
+    const who = o.client.company?.trim() || o.client.name;
+    const severity = daysLate > 7 ? 'critical' : daysLate >= 0 ? 'pending' : 'info';
+    items.push({
+      id: `billing-${o.id}`,
+      category: 'PAYMENT',
+      kind: 'BILLING_DUE',
+      severity,
+      title: `Billing due — ${o.orderNo}`,
+      detail: `${who}${o.billingCycle ? ` · ${o.billingCycle.toLowerCase()}` : ''} · raise the ${daysLate < 0 ? 'upcoming' : 'due'} bill`,
+      dueDate: o.nextBillingDate,
       orderId: o.id,
       orderNo: o.orderNo,
     });

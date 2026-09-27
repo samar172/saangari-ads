@@ -3,9 +3,11 @@ const prisma = require('../db');
 const { requireRole } = require('../middleware/auth');
 const { settleInCash } = require('../utils/settle');
 const { applyPaymentEdit } = require('../utils/payments');
+const { createInvoiceForOrder } = require('../utils/invoicing');
+const { advanceCampaignLifecycle } = require('../utils/lifecycle');
 const { logActivity } = require('../utils/activity');
 
-const ACTIONS = ['DELETE_ORDER', 'CANCEL_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'EDIT_PAYMENT', 'OTHER'];
+const ACTIONS = ['DELETE_ORDER', 'CANCEL_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'EDIT_PAYMENT', 'CONFIRM_ORDER', 'GENERATE_INVOICE', 'OTHER'];
 const ACTIVE = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
 
 // Release a site back to AVAILABLE unless another live booking still holds it.
@@ -63,7 +65,7 @@ router.get('/count', async (req, res) => {
 });
 
 // Carry out the requested action inside a transaction.
-async function execute(request) {
+async function execute(request, approver) {
   const id = request.entityId;
   switch (request.action) {
     case 'DELETE_ORDER': {
@@ -119,6 +121,31 @@ async function execute(request) {
       await applyPaymentEdit(request.entityId, payload);
       return;
     }
+    case 'CONFIRM_ORDER': {
+      // Activate a Sales-raised booking: quotation → confirmed, its held lines
+      // (TENTATIVE) → CONFIRMED and their sites → BOOKED. Then re-settle by the
+      // calendar so a back-dated campaign lands LIVE/COMPLETED immediately.
+      await prisma.$transaction(async (tx) => {
+        const order = await tx.order.findUnique({ where: { id }, include: { items: true } });
+        if (!order) throw new Error('Order no longer exists');
+        if (order.status !== 'QUOTATION') throw new Error(`${order.orderNo} is already ${order.status.toLowerCase()}`);
+        await tx.order.update({ where: { id }, data: { status: 'CONFIRMED' } });
+        for (const line of order.items) {
+          if (['STOPPED', 'CANCELLED', 'WAITLIST'].includes(line.status)) continue;
+          await tx.booking.update({ where: { id: line.id }, data: { status: 'CONFIRMED' } });
+          await tx.site.update({ where: { id: line.siteId }, data: { status: 'BOOKED' } });
+        }
+      });
+      try { await advanceCampaignLifecycle(); } catch (e) { console.error('[lifecycle] post-confirm failed:', e.message); }
+      return;
+    }
+    case 'GENERATE_INVOICE': {
+      // Raise the invoice a Sales user requested. force:true — the reviewer has
+      // decided; the proof-of-display gate was their call to make.
+      const payload = request.payload || {};
+      await createInvoiceForOrder({ orderId: id, force: true, dueDate: payload.dueDate, user: approver });
+      return;
+    }
     case 'DISABLE_USER': {
       await prisma.user.update({ where: { id }, data: { active: false } });
       return;
@@ -152,7 +179,7 @@ router.post('/:id/approve', requireRole('MANAGER'), async (req, res) => {
   }
 
   try {
-    await execute(request);
+    await execute(request, req.user);
   } catch (e) {
     return res.status(400).json({ error: e.message || 'Could not carry out the action' });
   }
@@ -165,7 +192,7 @@ router.post('/:id/approve', requireRole('MANAGER'), async (req, res) => {
 
   // Record the approved action in the activity feed (a cancellation, a payment
   // edit, a cash settlement, …). orderId only when the request was about an order.
-  const ACTIVITY_TYPE = { CANCEL_ORDER: 'CANCEL', EDIT_PAYMENT: 'PAYMENT_EDIT', DELETE_ORDER: 'CANCEL' };
+  const ACTIVITY_TYPE = { CANCEL_ORDER: 'CANCEL', EDIT_PAYMENT: 'PAYMENT_EDIT', DELETE_ORDER: 'CANCEL', CONFIRM_ORDER: 'BOOKING', GENERATE_INVOICE: 'INVOICE' };
   logActivity({
     type: ACTIVITY_TYPE[request.action] || 'CAMPAIGN_EDIT', user: req.user,
     orderId: request.entityType === 'order' ? request.entityId : undefined,

@@ -43,6 +43,7 @@ export default function NotificationBar({ onCount }) {
   const [data, setData] = useState({ counts: { critical: 0, pending: 0, info: 0, total: 0 }, byCategory: {}, items: [] });
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState('CAMPAIGN'); // one of CATEGORY_TABS keys, or 'notes'
+  const [expandedItem, setExpandedItem] = useState(null);
   const ref = useRef(null);
 
   // Notes state
@@ -181,19 +182,34 @@ export default function NotificationBar({ onCount }) {
                     {catItems.map((item) => {
                       const sev = SEVERITY[item.severity] || SEVERITY.info;
                       const Icon = ICON_FOR[item.category] || Bell;
+                      const open = expandedItem === item.id;
                       return (
-                        <button key={item.id} onClick={() => go(item)}
-                          className="w-full text-left px-4 py-4 hover:bg-slate-50 flex items-start gap-3 transition">
-                          <span className={`mt-1 h-2 w-2 rounded-full shrink-0 ${sev.dot}`} />
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium text-slate-800 flex items-center gap-1.5 mb-1">
-                              <Icon size={14} className="text-slate-400 shrink-0" />
-                              <span className="truncate">{item.title}</span>
+                        <div key={item.id}>
+                          {/* Click a row to preview its basic details inline; a
+                              separate Open button navigates to the record. */}
+                          <button onClick={() => setExpandedItem(open ? null : item.id)}
+                            className="w-full text-left px-4 py-4 hover:bg-slate-50 flex items-start gap-3 transition">
+                            <span className={`mt-1 h-2 w-2 rounded-full shrink-0 ${sev.dot}`} />
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-medium text-slate-800 flex items-center gap-1.5 mb-1">
+                                <Icon size={14} className="text-slate-400 shrink-0" />
+                                <span className={open ? '' : 'truncate'}>{item.title}</span>
+                              </div>
+                              <div className={`text-xs text-slate-500 leading-tight ${open ? '' : 'truncate'}`}>{item.detail}</div>
                             </div>
-                            <div className="text-xs text-slate-500 leading-tight">{item.detail}</div>
-                          </div>
-                          <span className={`text-xs font-medium shrink-0 ${sev.text} whitespace-nowrap`}>{when(item)}</span>
-                        </button>
+                            <span className={`text-xs font-medium shrink-0 ${sev.text} whitespace-nowrap`}>{when(item)}</span>
+                          </button>
+                          {open && (
+                            <div className="px-4 pb-4 -mt-1 ml-5 text-xs text-slate-600 space-y-1.5">
+                              <div><span className="text-slate-400">Status:</span> <span className={`font-medium ${sev.text}`}>{sev.label}</span></div>
+                              {item.detail && <div className="text-slate-600">{item.detail}</div>}
+                              {item.orderNo && <div><span className="text-slate-400">Campaign:</span> {item.orderNo}</div>}
+                              {(item.orderId || item.invoiceId) && (
+                                <button onClick={() => go(item)} className="text-brand font-medium hover:underline">Open →</button>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                   </div>

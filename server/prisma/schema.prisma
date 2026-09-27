@@ -106,6 +106,8 @@ enum ApprovalAction {
   SETTLE_CASH
   DISABLE_USER
   EDIT_PAYMENT
+  CONFIRM_ORDER
+  GENERATE_INVOICE
   OTHER
 }
 
@@ -329,6 +331,12 @@ model Order {
   bookingDate DateTime @default(now())
   description String?
 
+  // Billing cycle: how often this campaign is billed and when the next bill is
+  // due. `nextBillingDate` drives a "bill due" reminder; on billing it rolls
+  // forward by the cycle. Null cycle = one-time / not on a schedule.
+  billingCycle    String? // MONTHLY | QUARTERLY | null (one-time)
+  nextBillingDate DateTime?
+
   // Printing
   printingPartner   PrintingPartner? @relation(fields: [printingPartnerId], references: [id])
   printingPartnerId Int?
@@ -381,11 +389,12 @@ model Order {
 }
 
 model OrderAddOn {
-  id      Int    @id @default(autoincrement())
-  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  orderId Int
-  label   String
-  amount  Float  @default(0)
+  id        Int      @id @default(autoincrement())
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId   Int
+  label     String
+  amount    Float    @default(0)
+  createdAt DateTime @default(now())
 }
 
 // A single site line inside an order

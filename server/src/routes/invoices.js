@@ -7,29 +7,9 @@ const { nextInvoiceNo } = require('../utils/counters');
 const { GST_RATE, recomputeOrderTotals } = require('../utils/pricing');
 const { writeLineNotes } = require('../utils/pdf');
 const { logActivity } = require('../utils/activity');
+const { createInvoiceForOrder, lastWorkingDayOfMonth, gstSplit } = require('../utils/invoicing');
 
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
-
-// Monthly billing: an invoice defaults to being due on the last working day
-// (Mon–Fri) of its issue month, e.g. a campaign started on the 10th is due at
-// month-end. Editable before the invoice is finalised.
-function lastWorkingDayOfMonth(d) {
-  let day = dayjs(d || undefined).endOf('month');
-  while (day.day() === 0 || day.day() === 6) day = day.subtract(1, 'day'); // skip Sun/Sat
-  return day.startOf('day').toDate();
-}
-
-// Recompute the GST split for a chosen tax category over a taxable amount.
-function gstSplit(taxCategory, interState, taxableAmount) {
-  const gstApplicable = taxCategory === 'GST';
-  const gstAmount = gstApplicable ? Math.round(taxableAmount * GST_RATE / 100) : 0;
-  let cgst = 0, sgst = 0, igst = 0;
-  if (gstApplicable) {
-    if (interState) igst = gstAmount;
-    else { cgst = Math.round(gstAmount / 2); sgst = gstAmount - cgst; }
-  }
-  return { gstApplicable, gstAmount, cgst, sgst, igst, total: taxableAmount + gstAmount };
-}
 
 router.get('/', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
   const { companyId } = req.query;
@@ -91,7 +71,7 @@ router.post('/:id/share', requireRole('FINANCE', 'MANAGER'), async (req, res) =>
 
 router.patch('/:id/commercials', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
   const { id } = req.params;
-  const { discountPct, discountRemarks, printingTotal, mountingCost, addOns, dueDate } = req.body;
+  const { discountPct, discountRemarks, printingTotal, mountingCost, addOns, dueDate, issuedAt } = req.body;
 
   const invoice = await prisma.invoice.findUnique({
     where: { id: Number(id) },
@@ -156,6 +136,7 @@ router.patch('/:id/commercials', requireRole('FINANCE', 'MANAGER'), async (req, 
       gstAmount: split.gstAmount,
       total: split.total,
       ...(dueDate !== undefined ? { dueDate: dueDate ? new Date(dueDate) : null } : {}),
+      ...(issuedAt && !Number.isNaN(new Date(issuedAt).getTime()) ? { issuedAt: new Date(issuedAt) } : {}),
     }
   });
 
@@ -179,59 +160,14 @@ router.patch('/:id/commercials', requireRole('FINANCE', 'MANAGER'), async (req, 
 // are 1–2 day displays with no monitoring cycle, so they invoice straight away.
 router.post('/', requireRole('FINANCE'), async (req, res) => {
   const { orderId, force, dueDate } = req.body || {};
-  const order = await prisma.order.findUnique({
-    where: { id: Number(orderId) },
-    include: { client: true, company: true, items: { include: { photos: true } } },
-  });
-  if (!order) return res.status(404).json({ error: 'Order not found' });
-
-  // One invoice per campaign. Issuing a second full-value bill would double-count
-  // the receivable; to change the tax, settle the campaign in cash first, and to
-  // re-bill, void the existing invoice.
-  const existing = await prisma.invoice.findFirst({ where: { orderId: order.id, status: { not: 'CANCELLED' } } });
-  if (existing) return res.status(409).json({ error: `${order.orderNo} already has an invoice (${existing.invoiceNo}). Void it before issuing a new one.` });
-
-  // Proof-of-display gate is now a soft check: Finance can override it (force)
-  // when a bill must go out before the monitoring photo is uploaded/mounted.
-  const hasRegularLine = order.items.some((it) => it.type === 'REGULAR');
-  const photoCount = order.items.reduce((n, it) => n + it.photos.length, 0);
-  if (hasRegularLine && photoCount === 0 && !force)
-    return res.status(422).json({ error: 'No monitoring photo uploaded yet (proof-of-display). You can invoice anyway.', canForce: true });
-
-  // The invoice always follows the campaign's own tax treatment — no bill-time
-  // override, so the order, the invoice and the ledger can never disagree. A GST
-  // campaign that must be billed in cash is settled in cash first (which moves it
-  // to the Non-GST business and re-prices it).
-  const taxCategory = order.taxCategory;
-  const interState = order.interState;
-
-  const amount = order.taxableAmount;
-  const split = gstSplit(taxCategory, interState, amount);
-  const invoiceNo = await nextInvoiceNo(taxCategory);
-
-  const invoice = await prisma.invoice.create({
-    data: {
-      invoiceNo, orderId: order.id, clientId: order.clientId, companyId: order.companyId, taxCategory,
-      interState, amount,
-      gstRate: split.gstApplicable ? GST_RATE : 0,
-      cgst: split.cgst, sgst: split.sgst, igst: split.igst, gstAmount: split.gstAmount,
-      total: split.total, status: 'SENT', generatedById: req.user.id,
-      // Default due = last working day of the ISSUE month (not the booking month,
-      // which could make a late invoice arrive already overdue).
-      dueDate: dueDate ? new Date(dueDate) : lastWorkingDayOfMonth(new Date()),
-    },
-  });
-
-  await prisma.ledgerEntry.create({
-    data: { clientId: order.clientId, companyId: order.companyId, invoiceId: invoice.id, type: 'DEBIT', amount: split.total, narration: `Invoice ${invoiceNo}` },
-  });
-
-  logActivity({
-    type: 'INVOICE', user: req.user, orderId: order.id, orderNo: order.orderNo, invoiceId: invoice.id,
-    summary: `Invoice raised · ${invoiceNo}`,
-    detail: `${order.client?.company?.trim() || order.client?.name || ''} · ₹${Number(split.total).toLocaleString('en-IN')}`,
-  });
-  res.status(201).json(invoice);
+  try {
+    const invoice = await createInvoiceForOrder({ orderId, force: !!force, dueDate, user: req.user });
+    res.status(201).json(invoice);
+  } catch (e) {
+    const body = { error: e.message || 'Could not generate invoice' };
+    if (e.canForce) body.canForce = true;
+    return res.status(e.status || 500).json(body);
+  }
 });
 
 router.post('/:id/mark-paid', requireRole('FINANCE'), async (req, res) => {
@@ -299,8 +235,13 @@ router.get('/:id/pdf', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
 
   doc.moveDown(1.5);
   doc.fontSize(11).fillColor('#000').text('Bill To:', 45);
-  doc.fontSize(10).fillColor('#333').text(invoice.client.name);
-  if (invoice.client.company) doc.text(invoice.client.company);
+  // Company name leads on the bill; the contact person follows in smaller weight.
+  if (invoice.client.company) {
+    doc.fontSize(10).fillColor('#333').text(invoice.client.company);
+    doc.text(invoice.client.name);
+  } else {
+    doc.fontSize(10).fillColor('#333').text(invoice.client.name);
+  }
   doc.text(`Phone: ${invoice.client.phone}`);
   if (invoice.client.gstNumber) doc.text(`GSTIN: ${invoice.client.gstNumber}`);
   doc.text(`Place of Supply: ${order.placeOfSupply || 'Rajasthan'}`);

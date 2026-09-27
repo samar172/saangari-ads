@@ -29,6 +29,7 @@ const COLUMNS = [
     cell: (o) => (
       <>
         {o.orderNo}
+        {o.pendingApprovals?.length > 0 && <span className="badge bg-amber-100 text-amber-800 ml-1.5 text-[10px]">Pending approval</span>}
         <div className="text-xs text-slate-400 font-normal pl-[22px]">{new Date(o.bookingDate).toLocaleDateString('en-IN')}</div>
       </>
     ) },
@@ -105,6 +106,7 @@ export default function Orders() {
   const [q, setQ] = useState('');
   const [typeFilter, setTypeFilter] = useState(''); // '' | REGULAR | LOOSE
   const [termsFilter, setTermsFilter] = useState(''); // '' | ADVANCE | POSTPAID
+  const [payFilter, setPayFilter] = useState(''); // '' | PAID | OUTSTANDING
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
   // Admin-chosen visible columns, persisted so the choice survives reloads.
@@ -148,6 +150,12 @@ export default function Orders() {
   const filteredOrders = orders.filter((o) => {
     if (typeFilter && !o.items.some((i) => (i.type || 'REGULAR') === typeFilter)) return false;
     if (termsFilter && (o.paymentTerms || 'ADVANCE') !== termsFilter) return false;
+    if (payFilter) {
+      // Paid = a receivable campaign fully settled; Outstanding = still owes.
+      const settled = o.receivable && (o.balanceDue || 0) <= 0;
+      if (payFilter === 'PAID' && !(o.receivable && settled)) return false;
+      if (payFilter === 'OUTSTANDING' && !(o.receivable && !settled)) return false;
+    }
     if (needle) {
       const hay = [
         o.orderNo, o.client.company, o.client.name, o.category?.name,
@@ -199,6 +207,13 @@ export default function Orders() {
               <option value="">All terms</option>
               <option value="ADVANCE">Advance</option>
               <option value="POSTPAID">Postpaid</option>
+            </select>
+          )}
+          {!isQuotations && (
+            <select className="input w-auto" value={payFilter} onChange={(e) => setPayFilter(e.target.value)} title="Payment status">
+              <option value="">All payments</option>
+              <option value="PAID">Paid</option>
+              <option value="OUTSTANDING">Outstanding</option>
             </select>
           )}
           <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value)} title="Sort by">

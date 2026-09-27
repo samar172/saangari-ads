@@ -102,6 +102,8 @@ export default function NewBooking() {
     interState: false,
     placeOfSupply: 'Rajasthan',
     paymentTerms: 'ADVANCE',
+    billingCycle: '',
+    nextBillingDate: '',
     discountPct: 0,
     discountRemarks: '',
     notes: '',
@@ -292,6 +294,8 @@ export default function NewBooking() {
         interState: form.interState,
         placeOfSupply: form.placeOfSupply,
         paymentTerms: form.paymentTerms,
+        billingCycle: form.billingCycle || null,
+        nextBillingDate: form.nextBillingDate || null,
         discountPct: Number(form.discountPct) || 0,
         discountRemarks: form.discountRemarks,
         addOns: addOns.filter((a) => a.label),
@@ -577,10 +581,10 @@ export default function NewBooking() {
           {/* Add-ons */}
           <div className="card p-5 space-y-3">
             <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-slate-700">Add-ons (extra)</div>
-              <button type="button" className="text-xs text-brand-light font-medium" onClick={() => setAddOns((a) => [...a, { label: '', amount: '' }])}>+ Add-on</button>
+              <div className="text-sm font-semibold text-slate-700">Other charges</div>
+              <button type="button" className="text-xs text-brand-light font-medium" onClick={() => setAddOns((a) => [...a, { label: '', amount: '' }])}>+ Other</button>
             </div>
-            {addOns.length === 0 ? <div className="text-xs text-slate-400">No add-ons. e.g. illumination, permits, transport.</div> : (
+            {addOns.length === 0 ? <div className="text-xs text-slate-400">Add any extra line — free text + amount — and it's added to the bill. e.g. illumination, permits, transport.</div> : (
               <div className="space-y-2">
                 {addOns.map((a, i) => (
                   <div key={i} className="flex gap-2">
@@ -630,6 +634,23 @@ export default function NewBooking() {
                   <div className="text-xs text-slate-500">{d}</div>
                 </button>
               ))}
+            </div>
+            {/* Billing cycle: how often this campaign is billed + when the next
+                bill is due. The next-billing date drives a reminder. */}
+            <div className="grid sm:grid-cols-2 gap-4 pt-1">
+              <div>
+                <label className="label">Billing cycle</label>
+                <select className="input" value={form.billingCycle} onChange={(e) => set('billingCycle', e.target.value)}>
+                  <option value="">One-time</option>
+                  <option value="MONTHLY">Monthly</option>
+                  <option value="QUARTERLY">Quarterly</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Next billing date</label>
+                <input type="date" className="input" value={form.nextBillingDate} onChange={(e) => set('nextBillingDate', e.target.value)} />
+                <div className="text-[11px] text-slate-400 mt-1">A reminder fires when this date arrives.</div>
+              </div>
             </div>
           </div>
 
