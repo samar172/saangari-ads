@@ -92,7 +92,8 @@ export default function Payments() {
             <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(dayjs().startOf('month').format('YYYY-MM-DD')); setTo(dayjs().format('YYYY-MM-DD')); }}>This month</button>
             <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(dayjs().subtract(1, 'month').startOf('month').format('YYYY-MM-DD')); setTo(dayjs().subtract(1, 'month').endOf('month').format('YYYY-MM-DD')); }}>Last month</button>
             <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(fyStart); setTo(dayjs().format('YYYY-MM-DD')); }}>This FY</button>
-            <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(dayjs().startOf('year').format('YYYY-MM-DD')); setTo(dayjs().format('YYYY-MM-DD')); }}>Calendar year</button>
+            {/* Financial year runs Apr–Mar, so "last FY" is the previous Apr 1 → Mar 31. */}
+            <button className="btn-ghost text-xs py-1.5" onClick={() => { const s = dayjs(fyStart).subtract(1, 'year'); setFrom(s.format('YYYY-MM-DD')); setTo(s.add(1, 'year').subtract(1, 'day').format('YYYY-MM-DD')); }}>Last FY</button>
           </div>
         </div>
       </div>
