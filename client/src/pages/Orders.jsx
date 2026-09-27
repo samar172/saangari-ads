@@ -168,6 +168,9 @@ export default function Orders() {
   const sortedOrders = [...filteredOrders].sort((a, b) => {
     if (sort === 'az') return orderName(a).localeCompare(orderName(b));
     if (sort === 'amount') return (b.grandTotal || 0) - (a.grandTotal || 0);
+    // Most paid first / most outstanding first.
+    if (sort === 'paid') return (b.amountPaid || 0) - (a.amountPaid || 0);
+    if (sort === 'outstanding') return (b.outstanding ?? b.balanceDue ?? 0) - (a.outstanding ?? a.balanceDue ?? 0);
     // Uncategorised sorts last (￿) so named categories group together.
     if (sort === 'category') return (a.category?.name || '￿').localeCompare(b.category?.name || '￿');
     return new Date(b.bookingDate) - new Date(a.bookingDate); // date, newest first
@@ -220,6 +223,8 @@ export default function Orders() {
             <option value="date">Sort: Date</option>
             <option value="az">Sort: A–Z</option>
             <option value="amount">Sort: Amount</option>
+            <option value="paid">Sort: Paid</option>
+            <option value="outstanding">Sort: Outstanding</option>
             <option value="category">Sort: Category</option>
           </select>
           {isQuotations && (
