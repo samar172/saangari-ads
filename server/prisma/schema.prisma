@@ -541,6 +541,9 @@ model LedgerEntry {
   type      LedgerType
   amount    Float
   narration String
+  // Tag for manually posted entries (credit/debit notes, adjustments, opening
+  // balances). Auto entries from invoices/payments leave this null.
+  kind      String? // CREDIT_NOTE | DEBIT_NOTE | ADJUSTMENT | OPENING
   date      DateTime   @default(now())
 }
 

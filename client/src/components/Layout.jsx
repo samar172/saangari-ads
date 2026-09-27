@@ -4,7 +4,7 @@ import { useAuth, can } from '../auth';
 import { useCompany } from '../CompanyContext';
 import api from '../api';
 import NotificationBar from './NotificationBar';
-import { Map, ClipboardList, PlusSquare, Bell, Users, Printer, Receipt, Banknote, BarChart3, Building2, Settings, LogOut, FileText, Menu, X, ShieldCheck } from 'lucide-react';
+import { Map, ClipboardList, PlusSquare, Bell, Users, Printer, Receipt, Banknote, BarChart3, Building2, Settings, LogOut, FileText, Menu, X, ShieldCheck, BookOpen } from 'lucide-react';
 
 const NAV = [
   { to: '/', label: 'Inventory', icon: Map, show: () => true },
@@ -16,6 +16,7 @@ const NAV = [
   { to: '/invoices', label: 'Invoices', icon: Receipt, show: (u) => can(u, 'viewInvoices') },
   { to: '/payments', label: 'Payments', icon: Banknote, show: (u) => can(u, 'viewReports') },
   { to: '/reports', label: 'Reports', icon: BarChart3, show: (u) => can(u, 'viewReports') },
+  { to: '/accounts', label: 'Accounts', icon: BookOpen, show: (u) => can(u, 'viewReports') },
   { to: '/approvals', label: 'Approvals', icon: ShieldCheck, show: (u) => u.role === 'MANAGER' || u.role === 'SUPER_ADMIN', badge: 'approvals' },
   { to: '/settings/companies', label: 'Business Setup', icon: Building2, show: (u) => can(u, 'manageCategories') },
   { to: '/users', label: 'Users', icon: Settings, show: (u) => u.role === 'SUPER_ADMIN' },

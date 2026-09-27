@@ -13,6 +13,7 @@ import Invoices from './pages/Invoices';
 import InvoiceDetail from './pages/InvoiceDetail';
 import Reports from './pages/Reports';
 import Payments from './pages/Payments';
+import Accounts from './pages/Accounts';
 import Reminders from './pages/Reminders';
 import PrintingPartners from './pages/PrintingPartners';
 import Companies from './pages/Companies';
@@ -50,6 +51,7 @@ export default function App() {
             <Route path="/invoices/:id" element={<Protected><InvoiceDetail /></Protected>} />
             <Route path="/reports" element={<Protected><Reports /></Protected>} />
             <Route path="/payments" element={<Protected><Payments /></Protected>} />
+            <Route path="/accounts" element={<Protected><Accounts /></Protected>} />
             <Route path="/settings/companies" element={<Protected><Companies /></Protected>} />
             <Route path="/users" element={<Protected><Users /></Protected>} />
             <Route path="/approvals" element={<Protected><Approvals /></Protected>} />
