@@ -24,6 +24,7 @@ import BookingAnalysis from './pages/BookingAnalysis';
 import Dashboard from './pages/Dashboard';
 import WhatsAppSettings from './pages/WhatsAppSettings';
 import WhatsAppOutbox from './pages/WhatsAppOutbox';
+import ApprovalDetail from './pages/ApprovalDetail';
 import PaymentRecord from './pages/PaymentRecord';
 import UserForm from './pages/UserForm';
 import CompanyForm from './pages/CompanyForm';
@@ -89,6 +90,7 @@ export default function App() {
             <Route path="/users/new" element={<Protected><UserForm /></Protected>} />
             <Route path="/users/:id/edit" element={<Protected><UserForm /></Protected>} />
             <Route path="/approvals" element={<Protected><Approvals /></Protected>} />
+            <Route path="/approvals/:id" element={<Protected><ApprovalDetail /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>

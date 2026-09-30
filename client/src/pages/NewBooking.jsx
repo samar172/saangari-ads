@@ -93,6 +93,7 @@ export default function NewBooking() {
     noOfPrints: 0,
     printRate: 0,
     printCost: 0,
+    printRemarks: '',
     mountingCost: 0,
     monitoring: true,
     monitorStart: true,
@@ -104,7 +105,9 @@ export default function NewBooking() {
     paymentTerms: 'ADVANCE',
     billingCycle: '',
     nextBillingDate: '',
+    discountMode: 'PCT',
     discountPct: 0,
+    discountFlat: 0,
     discountRemarks: '',
     notes: '',
   });
@@ -222,7 +225,8 @@ export default function NewBooking() {
         // Mounting is charged per print (one mount per flex), not per site. Fall
         // back to the site count when no print quantity is entered.
         mountingCost: (Number(form.mountingCost) || 0) * (Number(form.noOfPrints) > 0 ? Number(form.noOfPrints) : lines.length),
-        discountPct: Number(form.discountPct) || 0,
+        discountPct: form.discountMode === 'FLAT' ? 0 : (Number(form.discountPct) || 0),
+        discountFlat: form.discountMode === 'FLAT' ? (Number(form.discountFlat) || 0) : 0,
         taxCategory: form.taxCategory,
         interState: form.interState,
       }).then((r) => setQuote(r.data)).catch(() => setQuote(null));
@@ -283,6 +287,7 @@ export default function NewBooking() {
         // What we pay the printing partner (internal cost) — drives printing P&L,
         // never the customer's taxable amount.
         printCost: Number(form.printCost) || 0,
+        printRemarks: form.printRemarks || null,
         // Mounting is charged per print (one mount per flex), not per site. Fall
         // back to the site count when no print quantity is entered.
         mountingCost: (Number(form.mountingCost) || 0) * (Number(form.noOfPrints) > 0 ? Number(form.noOfPrints) : lines.length),
@@ -296,7 +301,8 @@ export default function NewBooking() {
         paymentTerms: form.paymentTerms,
         billingCycle: form.billingCycle || null,
         nextBillingDate: form.nextBillingDate || null,
-        discountPct: Number(form.discountPct) || 0,
+        discountPct: form.discountMode === 'FLAT' ? 0 : (Number(form.discountPct) || 0),
+        discountFlat: form.discountMode === 'FLAT' ? (Number(form.discountFlat) || 0) : 0,
         discountRemarks: form.discountRemarks,
         addOns: addOns.filter((a) => a.label),
         notes: form.notes,
@@ -514,9 +520,9 @@ export default function NewBooking() {
             )}
           </div>
 
-          {/* Printing + mounting */}
+          {/* Printing partner (for invoicing) */}
           <div className="card p-5 space-y-4">
-            <div className="text-sm font-semibold text-slate-700">Printing &amp; Mounting</div>
+            <div className="text-sm font-semibold text-slate-700">Printing partner (for invoicing)</div>
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
                 <label className="label">Printing Partner</label>
@@ -576,6 +582,10 @@ export default function NewBooking() {
                 </div>
               );
             })()}
+            <div>
+              <label className="label">Remarks</label>
+              <textarea className="input h-16" value={form.printRemarks} onChange={(e) => set('printRemarks', e.target.value)} placeholder="Notes for the printing partner / invoicing (e.g. material, sizes, delivery)" />
+            </div>
           </div>
 
           {/* Add-ons */}
@@ -687,8 +697,16 @@ export default function NewBooking() {
                 </div>
               )}
               <div>
-                <label className="label">Discount %</label>
-                <input type="number" min="0" max="100" className="input" value={form.discountPct} onChange={(e) => set('discountPct', e.target.value)} />
+                <label className="label">Discount</label>
+                <div className="flex gap-2">
+                  <select className="input w-20 shrink-0" value={form.discountMode} onChange={(e) => set('discountMode', e.target.value)}>
+                    <option value="PCT">%</option>
+                    <option value="FLAT">₹</option>
+                  </select>
+                  {form.discountMode === 'FLAT'
+                    ? <input type="number" min="0" className="input" value={form.discountFlat} onChange={(e) => set('discountFlat', e.target.value)} placeholder="Fixed ₹ off" />
+                    : <input type="number" min="0" max="100" className="input" value={form.discountPct} onChange={(e) => set('discountPct', e.target.value)} placeholder="%" />}
+                </div>
               </div>
               <div>
                 <label className="label">Discount Remarks</label>

@@ -636,29 +636,49 @@ function PhotoSection({ booking, monitoring, onUploaded }) {
     catch (e2) { setErr(e2.response?.data?.error || 'Could not delete photo'); }
   }
 
-  const at = (ph, k) => booking.photos.find((p) => p.phase === ph && p.kind === k);
-  const have = booking.photos.length;
+  // Per-billing-month monitoring: enumerate the campaign's months (start→end) and
+  // show one 9-slot proof set per month. Legacy photos (no cycleMonth) live under
+  // the earliest month so nothing disappears.
+  const months = [];
+  {
+    let m = dayjs(booking.startDate).startOf('month');
+    const end = dayjs(booking.endDate).startOf('month');
+    let g = 0;
+    while ((m.isBefore(end, 'month') || m.isSame(end, 'month')) && g < 60) { months.push(m.format('YYYY-MM')); m = m.add(1, 'month'); g++; }
+    if (!months.length) months.push(dayjs().format('YYYY-MM'));
+  }
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const cur = dayjs().format('YYYY-MM');
+    return months.includes(cur) ? cur : months[months.length - 1];
+  });
+  const isEarliest = selectedMonth === months[0];
+  const matchesMonth = (p) => p.cycleMonth === selectedMonth || (isEarliest && !p.cycleMonth);
+
+  const at = (ph, k) => booking.photos.find((p) => p.phase === ph && p.kind === k && matchesMonth(p));
+  const have = booking.photos.filter(matchesMonth).length;
 
   // Local date (YYYY-MM-DD) for an <input type="date">, avoiding UTC day-shift.
   const toDateInput = (v) => {
     const d = new Date(v);
     return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   };
-  // One monitoring date per phase — seeded from any photo already uploaded for it.
-  const [phaseDates, setPhaseDates] = useState(() => {
+  // One monitoring date per phase — seeded from the selected month's photos.
+  const [phaseDates, setPhaseDates] = useState({});
+  useEffect(() => {
     const d = {};
     for (const ph of PHASES) {
-      const p = booking.photos.find((x) => x.phase === ph);
+      const p = booking.photos.find((x) => x.phase === ph && matchesMonth(x));
       d[ph] = p ? toDateInput(p.takenAt) : '';
     }
-    return d;
-  });
+    setPhaseDates(d);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMonth, booking.photos]);
 
   async function setPhaseDate(ph, val) {
     setPhaseDates((d) => ({ ...d, [ph]: val }));
-    // If proofs already exist for this phase, back-date them so exports pick it up.
-    if (val && booking.photos.some((p) => p.phase === ph)) {
-      try { await api.patch('/photos/date', { bookingId: booking.id, phase: ph, takenAt: `${val}T12:00:00` }); onUploaded(); } catch {}
+    // Back-date this month's existing proofs for the phase so exports pick it up.
+    if (val && booking.photos.some((p) => p.phase === ph && matchesMonth(p))) {
+      try { await api.patch('/photos/date', { bookingId: booking.id, phase: ph, takenAt: `${val}T12:00:00`, cycleMonth: isEarliest ? undefined : selectedMonth }); onUploaded(); } catch {}
     }
   }
 
@@ -678,6 +698,7 @@ function PhotoSection({ booking, monitoring, onUploaded }) {
     fd.append('bookingId', booking.id);
     fd.append('phase', uploadTarget.phase);
     fd.append('kind', uploadTarget.kind);
+    fd.append('cycleMonth', selectedMonth);
     if (phaseDates[uploadTarget.phase]) fd.append('takenAt', `${phaseDates[uploadTarget.phase]}T12:00:00`);
     try {
       const pos = await new Promise((res) => navigator.geolocation.getCurrentPosition(res, () => res(null), { timeout: 3000 }));
@@ -710,8 +731,24 @@ function PhotoSection({ booking, monitoring, onUploaded }) {
         accept="image/*"
         className="hidden"
         ref={fileInputRef}
-        onChange={handleFileSelect} 
+        onChange={handleFileSelect}
       />
+
+      {/* Month selector — one proof set per billing month of the campaign. */}
+      {months.length > 1 && (
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {months.map((mk) => {
+            const monthHas = booking.photos.filter((p) => p.cycleMonth === mk || (mk === months[0] && !p.cycleMonth)).length;
+            const active = mk === selectedMonth;
+            return (
+              <button key={mk} onClick={() => setSelectedMonth(mk)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium transition ${active ? 'bg-brand text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                {dayjs(mk + '-01').format('MMM YYYY')} · {monthHas}/9
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       <div className={`grid grid-cols-[68px_repeat(3,minmax(0,1fr))] sm:grid-cols-[100px_repeat(3,minmax(0,1fr))] gap-2 mb-4 max-w-2xl ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
         <div />
@@ -967,18 +1004,26 @@ function PaymentEditModal({ order, payment, isReviewer, onClose, onDone }) {
   const [receivedAt, setReceivedAt] = useState(dayjs(payment.receivedAt).format('YYYY-MM-DD'));
   const [tdsApplicable, setTdsApplicable] = useState(!!payment.tdsApplicable);
   const [tdsPct, setTdsPct] = useState(payment.tdsPct || 2);
+  const [tdsMode, setTdsMode] = useState(payment.tdsApplicable && !payment.tdsPct ? 'FIXED' : '%');
+  const [tdsFixed, setTdsFixed] = useState(payment.tdsAmount || '');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [done, setDone] = useState(false);
 
   const gross = Number(amount) || 0;
-  const tds = tdsApplicable ? tdsAmountOf(gross, tdsPct, order.taxCategory === 'GST') : 0;
+  const tds = tdsApplicable
+    ? (tdsMode === 'FIXED' ? Math.min(gross, Math.round(Number(tdsFixed) || 0)) : tdsAmountOf(gross, tdsPct, order.taxCategory === 'GST'))
+    : 0;
 
   async function submit() {
     if (!(gross > 0)) { setErr('Amount must be greater than zero'); return; }
     setBusy(true); setErr('');
-    const payload = { amount: gross, mode, reference, receivedAt: receivedAt || undefined, tdsApplicable, tdsPct: tdsApplicable ? Number(tdsPct) : 0 };
+    const payload = {
+      amount: gross, mode, reference, receivedAt: receivedAt || undefined, tdsApplicable,
+      tdsPct: tdsApplicable && tdsMode !== 'FIXED' ? Number(tdsPct) : 0,
+      ...(tdsApplicable && tdsMode === 'FIXED' ? { tdsAmount: Math.round(Number(tdsFixed) || 0), tdsMode: 'FIXED' } : {}),
+    };
     try {
       if (isReviewer) {
         await api.patch(`/orders/${order.id}/payments/${payment.id}`, payload);
@@ -1019,8 +1064,16 @@ function PaymentEditModal({ order, payment, isReviewer, onClose, onDone }) {
               <input type="checkbox" checked={tdsApplicable} onChange={(e) => setTdsApplicable(e.target.checked)} /> TDS applicable
             </label>
             {tdsApplicable && (
-              <div className="mt-2 flex items-center gap-3">
-                <select className="input py-2 text-sm w-32" value={tdsPct} onChange={(e) => setTdsPct(e.target.value)}>{[1, 2, 5, 10].map((r) => <option key={r} value={r}>{r}% TDS</option>)}</select>
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center gap-3">
+                  <div className="flex gap-1.5">
+                    <button type="button" onClick={() => setTdsMode('%')} className={`px-2.5 py-1 rounded-lg text-xs font-medium ${tdsMode !== 'FIXED' ? 'bg-brand text-white' : 'bg-slate-100 text-slate-600'}`}>%</button>
+                    <button type="button" onClick={() => setTdsMode('FIXED')} className={`px-2.5 py-1 rounded-lg text-xs font-medium ${tdsMode === 'FIXED' ? 'bg-brand text-white' : 'bg-slate-100 text-slate-600'}`}>Fixed ₹</button>
+                  </div>
+                  {tdsMode === 'FIXED'
+                    ? <input type="number" min="0" className="input py-2 text-sm w-32" placeholder="TDS ₹" value={tdsFixed} onChange={(e) => setTdsFixed(e.target.value)} />
+                    : <select className="input py-2 text-sm w-32" value={tdsPct} onChange={(e) => setTdsPct(e.target.value)}>{[1, 2, 5, 10].map((r) => <option key={r} value={r}>{r}% TDS</option>)}</select>}
+                </div>
                 <span className="text-xs text-slate-500">−<Money value={tds} /> · net <Money value={gross - tds} /></span>
               </div>
             )}
@@ -1073,14 +1126,16 @@ function TimelineTab({ o }) {
 }
 
 function Payments({ o, user, onChanged }) {
-  const [form, setForm] = useState({ amount: '', mode: 'CASH', reference: '', receivedAt: dayjs().format('YYYY-MM-DD'), tdsApplicable: false, tdsPct: 2 });
+  const [form, setForm] = useState({ amount: '', mode: 'CASH', reference: '', receivedAt: dayjs().format('YYYY-MM-DD'), tdsApplicable: false, tdsPct: 2, tdsMode: '%', tdsFixed: '' });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [editPay, setEditPay] = useState(null); // payment being edited
   const isReviewer = user.role === 'MANAGER' || user.role === 'SUPER_ADMIN';
 
   const gross = Number(form.amount) || 0;
-  const tds = form.tdsApplicable ? tdsAmountOf(gross, form.tdsPct, o.taxCategory === 'GST') : 0;
+  const tds = form.tdsApplicable
+    ? (form.tdsMode === 'FIXED' ? Math.min(gross, Math.round(Number(form.tdsFixed) || 0)) : tdsAmountOf(gross, form.tdsPct, o.taxCategory === 'GST'))
+    : 0;
 
   async function record(e) {
     e.preventDefault();
@@ -1088,9 +1143,11 @@ function Payments({ o, user, onChanged }) {
     try {
       await api.post(`/orders/${o.id}/payments`, {
         amount: gross, mode: form.mode, reference: form.reference, receivedAt: form.receivedAt || undefined,
-        tdsApplicable: form.tdsApplicable, tdsPct: form.tdsApplicable ? Number(form.tdsPct) : 0,
+        tdsApplicable: form.tdsApplicable,
+        tdsPct: form.tdsApplicable && form.tdsMode !== 'FIXED' ? Number(form.tdsPct) : 0,
+        ...(form.tdsApplicable && form.tdsMode === 'FIXED' ? { tdsAmount: Math.round(Number(form.tdsFixed) || 0), tdsMode: 'FIXED' } : {}),
       });
-      setForm({ amount: '', mode: 'CASH', reference: '', receivedAt: dayjs().format('YYYY-MM-DD'), tdsApplicable: false, tdsPct: 2 });
+      setForm({ amount: '', mode: 'CASH', reference: '', receivedAt: dayjs().format('YYYY-MM-DD'), tdsApplicable: false, tdsPct: 2, tdsMode: '%', tdsFixed: '' });
       onChanged();
     } catch (e2) {
       setErr(e2.response?.data?.error || 'Failed to record payment');
@@ -1185,9 +1242,17 @@ function Payments({ o, user, onChanged }) {
             </label>
             {form.tdsApplicable && (
               <>
-                <select className="input py-2 text-sm" value={form.tdsPct} onChange={(e) => setForm({ ...form, tdsPct: e.target.value })}>
-                  {TDS_RATES.map((r) => <option key={r} value={r}>{r}% TDS</option>)}
-                </select>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setForm({ ...form, tdsMode: '%' })} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${form.tdsMode !== 'FIXED' ? 'bg-brand text-white' : 'bg-slate-100 text-slate-600'}`}>Percent</button>
+                  <button type="button" onClick={() => setForm({ ...form, tdsMode: 'FIXED' })} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${form.tdsMode === 'FIXED' ? 'bg-brand text-white' : 'bg-slate-100 text-slate-600'}`}>Fixed ₹</button>
+                </div>
+                {form.tdsMode === 'FIXED' ? (
+                  <input type="number" min="0" className="input py-2 text-sm" placeholder="TDS amount (₹)" value={form.tdsFixed} onChange={(e) => setForm({ ...form, tdsFixed: e.target.value })} />
+                ) : (
+                  <select className="input py-2 text-sm" value={form.tdsPct} onChange={(e) => setForm({ ...form, tdsPct: e.target.value })}>
+                    {TDS_RATES.map((r) => <option key={r} value={r}>{r}% TDS</option>)}
+                  </select>
+                )}
                 <div className="text-sm text-slate-600 space-y-1">
                   <div className="flex justify-between"><span>TDS deducted</span><span className="text-indigo-700 font-medium">−<Money value={tds} /></span></div>
                   <div className="flex justify-between border-t border-slate-100 pt-1 mt-1"><span>Net received in bank</span><span className="font-bold text-slate-800"><Money value={gross - tds} /></span></div>

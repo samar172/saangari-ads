@@ -12,7 +12,8 @@ export default function UserForm() {
   const navigate = useNavigate();
   const { id } = useParams();
   const editing = !!id;
-  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', role: 'SALES' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', role: 'SALES', pin: '', hasPin: false });
+  const [clearPin, setClearPin] = useState(false);
   const [loading, setLoading] = useState(editing);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -22,20 +23,28 @@ export default function UserForm() {
     if (!editing) return;
     api.get('/users').then((r) => {
       const u = r.data.find((x) => String(x.id) === String(id));
-      if (u) setForm({ name: u.name || '', email: u.email || '', phone: u.phone || '', password: '', role: u.role || 'SALES' });
+      if (u) setForm({ name: u.name || '', email: u.email || '', phone: u.phone || '', password: '', role: u.role || 'SALES', pin: '', hasPin: !!u.hasPin });
     }).finally(() => setLoading(false));
   }, [id, editing]);
 
   async function submit(e) {
     e.preventDefault();
-    setBusy(true); setErr('');
+    setErr('');
+    const pin = form.pin.trim();
+    if (pin && !/^\d{4}$/.test(pin)) { setErr('Login PIN must be exactly 4 digits.'); return; }
+    if (pin && !form.phone.trim()) { setErr('A phone number is required to set a login PIN.'); return; }
+    setBusy(true);
     try {
       if (editing) {
         const payload = { name: form.name, phone: form.phone, role: form.role };
         if (form.password.trim()) payload.password = form.password.trim();
+        if (clearPin) payload.pin = '';
+        else if (pin) payload.pin = pin;
         await api.patch(`/users/${id}`, payload);
       } else {
-        await api.post('/users', { ...form, email: form.email.trim().toLowerCase(), password: form.password.trim() });
+        const payload = { name: form.name, email: form.email.trim().toLowerCase(), phone: form.phone, role: form.role, password: form.password.trim() };
+        if (pin) payload.pin = pin;
+        await api.post('/users', payload);
       }
       navigate('/users');
     } catch (e2) { setErr(e2.response?.data?.error || 'Failed'); }
@@ -63,6 +72,32 @@ export default function UserForm() {
           <div>
             <label className="label">{editing ? 'New password (leave blank to keep)' : 'Password'}</label>
             <input className="input" type="text" autoComplete="new-password" value={form.password} onChange={(e) => set('password', e.target.value)} required={!editing} />
+          </div>
+          <div>
+            <label className="label">Login PIN</label>
+            <input
+              className="input"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={4}
+              placeholder={editing && form.hasPin ? '••••' : '4-digit PIN'}
+              value={form.pin}
+              disabled={clearPin}
+              onChange={(e) => set('pin', e.target.value.replace(/\D/g, '').slice(0, 4))}
+            />
+            <div className="text-[11px] text-slate-400 mt-1">Lets this user log in with their phone number + PIN.</div>
+            {editing && form.hasPin && !clearPin && (
+              <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap items-center gap-2">
+                <span>PIN is set — leave blank to keep, or type a new 4-digit PIN to change it.</span>
+                <button type="button" className="text-brand underline" onClick={() => { setClearPin(true); set('pin', ''); }}>Clear PIN</button>
+              </div>
+            )}
+            {clearPin && (
+              <div className="text-[11px] text-amber-600 mt-1 flex flex-wrap items-center gap-2">
+                <span>PIN will be cleared when you save.</span>
+                <button type="button" className="text-brand underline" onClick={() => setClearPin(false)}>Undo</button>
+              </div>
+            )}
           </div>
           <div>
             <label className="label">Role</label>

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api, { downloadFile } from '../api';
-import { Download, Send, Pencil } from 'lucide-react';
+import { Download, Send, Pencil, Trash2 } from 'lucide-react';
 import { useAuth, can } from '../auth';
 import { Spinner, Badge, Money, StatTile } from '../components/ui';
 
@@ -63,6 +63,16 @@ export default function PartnerDetail() {
         <div className="flex-1" />
         {can(user, 'managePartners') && (
           <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => navigate(`/printing-partners/${id}/edit`)}><Pencil size={16} /> Edit</button>
+        )}
+        {can(user, 'managePartners') && (
+          <button className="btn-ghost text-sm flex items-center gap-1.5 text-red-600 hover:bg-red-50"
+            onClick={async () => {
+              if (!window.confirm(`Delete printing partner "${p.name}"? This cannot be undone.`)) return;
+              try { await api.delete(`/printing-partners/${id}`); navigate('/printing-partners'); }
+              catch (e) { alert(e.response?.data?.error || 'Could not delete this partner'); }
+            }}>
+            <Trash2 size={16} /> Delete
+          </button>
         )}
       </div>
 

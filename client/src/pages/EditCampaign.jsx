@@ -47,15 +47,17 @@ export default function EditCampaign() {
         noOfPrints: o.noOfPrints || 0,
         printRate: o.printRate || 0,
         printCost: o.printCost || 0,
-        // The server stores mounting as a single total (per-print × count). We edit
-        // it here as that total directly — no re-multiplication on save.
-        mountingCost: o.mountingCost || 0,
+        printRemarks: o.printRemarks || '',
+        // Server stores mounting as a total (per-print × count). Edit it here PER
+        // PRINT (like New Booking): seed from stored total ÷ prints, re-multiply on save.
+        mountingCost: (o.noOfPrints || 0) > 0 ? Math.round((o.mountingCost || 0) / o.noOfPrints) : (o.mountingCost || 0),
         monitoring: o.monitoring, monitorStart: o.monitorStart, monitorMid: o.monitorMid, monitorEnd: o.monitorEnd,
         taxCategory: o.taxCategory, interState: o.interState, placeOfSupply: o.placeOfSupply || 'Rajasthan',
         paymentTerms: o.paymentTerms,
         billingCycle: o.billingCycle || '',
         nextBillingDate: o.nextBillingDate ? o.nextBillingDate.slice(0, 10) : '',
-        discountPct: o.discountPct || 0, discountRemarks: o.discountRemarks || '',
+        discountMode: (o.discountFlat || 0) > 0 ? 'FLAT' : 'PCT',
+        discountPct: o.discountPct || 0, discountFlat: o.discountFlat || 0, discountRemarks: o.discountRemarks || '',
         notes: o.notes || '',
       });
       setLines(o.items.map((b) => {
@@ -118,8 +120,10 @@ export default function EditCampaign() {
         addOns: addOns.filter((a) => a.label),
         noOfPrints: Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
-        mountingCost: Number(form.mountingCost) || 0,
-        discountPct: Number(form.discountPct) || 0,
+        // Mounting is entered per print; the server stores the total.
+        mountingCost: (Number(form.mountingCost) || 0) * (Number(form.noOfPrints) > 0 ? Number(form.noOfPrints) : 1),
+        discountPct: form.discountMode === 'FLAT' ? 0 : (Number(form.discountPct) || 0),
+        discountFlat: form.discountMode === 'FLAT' ? (Number(form.discountFlat) || 0) : 0,
         taxCategory: form.taxCategory, interState: form.interState,
       }).then((r) => setQuote(r.data)).catch(() => setQuote(null));
     }, 250);
@@ -142,7 +146,8 @@ export default function EditCampaign() {
         noOfPrints: Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
         printCost: Number(form.printCost) || 0,
-        mountingCost: Number(form.mountingCost) || 0,
+        printRemarks: form.printRemarks || null,
+        mountingCost: (Number(form.mountingCost) || 0) * (Number(form.noOfPrints) > 0 ? Number(form.noOfPrints) : 1),
         monitoring: form.monitoring,
         monitorStart: form.monitoring && form.monitorStart,
         monitorMid: form.monitoring && form.monitorMid,
@@ -153,7 +158,8 @@ export default function EditCampaign() {
         paymentTerms: form.paymentTerms,
         billingCycle: form.billingCycle || null,
         nextBillingDate: form.nextBillingDate || null,
-        discountPct: Number(form.discountPct) || 0,
+        discountPct: form.discountMode === 'FLAT' ? 0 : (Number(form.discountPct) || 0),
+        discountFlat: form.discountMode === 'FLAT' ? (Number(form.discountFlat) || 0) : 0,
         discountRemarks: form.discountRemarks,
         addOns: addOns.filter((a) => a.label),
         notes: form.notes,
@@ -263,9 +269,9 @@ export default function EditCampaign() {
             )}
           </div>
 
-          {/* Printing + mounting */}
+          {/* Printing partner (for invoicing) */}
           <div className="card p-5 space-y-4">
-            <div className="text-sm font-semibold text-slate-700">Printing &amp; Mounting</div>
+            <div className="text-sm font-semibold text-slate-700">Printing partner (for invoicing)</div>
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
                 <label className="label">Printing Partner</label>
@@ -302,13 +308,18 @@ export default function EditCampaign() {
                 <input type="number" min="0" className="input" value={form.printRate} onChange={(e) => set('printRate', e.target.value)} />
               </div>
               <div>
-                <label className="label">Mounting Cost (total)</label>
+                <label className="label">Mounting Cost (per print)</label>
                 <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
+                <div className="text-[11px] text-slate-400 mt-1">Per print × no. of prints = mounting total.</div>
               </div>
               <div>
                 <label className="label">Partner cost (total you pay)</label>
                 <input type="number" min="0" className="input" value={form.printCost} onChange={(e) => set('printCost', e.target.value)} placeholder="What you pay the printer" />
               </div>
+            </div>
+            <div>
+              <label className="label">Remarks</label>
+              <textarea className="input h-16" value={form.printRemarks} onChange={(e) => set('printRemarks', e.target.value)} placeholder="Notes for the printing partner / invoicing (e.g. material, sizes, delivery)" />
             </div>
             {(() => {
               const charge = (Number(form.noOfPrints) || 0) * (Number(form.printRate) || 0);
@@ -410,8 +421,16 @@ export default function EditCampaign() {
                 </div>
               )}
               <div>
-                <label className="label">Discount %</label>
-                <input type="number" min="0" max="100" className="input" value={form.discountPct} onChange={(e) => set('discountPct', e.target.value)} />
+                <label className="label">Discount</label>
+                <div className="flex gap-2">
+                  <select className="input w-24 shrink-0" value={form.discountMode} onChange={(e) => set('discountMode', e.target.value)}>
+                    <option value="PCT">%</option>
+                    <option value="FLAT">₹</option>
+                  </select>
+                  {form.discountMode === 'FLAT'
+                    ? <input type="number" min="0" className="input" value={form.discountFlat} onChange={(e) => set('discountFlat', e.target.value)} placeholder="Fixed ₹ off" />
+                    : <input type="number" min="0" max="100" className="input" value={form.discountPct} onChange={(e) => set('discountPct', e.target.value)} placeholder="%" />}
+                </div>
               </div>
               <div>
                 <label className="label">Discount Remarks</label>

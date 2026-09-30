@@ -22,8 +22,14 @@ async function applyPaymentEdit(paymentId, body = {}) {
     const pay = await tx.payment.findUnique({ where: { id: paymentId }, include: { order: { select: { taxCategory: true } } } });
     if (!pay) throw new Error('Payment no longer exists');
 
-    // TDS is on the pre-GST value for a GST order.
-    const { tdsAmount, netReceived } = computeTds(gross, pct, pay.order?.taxCategory === 'GST');
+    // Fixed-amount TDS overrides the % calc; otherwise TDS is on the pre-GST value.
+    let tdsAmount, netReceived;
+    if (body.tdsApplicable && (body.tdsMode === 'FIXED' || body.tdsAmount != null)) {
+      tdsAmount = Math.min(gross, Math.max(0, Math.round(Number(body.tdsAmount) || 0)));
+      netReceived = gross - tdsAmount;
+    } else {
+      ({ tdsAmount, netReceived } = computeTds(gross, pct, pay.order?.taxCategory === 'GST'));
+    }
 
     await tx.payment.update({
       where: { id: paymentId },
@@ -32,7 +38,7 @@ async function applyPaymentEdit(paymentId, body = {}) {
         ...(mode ? { mode } : {}),
         ...(when ? { receivedAt: when } : {}),
         reference: body.reference !== undefined ? (body.reference || null) : pay.reference,
-        tdsApplicable: pct > 0, tdsPct: pct, tdsAmount, netReceived,
+        tdsApplicable: tdsAmount > 0, tdsPct: pct, tdsAmount, netReceived,
       },
     });
 

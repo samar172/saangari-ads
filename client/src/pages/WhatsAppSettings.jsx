@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { MessageCircle, Save, Check } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { MessageCircle, Save, Check, ChevronLeft } from 'lucide-react';
 import api from '../api';
 import { useAuth } from '../auth';
 import { Spinner } from '../components/ui';
@@ -14,6 +15,7 @@ const EVENTS = [
 
 export default function WhatsAppSettings() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const canManage = user.role === 'MANAGER' || user.role === 'SUPER_ADMIN';
   const [form, setForm] = useState(null);
   const [hasApiToken, setHasApiToken] = useState(false);
@@ -44,7 +46,12 @@ export default function WhatsAppSettings() {
   }
 
   if (!canManage) {
-    return <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">Only a Manager or Super-Admin can change WhatsApp settings.</div>;
+    return (
+      <div>
+        <button className="btn-ghost text-sm flex items-center gap-1 mb-3" onClick={() => navigate(-1)}><ChevronLeft size={16} /> Back</button>
+        <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">Only a Manager or Super-Admin can change WhatsApp settings.</div>
+      </div>
+    );
   }
   if (!form) return <Spinner />;
 
@@ -53,6 +60,9 @@ export default function WhatsAppSettings() {
 
   return (
     <div className="max-w-3xl">
+      <button className="btn-ghost text-sm flex items-center gap-1 mb-3" onClick={() => navigate(-1)}>
+        <ChevronLeft size={16} /> Back
+      </button>
       <div className="flex items-center gap-2 mb-1">
         <MessageCircle size={22} className="text-emerald-600" />
         <h1 className="text-2xl font-bold text-slate-800">WhatsApp</h1>

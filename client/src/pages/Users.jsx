@@ -30,7 +30,12 @@ export default function Users() {
             <tbody>
               {users.map((u) => (
                 <tr key={u.id} className="border-t border-slate-100">
-                  <td className="px-4 py-2 font-medium">{u.name}</td>
+                  <td className="px-4 py-2 font-medium">
+                    <span className="inline-flex items-center gap-2">
+                      {u.name}
+                      {u.hasPin && <Badge>PIN</Badge>}
+                    </span>
+                  </td>
                   <td className="px-4 py-2 text-slate-500">{u.email}</td>
                   <td className="px-4 py-2">{u.role}</td>
                   <td className="px-4 py-2">{u.active ? <Badge status="LIVE">Active</Badge> : <Badge status="CANCELLED">Disabled</Badge>}</td>

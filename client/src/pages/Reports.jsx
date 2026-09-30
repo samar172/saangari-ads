@@ -13,11 +13,16 @@ const COLORS = ['#1e3a8a', '#f59e0b', '#059669', '#7c3aed', '#dc2626'];
 
 // Financial-year start (1 Apr) for the current year.
 const fyStart = () => (dayjs().month() >= 3 ? dayjs().month(3) : dayjs().subtract(1, 'year').month(3)).date(1);
-// Date-range presets for the whole dashboard.
+// An Indian financial year (1 Apr Y → 31 Mar Y+1) as a range preset.
+const fyRange = (y) => ({ label: `FY ${y}-${String((y + 1) % 100).padStart(2, '0')}`, from: () => dayjs(`${y}-04-01`), to: () => dayjs(`${y + 1}-03-31`) });
+// Date-range presets for the whole dashboard: quick presets + explicit FYs.
 const RANGES = {
   MONTH: { label: 'This month', from: () => dayjs().startOf('month'), to: () => dayjs() },
   FY: { label: 'This FY', from: () => fyStart(), to: () => dayjs() },
   LAST_FY: { label: 'Last FY', from: () => fyStart().subtract(1, 'year'), to: () => fyStart().subtract(1, 'day') },
+  FY_2024: fyRange(2024),
+  FY_2025: fyRange(2025),
+  FY_2026: fyRange(2026),
   ALL: { label: 'All time', from: () => null, to: () => null },
 };
 

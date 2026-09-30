@@ -213,7 +213,7 @@ router.post('/quote', async (req, res) => {
 async function priceFromBody(body) {
   const {
     items = [], addOns = [], noOfPrints = 0, printRate = 0, mountingCost = 0,
-    discountPct = 0, taxCategory = 'NON_GST', interState = false, type = 'REGULAR',
+    discountPct = 0, discountFlat = 0, taxCategory = 'NON_GST', interState = false, type = 'REGULAR',
   } = body;
   if (!Array.isArray(items) || items.length === 0) throw new Error('Add at least one site');
 
@@ -234,7 +234,7 @@ async function priceFromBody(body) {
   const discPct = Math.min(100, Math.max(0, Number(discountPct) || 0));
   const result = computeOrder({
     items: pricedItems, addOns, noOfPrints, printRate, mountingCost,
-    discountPct: discPct, taxCategory, interState,
+    discountPct: discPct, discountFlat: Math.max(0, Number(discountFlat) || 0), taxCategory, interState,
   });
   return { result, sites: byId };
 }
@@ -248,7 +248,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
     monitoring = false, monitorStart = false, monitorMid = false, monitorEnd = false,
     taxCategory: rawTaxCategory = 'NON_GST', interState = false, placeOfSupply,
     paymentTerms: rawPaymentTerms = 'ADVANCE',
-    discountPct = 0, discountRemarks, addOns = [], notes, status = 'QUOTATION',
+    discountPct = 0, discountFlat = 0, discountRemarks, printRemarks, addOns = [], notes, status = 'QUOTATION',
     billingCycle = null, nextBillingDate = null,
   } = body;
 
@@ -293,7 +293,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
 
   // Price it
   let priced;
-  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, taxCategory, interState, type }); }
+  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, discountFlat, taxCategory, interState, type }); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   // Reject a request that double-books the same site against itself: two lines
@@ -362,7 +362,8 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
         monitoring: !!monitoring, monitorStart: !!monitorStart, monitorMid: !!monitorMid, monitorEnd: !!monitorEnd,
         taxCategory, interState: !!interState, placeOfSupply: placeOfSupply || 'Rajasthan',
         paymentTerms,
-        discountPct: Math.min(100, Math.max(0, Number(discountPct) || 0)), discountRemarks,
+        discountPct: Math.min(100, Math.max(0, Number(discountPct) || 0)),
+        discountFlat: Math.max(0, Number(discountFlat) || 0), discountRemarks, printRemarks: printRemarks || null,
         rentalSubtotal: r.rentalSubtotal, addOnTotal: r.addOnTotal, discountAmount: r.discountAmount,
         taxableAmount: r.taxableAmount, cgst: r.cgst, sgst: r.sgst, igst: r.igst,
         gstAmount: r.gstAmount, grandTotal: r.grandTotal, notes,
@@ -454,7 +455,7 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
     monitoring = false, monitorStart = false, monitorMid = false, monitorEnd = false,
     taxCategory: rawTaxCategory = 'NON_GST', interState = false, placeOfSupply,
     paymentTerms: rawPaymentTerms = 'ADVANCE',
-    discountPct = 0, discountRemarks, addOns = [], notes,
+    discountPct = 0, discountFlat = existing.discountFlat, discountRemarks, printRemarks = existing.printRemarks, addOns = [], notes,
     billingCycle = existing.billingCycle, nextBillingDate = existing.nextBillingDate,
   } = body;
 
@@ -480,7 +481,7 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
   }
 
   let priced;
-  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, taxCategory, interState, type }); }
+  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, discountFlat, taxCategory, interState, type }); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   // Same self-overlap guard as create: two lines on one site with overlapping
@@ -590,7 +591,8 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
           paymentTerms,
           billingCycle: billingCycle || null,
           nextBillingDate: nextBillingDate ? new Date(nextBillingDate) : null,
-          discountPct: Math.min(100, Math.max(0, Number(discountPct) || 0)), discountRemarks,
+          discountPct: Math.min(100, Math.max(0, Number(discountPct) || 0)),
+          discountFlat: Math.max(0, Number(discountFlat) || 0), discountRemarks, printRemarks: printRemarks || null,
           rentalSubtotal: r.rentalSubtotal, addOnTotal: r.addOnTotal, discountAmount: r.discountAmount,
           taxableAmount: r.taxableAmount, cgst: r.cgst, sgst: r.sgst, igst: r.igst,
           gstAmount: r.gstAmount, grandTotal: r.grandTotal, notes,
@@ -692,7 +694,7 @@ router.post('/:id/status', requireRole('SALES', 'MANAGER', 'FINANCE'), async (re
 // still credited the full gross; `netReceived` is what reached the bank.
 router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (req, res) => {
   const id = Number(req.params.id);
-  const { amount, mode = 'CASH', reference, notes, tdsApplicable = false, tdsPct = 0, receivedAt } = req.body || {};
+  const { amount, mode = 'CASH', reference, notes, tdsApplicable = false, tdsPct = 0, tdsMode, tdsAmount: tdsAmountBody, receivedAt } = req.body || {};
   const order = await prisma.order.findUnique({ where: { id } });
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (salesForbidden(req, order)) return res.status(403).json({ error: 'This campaign belongs to another user' });
@@ -713,9 +715,16 @@ router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (
 
   const pct = tdsApplicable ? Number(tdsPct) || 0 : 0;
   if (pct < 0 || pct > 100) return res.status(400).json({ error: 'TDS rate must be between 0 and 100' });
-  // TDS is computed on the pre-GST value for a GST order (the client deducts it on
-  // the taxable amount, not on the GST-inclusive gross).
-  const { tdsAmount, netReceived } = computeTds(gross, pct, order.taxCategory === 'GST');
+  // Fixed-amount TDS: an explicit rupee value entered by the user overrides the
+  // percentage calc (capped at the gross). Otherwise TDS is computed on the
+  // pre-GST value for a GST order (client deducts on the taxable, not the gross).
+  let tdsAmount, netReceived;
+  if (tdsApplicable && (tdsMode === 'FIXED' || tdsAmountBody != null)) {
+    tdsAmount = Math.min(gross, Math.max(0, Math.round(Number(tdsAmountBody) || 0)));
+    netReceived = gross - tdsAmount;
+  } else {
+    ({ tdsAmount, netReceived } = computeTds(gross, pct, order.taxCategory === 'GST'));
+  }
 
   // Payment date defaults to now but can be back-dated (a payment logged a few
   // days late, or received on a holiday). Guard against an unparseable/future-junk
@@ -730,7 +739,7 @@ router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (
     const payment = await tx.payment.create({
       data: {
         orderId: id, clientId: order.clientId, companyId: order.companyId, amount: gross, mode,
-        tdsApplicable: !!tdsApplicable && pct > 0, tdsPct: pct, tdsAmount, netReceived,
+        tdsApplicable: !!tdsApplicable && tdsAmount > 0, tdsPct: pct, tdsAmount, netReceived,
         reference, notes, recordedById: req.user.id,
         ...(when ? { receivedAt: when } : {}),
       },

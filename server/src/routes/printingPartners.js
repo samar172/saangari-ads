@@ -407,6 +407,17 @@ router.patch('/:id', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   res.json(partner);
 });
 
+// Delete a printing partner. Refused if any campaign still references it (their
+// history would break) — deactivate instead. Materials/payments/bills cascade.
+router.delete('/:id', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid partner id' });
+  const orderCount = await prisma.order.count({ where: { printingPartnerId: id } });
+  if (orderCount > 0) return res.status(409).json({ error: `This partner is used by ${orderCount} campaign(s) — deactivate it instead of deleting.` });
+  await prisma.printingPartner.delete({ where: { id } });
+  res.json({ ok: true });
+});
+
 // ── Materials offered by a partner (flex, pamphlet, brochure, white back…) ──
 // Each carries its own rate; the booking form's material dropdown pulls it.
 router.post('/:id/materials', requireRole('MANAGER', 'FINANCE'), async (req, res) => {

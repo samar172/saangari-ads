@@ -41,7 +41,7 @@ async function phaseIsComplete(orderId, phase) {
 // Ops uploads one of the three monitoring proofs for a phase, with geo-tag.
 // Re-uploading the same (line, phase, kind) replaces the previous file.
 router.post('/', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), upload.single('photo'), async (req, res) => {
-  const { bookingId, phase, kind = 'NORMAL', latitude, longitude, remarks, takenAt } = req.body || {};
+  const { bookingId, phase, kind = 'NORMAL', latitude, longitude, remarks, takenAt, cycleMonth } = req.body || {};
   if (!req.file) return res.status(400).json({ error: 'Photo file is required' });
   if (!bookingId || !phase) return res.status(400).json({ error: 'bookingId and phase are required' });
   if (!PHASES.includes(phase)) return res.status(400).json({ error: `phase must be one of ${PHASES.join(', ')}` });
@@ -52,8 +52,11 @@ router.post('/', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), upload.singl
     return res.status(404).json({ error: 'Booking not found' });
   }
 
-  const existing = await prisma.monitoringPhoto.findUnique({
-    where: { bookingId_phase_kind: { bookingId: booking.id, phase, kind } },
+  // Replace the photo for this (booking, month, phase, kind) — a re-upload for
+  // the same month/slot supersedes the previous file; other months are untouched.
+  const month = cycleMonth || null;
+  const existing = await prisma.monitoringPhoto.findFirst({
+    where: { bookingId: booking.id, phase, kind, cycleMonth: month },
   });
 
   let secureUrl;
@@ -65,7 +68,7 @@ router.post('/', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), upload.singl
   }
 
   const data = {
-    bookingId: booking.id, phase, kind,
+    bookingId: booking.id, phase, kind, cycleMonth: month,
     filePath: secureUrl,
     latitude: latitude ? Number(latitude) : null,
     longitude: longitude ? Number(longitude) : null,
@@ -102,12 +105,14 @@ router.post('/', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), upload.singl
 // Set the monitoring date for a whole phase of a line at once, so the exported
 // START / MID / END slides carry the real survey dates instead of upload time.
 router.patch('/date', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
-  const { bookingId, phase, takenAt } = req.body || {};
+  const { bookingId, phase, takenAt, cycleMonth } = req.body || {};
   if (!bookingId || !phase) return res.status(400).json({ error: 'bookingId and phase are required' });
   if (!PHASES.includes(phase)) return res.status(400).json({ error: `phase must be one of ${PHASES.join(', ')}` });
   const d = new Date(takenAt);
   if (isNaN(d)) return res.status(400).json({ error: 'takenAt must be a valid date' });
-  await prisma.monitoringPhoto.updateMany({ where: { bookingId: Number(bookingId), phase }, data: { takenAt: d } });
+  // Scope to the month when one is given, so back-dating a phase touches only that month.
+  const where = { bookingId: Number(bookingId), phase, ...(cycleMonth !== undefined ? { cycleMonth: cycleMonth || null } : {}) };
+  await prisma.monitoringPhoto.updateMany({ where, data: { takenAt: d } });
   res.json({ ok: true });
 });
 

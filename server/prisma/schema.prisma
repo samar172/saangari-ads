@@ -123,6 +123,9 @@ model User {
   email     String   @unique
   phone     String?
   password  String
+  // Optional 4-digit login PIN (bcrypt-hashed). A user can log in with either
+  // email+password OR phone+PIN. Super-Admin sets/edits the PIN from Users.
+  pin       String?
   role      Role     @default(SALES)
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -385,7 +388,11 @@ model Order {
   // Commercials (computed + stored)
   paymentTerms    PaymentTerms @default(ADVANCE)
   discountPct     Float        @default(0)
+  // Flat ₹ discount — when > 0 it overrides the percentage discount.
+  discountFlat    Float        @default(0)
   discountRemarks String?
+  // Free-text remarks for the printing-partner job block (prints/price context).
+  printRemarks    String?
   rentalSubtotal  Float        @default(0)
   addOnTotal      Float        @default(0)
   discountAmount  Float        @default(0)
@@ -464,6 +471,9 @@ model MonitoringPhoto {
   id           Int        @id @default(autoincrement())
   booking      Booking    @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   bookingId    Int
+  // Billing month this proof belongs to (YYYY-MM). Lets a multi-month campaign
+  // hold a separate monitoring set per month; null = legacy/unassigned.
+  cycleMonth   String?
   phase        PhotoPhase
   kind         PhotoKind  @default(NORMAL)
   filePath     String
@@ -475,7 +485,7 @@ model MonitoringPhoto {
   remarks      String?
 
   // One photo per (line, phase, kind) — re-uploading replaces it
-  @@unique([bookingId, phase, kind])
+  @@unique([bookingId, cycleMonth, phase, kind])
 }
 
 // In-app monitoring reminder for an order phase (START / MID / END)

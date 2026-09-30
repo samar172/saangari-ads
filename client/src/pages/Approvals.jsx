@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Check, X, Clock } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Clock, ChevronRight } from 'lucide-react';
 import api from '../api';
 import { useAuth } from '../auth';
 import { Spinner } from '../components/ui';
@@ -20,29 +21,35 @@ const STATUS_STYLE = {
   REJECTED: 'bg-red-100 text-red-700',
 };
 
+// Group requests by their createdAt calendar day, newest day first.
+function groupByDay(requests) {
+  const groups = new Map();
+  for (const r of requests) {
+    const d = new Date(r.createdAt);
+    const key = d.toISOString().slice(0, 10); // YYYY-MM-DD, sortable
+    const label = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    if (!groups.has(key)) groups.set(key, { key, label, items: [] });
+    groups.get(key).items.push(r);
+  }
+  return [...groups.values()].sort((a, b) => (a.key < b.key ? 1 : -1));
+}
+
 export default function Approvals() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const isReviewer = user.role === 'MANAGER' || user.role === 'SUPER_ADMIN';
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('PENDING');
-  const [busyId, setBusyId] = useState(null);
-  const [err, setErr] = useState('');
 
-  function load() {
+  useEffect(() => {
     setLoading(true);
     api.get('/approvals', { params: filter ? { status: filter } : {} })
       .then((r) => setRequests(r.data))
       .finally(() => setLoading(false));
-  }
-  useEffect(load, [filter]);
+  }, [filter]);
 
-  async function act(id, kind) {
-    setBusyId(id); setErr('');
-    try { await api.post(`/approvals/${id}/${kind}`); load(); }
-    catch (e) { setErr(e.response?.data?.error || 'Action failed'); }
-    finally { setBusyId(null); }
-  }
+  const days = groupByDay(requests);
 
   return (
     <div>
@@ -63,33 +70,32 @@ export default function Approvals() {
         </div>
       </div>
 
-      {err && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
-
       {loading ? <Spinner /> : requests.length === 0 ? (
         <div className="rounded-lg border border-dashed border-slate-300 p-12 text-center text-slate-400">No requests</div>
       ) : (
-        <div className="card divide-y divide-slate-100">
-          {requests.map((r) => (
-            <div key={r.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-slate-800">{ACTION_LABEL[r.action] || r.action}</span>
-                  <span className={`badge text-[10px] ${STATUS_STYLE[r.status]}`}>{r.status}</span>
-                </div>
-                <div className="text-sm text-slate-600">{r.label || `${r.entityType} #${r.entityId ?? ''}`}</div>
-                {r.reason && <div className="text-xs text-slate-400 mt-0.5">“{r.reason}”</div>}
-                <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1">
-                  <Clock size={11} /> {new Date(r.createdAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                  {' · by '}{r.requestedBy?.name}
-                  {r.reviewedBy && ` · reviewed by ${r.reviewedBy.name}`}
-                </div>
+        <div className="space-y-6">
+          {days.map((day) => (
+            <div key={day.key}>
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{day.label}</div>
+              <div className="card divide-y divide-slate-100">
+                {day.items.map((r) => (
+                  <button key={r.id} onClick={() => navigate('/approvals/' + r.id)}
+                    className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 transition">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-800">{ACTION_LABEL[r.action] || r.action}</span>
+                        <span className={`badge text-[10px] ${STATUS_STYLE[r.status]}`}>{r.status}</span>
+                      </div>
+                      <div className="text-sm text-slate-600 truncate">{r.label || `${r.entityType} #${r.entityId ?? ''}`}</div>
+                      <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1">
+                        <Clock size={11} /> {new Date(r.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                        {' · by '}{r.requestedBy?.name}
+                      </div>
+                    </div>
+                    <ChevronRight size={16} className="text-slate-300 shrink-0" />
+                  </button>
+                ))}
               </div>
-              {isReviewer && r.status === 'PENDING' && (
-                <div className="flex gap-2">
-                  <button className="btn-primary text-xs flex items-center gap-1" disabled={busyId === r.id} onClick={() => act(r.id, 'approve')}><Check size={14} /> Approve</button>
-                  <button className="btn-ghost text-xs flex items-center gap-1 text-red-600" disabled={busyId === r.id} onClick={() => act(r.id, 'reject')}><X size={14} /> Reject</button>
-                </div>
-              )}
             </div>
           ))}
         </div>

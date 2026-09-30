@@ -22,6 +22,10 @@ const RANGES = {
   MONTH: { label: 'This month', from: () => dayjs().startOf('month'), to: () => dayjs() },
   FY: { label: 'This FY', from: () => fyStart(), to: () => dayjs() },
   LAST_FY: { label: 'Last FY', from: () => fyStart().subtract(1, 'year'), to: () => fyStart().subtract(1, 'day') },
+  // Explicit financial-year picks (Apr 1 → Mar 31).
+  FY_2024: { label: 'FY 2024-25', from: () => dayjs('2024-04-01'), to: () => dayjs('2025-03-31') },
+  FY_2025: { label: 'FY 2025-26', from: () => dayjs('2025-04-01'), to: () => dayjs('2026-03-31') },
+  FY_2026: { label: 'FY 2026-27', from: () => dayjs('2026-04-01'), to: () => dayjs('2027-03-31') },
   ALL: { label: 'All time', from: () => null, to: () => null },
 };
 
@@ -120,23 +124,41 @@ export default function Accounts() {
 // ---- Receivables (trial balance) ----
 function Receivables({ cid, refreshKey, onOpenParty }) {
   const [data, setData] = useState(null);
+  const [q, setQ] = useState('');
+  const [sort, setSort] = useState('balDesc'); // balDesc | balAsc | nameAsc
   useEffect(() => {
     setData(null);
     api.get('/accounts/parties', { params: { companyId: cid } }).then((r) => setData(r.data)).catch(() => setData({ parties: [], totals: { debit: 0, credit: 0, balance: 0 } }));
   }, [cid, refreshKey]);
 
   if (!data) return <Spinner />;
-  const parties = data.parties || [];
-  const receivable = parties.filter((p) => p.balance > 0).reduce((s, p) => s + p.balance, 0);
-  const advance = parties.filter((p) => p.balance < 0).reduce((s, p) => s + Math.abs(p.balance), 0);
+  const allParties = data.parties || [];
+  // Stat tiles reflect the whole book; the table reflects the search/sort.
+  const receivable = allParties.filter((p) => p.balance > 0).reduce((s, p) => s + p.balance, 0);
+  const advance = allParties.filter((p) => p.balance < 0).reduce((s, p) => s + Math.abs(p.balance), 0);
+
+  const needle = q.trim().toLowerCase();
+  const parties = allParties
+    .filter((p) => !needle || (p.name || '').toLowerCase().includes(needle))
+    .sort((a, b) => (sort === 'nameAsc' ? (a.name || '').localeCompare(b.name || '') : sort === 'balAsc' ? a.balance - b.balance : b.balance - a.balance));
 
   return (
     <div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-        <StatTile label="Total receivable" value={<Money value={receivable} />} accent="text-red-600" sub={`${parties.filter((p) => p.balance > 0).length} parties owe`} />
-        <StatTile label="Advances held" value={<Money value={advance} />} accent="text-emerald-600" sub={`${parties.filter((p) => p.balance < 0).length} in credit`} />
+        <StatTile label="Total receivable" value={<Money value={receivable} />} accent="text-red-600" sub={`${allParties.filter((p) => p.balance > 0).length} parties owe`} />
+        <StatTile label="Advances held" value={<Money value={advance} />} accent="text-emerald-600" sub={`${allParties.filter((p) => p.balance < 0).length} in credit`} />
         <StatTile label="Total billed" value={<Money value={data.totals?.debit || 0} />} sub="debits" />
         <StatTile label="Total received" value={<Money value={data.totals?.credit || 0} />} sub="credits" />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <input className="input w-full sm:w-64" placeholder="Search party name…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value)} title="Sort">
+          <option value="balDesc">Balance: high → low</option>
+          <option value="balAsc">Balance: low → high</option>
+          <option value="nameAsc">Name: A → Z</option>
+        </select>
+        <span className="text-xs text-slate-400">{parties.length} of {allParties.length}</span>
       </div>
 
       <div className="card overflow-x-auto">
@@ -251,14 +273,21 @@ function Statement({ cid, from, to, clients, partyId, setPartyId, refreshKey }) 
 // ---- Day book (all entries chronologically) ----
 function DayBook({ cid, from, to, refreshKey }) {
   const [data, setData] = useState(null);
+  const [q, setQ] = useState('');
   useEffect(() => {
     setData(null);
     api.get('/accounts/daybook', { params: { companyId: cid, from, to } }).then((r) => setData(r.data)).catch(() => setData({ entries: [], totalDebit: 0, totalCredit: 0 }));
   }, [cid, from, to, refreshKey]);
 
   if (!data) return <Spinner />;
-  const entries = data.entries || [];
+  const needle = q.trim().toLowerCase();
+  const entries = (data.entries || []).filter((e) => !needle || (e.clientName || '').toLowerCase().includes(needle));
   return (
+   <div>
+    <div className="flex items-center gap-2 mb-3">
+      <input className="input w-full sm:w-64" placeholder="Search party name…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <span className="text-xs text-slate-400">{entries.length} of {(data.entries || []).length} entries</span>
+    </div>
     <div className="card overflow-x-auto">
       <table className="w-full min-w-[640px] text-sm">
         <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
@@ -293,6 +322,7 @@ function DayBook({ cid, from, to, refreshKey }) {
         )}
       </table>
     </div>
+   </div>
   );
 }
 

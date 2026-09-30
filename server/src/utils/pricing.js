@@ -52,9 +52,13 @@ function computeLine({ monthlyRate, startDate, endDate, dayRateOverride, monthly
 // the discount and the GST split. Shared by computeOrder (which prices lines
 // from scratch) and recomputeOrderTotals (which re-prices a saved order from
 // its existing line subtotals, after a stop or a shift changed the dates).
-function applyOrderCharges({ rentalSubtotal, addOnTotal, printingTotal, mountingTotal, discountPct, taxCategory, interState }) {
+function applyOrderCharges({ rentalSubtotal, addOnTotal, printingTotal, mountingTotal, discountPct, discountFlat, taxCategory, interState }) {
   const preDiscount = rentalSubtotal + addOnTotal + printingTotal + mountingTotal;
-  const discountAmount = Math.round(preDiscount * (Number(discountPct) || 0) / 100);
+  // A flat ₹ discount (when > 0) overrides the percentage; capped at the pre-discount total.
+  const flat = Math.round(Number(discountFlat) || 0);
+  const discountAmount = flat > 0
+    ? Math.min(flat, preDiscount)
+    : Math.round(preDiscount * (Number(discountPct) || 0) / 100);
   const taxableAmount = preDiscount - discountAmount;
 
   const gstApplicable = taxCategory === 'GST';
@@ -94,6 +98,7 @@ function recomputeOrderTotals(order, lines) {
     printingTotal: order.printingTotal || 0,
     mountingTotal: order.mountingCost || 0,
     discountPct: order.discountPct || 0,
+    discountFlat: order.discountFlat || 0,
     taxCategory: order.taxCategory,
     interState: order.interState,
   });
@@ -108,6 +113,7 @@ function computeOrder({
   printRate = 0,
   mountingCost = 0,
   discountPct = 0,
+  discountFlat = 0,
   taxCategory = 'NON_GST',
   interState = false,
 }) {
@@ -118,7 +124,7 @@ function computeOrder({
     addOnTotal: (addOns || []).reduce((s, a) => s + (Number(a.amount) || 0), 0),
     printingTotal: Math.round((Number(noOfPrints) || 0) * (Number(printRate) || 0)),
     mountingTotal: Math.round(Number(mountingCost) || 0),
-    discountPct, taxCategory, interState,
+    discountPct, discountFlat, taxCategory, interState,
   });
 
   return { lines, ...totals };

@@ -52,6 +52,13 @@ const COLUMNS = [
   { key: 'end', label: 'End', align: 'left', cell: (o) => <span className="whitespace-nowrap text-slate-600">{fmt(displayPeriod(o.items).end)}</span> },
   { key: 'total', label: 'Grand Total', align: 'right', cell: (o) => <span className="font-semibold text-slate-700"><Money value={o.grandTotal} /></span> },
   { key: 'paid', label: 'Paid', align: 'right', cell: (o) => o.receivable ? <span className="text-emerald-600"><Money value={o.amountPaid} /></span> : <span className="text-slate-300">—</span> },
+  // Invoiced-to-date (how much of the campaign has actually been billed).
+  { key: 'invoiced', label: 'Invoiced', align: 'right', cell: (o) => o.receivable ? <span className="text-slate-700"><Money value={o.invoicedToDate || 0} /></span> : <span className="text-slate-300">—</span> },
+  // Invoice-based balance (invoiced − paid).
+  { key: 'outstanding', label: 'Outstanding', align: 'right',
+    cell: (o) => !o.receivable ? <span className="text-slate-300">—</span>
+      : (o.outstanding || 0) > 0 ? <span className="text-red-600 font-medium"><Money value={o.outstanding} /></span>
+        : <span className="text-emerald-600">Nil</span> },
   { key: 'balance', label: 'Balance', align: 'right',
     cell: (o) => !o.receivable ? <span className="text-slate-300">—</span>
       : o.balanceDue > 0 ? <span className="text-red-600 font-medium"><Money value={o.balanceDue} /></span>
@@ -82,8 +89,8 @@ const COLUMNS = [
     } },
 ];
 
-const DEFAULT_VISIBLE = ['order', 'client', 'sites', 'start', 'end', 'total', 'balance', 'lastInvoice', 'terms', 'status', 'photos'];
-const STORAGE_KEY = 'orders.columns.v2';
+const DEFAULT_VISIBLE = ['order', 'client', 'sites', 'start', 'end', 'total', 'invoiced', 'outstanding', 'balance', 'lastInvoice', 'terms', 'status', 'photos'];
+const STORAGE_KEY = 'orders.columns.v3';
 
 function loadVisible() {
   try {
