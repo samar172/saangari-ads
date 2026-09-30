@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 
 // Booking categories the client maintains themselves (institute, hospital, …).
 // The booking form only ever shows active ones; the admin page asks for all.
@@ -14,7 +14,7 @@ router.get('/', async (req, res) => {
   res.json(categories);
 });
 
-router.post('/', requireRole('MANAGER'), async (req, res) => {
+router.post('/', requirePermission('settings', 'add'), async (req, res) => {
   const { name, sortOrder } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Category name is required' });
   try {
@@ -33,7 +33,7 @@ router.post('/', requireRole('MANAGER'), async (req, res) => {
 // then delete the now-empty source. Reassigning ORDERS is essential — reports
 // group spend on the order's own category snapshot, so a merge that only moved
 // clients would strand that spend under the deleted category.
-router.post('/merge', requireRole('MANAGER'), async (req, res) => {
+router.post('/merge', requirePermission('settings', 'edit'), async (req, res) => {
   const sourceId = Number(req.body?.sourceId);
   const targetId = Number(req.body?.targetId);
   const newName = req.body?.name ? String(req.body.name).trim() : null;
@@ -66,7 +66,7 @@ router.post('/merge', requireRole('MANAGER'), async (req, res) => {
   }
 });
 
-router.patch('/:id', requireRole('MANAGER'), async (req, res) => {
+router.patch('/:id', requirePermission('settings', 'edit'), async (req, res) => {
   const { name, sortOrder, active } = req.body || {};
   const data = {};
   if (name !== undefined) data.name = String(name).trim();
@@ -83,7 +83,7 @@ router.patch('/:id', requireRole('MANAGER'), async (req, res) => {
 
 // Hard-delete only if nothing references it; otherwise deactivate so historical
 // orders — and the clients filed under it — keep their category.
-router.delete('/:id', requireRole('MANAGER'), async (req, res) => {
+router.delete('/:id', requirePermission('settings', 'delete'), async (req, res) => {
   const id = Number(req.params.id);
   const [orders, clients] = await Promise.all([
     prisma.order.count({ where: { categoryId: id } }),

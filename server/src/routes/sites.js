@@ -3,7 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 
 const storage = multer.memoryStorage();
 const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
@@ -115,7 +115,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // Create a new site (Manager / Super Admin)
-router.post('/', requireRole('MANAGER'), async (req, res) => {
+router.post('/', requirePermission('inventory', 'add'), async (req, res) => {
   const data = cleanSiteData(req.body);
   if (!data.code || !data.zone || !data.city || !data.location || !data.type)
     return res.status(400).json({ error: 'code, zone, city, location and type are required' });
@@ -129,7 +129,7 @@ router.post('/', requireRole('MANAGER'), async (req, res) => {
 });
 
 // Edit site data (Manager / Super Admin)
-router.patch('/:id', requireRole('MANAGER'), async (req, res) => {
+router.patch('/:id', requirePermission('inventory', 'edit'), async (req, res) => {
   const data = cleanSiteData(req.body);
   const site = await prisma.site.update({ where: { id: Number(req.params.id) }, data });
   res.json(site);
@@ -167,7 +167,7 @@ router.post('/:id/release', requireRole('SALES', 'MANAGER'), async (req, res) =>
 });
 
 // Upload / replace the site's display image (Manager / Super Admin)
-router.post('/:id/image', requireRole('MANAGER'), upload.single('image'), async (req, res) => {
+router.post('/:id/image', requirePermission('inventory', 'edit'), upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Image file is required' });
   
   let secureUrl;

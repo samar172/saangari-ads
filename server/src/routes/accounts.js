@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 const { computePrintCost } = require('../utils/printingCost');
 
 // Parse ?from&to into a Prisma date filter (inclusive of the whole `to` day).
@@ -15,7 +15,7 @@ const partyName = (c) => (c?.company?.trim() || c?.name || 'Unknown');
 
 // Trial balance / receivables list: every party with a ledger entry, their total
 // debit (billed) vs credit (paid/notes) and closing balance (debit − credit).
-router.get('/parties', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/parties', requirePermission('accounts', 'view'), async (req, res) => {
   const { companyId } = req.query;
   const where = {};
   if (companyId) where.companyId = Number(companyId);
@@ -43,7 +43,7 @@ router.get('/parties', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
 
 // One party's ledger statement with a running balance, date-ranged. `opening`
 // carries the balance from before the window so the running balance is correct.
-router.get('/party/:clientId', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/party/:clientId', requirePermission('accounts', 'view'), async (req, res) => {
   const clientId = Number(req.params.clientId);
   if (!Number.isInteger(clientId)) return res.status(400).json({ error: 'Invalid client id' });
   const { companyId, from, to } = req.query;
@@ -90,7 +90,7 @@ router.get('/party/:clientId', requireRole('MANAGER', 'FINANCE'), async (req, re
 });
 
 // Day book: every ledger entry in the range (default last 30 days), newest first.
-router.get('/daybook', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/daybook', requirePermission('accounts', 'view'), async (req, res) => {
   const { companyId, from, to } = req.query;
   const where = {};
   if (companyId) where.companyId = Number(companyId);
@@ -120,7 +120,7 @@ router.get('/daybook', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
 // Post a manual journal entry to a client's ledger: credit/debit note, adjustment
 // or opening balance. This is the only path for non-invoice, non-payment entries.
 const JOURNAL_KINDS = ['CREDIT_NOTE', 'DEBIT_NOTE', 'ADJUSTMENT', 'OPENING'];
-router.post('/journal', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.post('/journal', requirePermission('accounts', 'add'), async (req, res) => {
   const { clientId, type, amount, narration, kind, companyId, date } = req.body || {};
   const cid = Number(clientId);
   if (!Number.isInteger(cid)) return res.status(400).json({ error: 'A client is required' });
@@ -151,7 +151,7 @@ router.post('/journal', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
 // partner payable, cash movement). Honest scope: operating expenses, capital and
 // bank opening balances aren't captured, so this is NOT a fully-balancing trial
 // balance — it's a P&L + working-capital position derived from real transactions.
-router.get('/financials', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/financials', requirePermission('accounts', 'view'), async (req, res) => {
   const { companyId, from, to } = req.query;
   const range = dateRange(from, to);
   const orderWhere = { status: { in: ['CONFIRMED', 'LIVE', 'COMPLETED'] } };

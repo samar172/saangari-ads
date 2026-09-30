@@ -35,4 +35,22 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { authenticate, requireRole };
+// requirePermission('campaigns', 'add') — RBAC gate. SUPER_ADMIN always passes;
+// every other role is checked against the resolved (defaults + overrides) matrix.
+// This is the editable successor to requireRole for resource routes.
+const { matrixFor } = require('../utils/permCache');
+function requirePermission(module, action) {
+  return async (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
+    if (req.user.role === 'SUPER_ADMIN') return next();
+    try {
+      const matrix = await matrixFor(req.user.role);
+      if (matrix?.[module]?.[action]) return next();
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    } catch (e) {
+      return res.status(500).json({ error: 'Permission check failed' });
+    }
+  };
+}
+
+module.exports = { authenticate, requireRole, requirePermission };

@@ -33,11 +33,17 @@ router.post('/login', async (req, res) => {
     process.env.JWT_SECRET,
     { expiresIn: '12h' }
   );
-  res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+  let permissions = null;
+  try { permissions = await require('../utils/permCache').matrixFor(user.role); } catch { /* non-fatal */ }
+  res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role }, permissions });
 });
 
 router.get('/me', authenticate, async (req, res) => {
-  res.json({ user: req.user });
+  // Ship the caller's resolved permission matrix alongside the user so the client
+  // can gate nav/buttons without a second round-trip.
+  let permissions = null;
+  try { permissions = await require('../utils/permCache').matrixFor(req.user.role); } catch { /* non-fatal */ }
+  res.json({ user: req.user, permissions });
 });
 
 module.exports = router;

@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 const { settleInCash } = require('../utils/settle');
 const { applyPaymentEdit } = require('../utils/payments');
 const { createInvoiceForOrder } = require('../utils/invoicing');
@@ -159,7 +159,7 @@ async function execute(request, approver) {
 // manager — these delete hard financial records or lock people out.
 const SUPER_ADMIN_ONLY_ACTIONS = ['DISABLE_USER', 'DELETE_INVOICE'];
 
-router.post('/:id/approve', requireRole('MANAGER'), async (req, res) => {
+router.post('/:id/approve', requirePermission('approvals', 'edit'), async (req, res) => {
   const id = Number(req.params.id);
   const request = await prisma.approvalRequest.findUnique({ where: { id } });
   if (!request) return res.status(404).json({ error: 'Request not found' });
@@ -202,7 +202,7 @@ router.post('/:id/approve', requireRole('MANAGER'), async (req, res) => {
   res.json(updated);
 });
 
-router.post('/:id/reject', requireRole('MANAGER'), async (req, res) => {
+router.post('/:id/reject', requirePermission('approvals', 'edit'), async (req, res) => {
   const id = Number(req.params.id);
   const request = await prisma.approvalRequest.findUnique({ where: { id } });
   if (!request) return res.status(404).json({ error: 'Request not found' });

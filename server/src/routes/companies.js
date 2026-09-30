@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 
 // List active companies (for the sidebar dropdown)
 router.get('/', async (req, res) => {
@@ -26,7 +26,7 @@ function cleanCompanyData(body) {
 }
 
 // Create new company
-router.post('/', requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+router.post('/', requirePermission('settings', 'add'), async (req, res) => {
   const { code, ...rest } = req.body;
   if (!code || !rest.name) return res.status(400).json({ error: 'Code and Name are required' });
   
@@ -42,7 +42,7 @@ router.post('/', requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
 });
 
 // Update company
-router.patch('/:id', requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+router.patch('/:id', requirePermission('settings', 'edit'), async (req, res) => {
   const data = cleanCompanyData(req.body);
   const company = await prisma.company.update({
     where: { id: Number(req.params.id) },

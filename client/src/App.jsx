@@ -34,6 +34,7 @@ import Reminders from './pages/Reminders';
 import PrintingPartners from './pages/PrintingPartners';
 import Companies from './pages/Companies';
 import Users from './pages/Users';
+import Permissions from './pages/Permissions';
 import Approvals from './pages/Approvals';
 import SimpleQuotation from './pages/SimpleQuotation';
 
@@ -89,6 +90,7 @@ export default function App() {
             <Route path="/users" element={<Protected><Users /></Protected>} />
             <Route path="/users/new" element={<Protected><UserForm /></Protected>} />
             <Route path="/users/:id/edit" element={<Protected><UserForm /></Protected>} />
+            <Route path="/permissions" element={<Protected><Permissions /></Protected>} />
             <Route path="/approvals" element={<Protected><Approvals /></Protected>} />
             <Route path="/approvals/:id" element={<Protected><ApprovalDetail /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />

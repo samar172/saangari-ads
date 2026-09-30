@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 const { computePrintCost } = require('../utils/printingCost');
 const { computeBookingAnalysis } = require('../utils/bookingAnalysis');
 
@@ -15,7 +15,7 @@ function dateRange(from, to) {
 }
 
 // Super Admin analytics: occupancy, revenue, category profitability, GST, repeat clients
-router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/overview', requirePermission('reports', 'view'), async (req, res) => {
   const { companyId, from, to } = req.query;
   const range = dateRange(from, to);
   const orderWhere = { status: NON_CANCELLED };
@@ -154,7 +154,7 @@ router.get('/overview', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
 });
 
 // Time-series booked value & orders, grouped by week/month/year (by booking date)
-router.get('/timeseries', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/timeseries', requirePermission('reports', 'view'), async (req, res) => {
   const { period: periodParam, companyId, from, to } = req.query;
   const period = periodParam || 'month';
   const where = { status: NON_CANCELLED };
@@ -189,7 +189,7 @@ router.get('/timeseries', requireRole('MANAGER', 'FINANCE'), async (req, res) =>
 });
 
 // Top clients by booked value
-router.get('/top-clients', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/top-clients', requirePermission('reports', 'view'), async (req, res) => {
   const { companyId, from, to } = req.query;
   const where = { status: NON_CANCELLED };
   if (companyId) where.companyId = Number(companyId);
@@ -217,7 +217,7 @@ router.get('/top-clients', requireRole('MANAGER', 'FINANCE'), async (req, res) =
 // to partners) and discounts given. Rental/mounting have no vendor cost recorded,
 // so we surface printing margin + discount leakage + a contribution proxy, broken
 // down by category and month. Booking-date scoped.
-router.get('/profitability', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/profitability', requirePermission('reports', 'view'), async (req, res) => {
   const { companyId, from, to } = req.query;
   const where = { status: { in: ['CONFIRMED', 'LIVE', 'COMPLETED'] } };
   if (companyId) where.companyId = Number(companyId);
@@ -277,7 +277,7 @@ router.get('/profitability', requireRole('MANAGER', 'FINANCE'), async (req, res)
 
 // Accounts-receivable aging + DSO. Aging is always "as of now": each receivable
 // order (invoiced more than paid) is aged by its earliest live invoice's due date.
-router.get('/receivables', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/receivables', requirePermission('reports', 'view'), async (req, res) => {
   const { companyId } = req.query;
   const where = { status: { in: ['CONFIRMED', 'LIVE', 'COMPLETED'] } };
   if (companyId) where.companyId = Number(companyId);
@@ -334,7 +334,7 @@ router.get('/receivables', requireRole('MANAGER', 'FINANCE'), async (req, res) =
 
 // FY Booking Analysis — mirrors the client's workbook (Dashboard, Month-wise,
 // Category-wise, Customer-wise, Payment Status, Pending Follow-up).
-router.get('/booking-analysis', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/booking-analysis', requirePermission('bookingAnalysis', 'view'), async (req, res) => {
   const { companyId, from, to, category, customer, zone, mediaType, paymentStatus, paymentTerms } = req.query;
   const data = await computeBookingAnalysis({ companyId, from, to, category, customer, zone, mediaType, paymentStatus, paymentTerms });
   delete data.lines; // raw lines are for the Excel export only

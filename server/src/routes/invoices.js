@@ -2,7 +2,7 @@ const router = require('express').Router();
 const PDFDocument = require('pdfkit');
 const dayjs = require('dayjs');
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 const { nextInvoiceNo } = require('../utils/counters');
 const { GST_RATE, recomputeOrderTotals } = require('../utils/pricing');
 const { writeLineNotes } = require('../utils/pdf');
@@ -11,7 +11,7 @@ const { createInvoiceForOrder, lastWorkingDayOfMonth, gstSplit } = require('../u
 
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
 
-router.get('/', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+router.get('/', requirePermission('invoices', 'view'), async (req, res) => {
   const { companyId } = req.query;
   const where = {};
   if (companyId) where.companyId = Number(companyId);
@@ -28,7 +28,7 @@ router.get('/', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
   res.json(invoices);
 });
 
-router.get('/:id', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+router.get('/:id', requirePermission('invoices', 'view'), async (req, res) => {
   const invoice = await prisma.invoice.findUnique({
     where: { id: Number(req.params.id) },
     include: {
@@ -51,7 +51,7 @@ router.get('/:id', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
 // Log that a bill was shared with the client over WhatsApp / email. The message
 // is opened client-side (wa.me / mailto) and the person presses send; this only
 // records that it happened, into the Activity feed. We never claim delivery.
-router.post('/:id/share', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+router.post('/:id/share', requirePermission('invoices', 'edit'), async (req, res) => {
   const id = Number(req.params.id);
   const { channel, toName, toContact } = req.body || {};
   const ch = channel === 'EMAIL' ? 'EMAIL' : 'WHATSAPP';
@@ -69,7 +69,7 @@ router.post('/:id/share', requireRole('FINANCE', 'MANAGER'), async (req, res) =>
   res.json({ ok: true });
 });
 
-router.patch('/:id/commercials', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+router.patch('/:id/commercials', requirePermission('invoices', 'edit'), async (req, res) => {
   const { id } = req.params;
   const { discountPct, discountRemarks, printingTotal, mountingCost, addOns, dueDate, issuedAt } = req.body;
 
@@ -158,7 +158,7 @@ router.patch('/:id/commercials', requireRole('FINANCE', 'MANAGER'), async (req, 
 // Generate a tax invoice for an order. Blocked until at least one monitoring
 // photo exists on any line (proof-of-display gate) — but purely loose orders
 // are 1–2 day displays with no monitoring cycle, so they invoice straight away.
-router.post('/', requireRole('FINANCE'), async (req, res) => {
+router.post('/', requirePermission('invoices', 'add'), async (req, res) => {
   const { orderId, force, dueDate } = req.body || {};
   try {
     const invoice = await createInvoiceForOrder({ orderId, force: !!force, dueDate, user: req.user });
@@ -203,7 +203,7 @@ router.post('/:id/mark-paid', requireRole('FINANCE'), async (req, res) => {
 });
 
 // Downloadable PDF tax invoice
-router.get('/:id/pdf', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+router.get('/:id/pdf', requirePermission('invoices', 'view'), async (req, res) => {
   const invoice = await prisma.invoice.findUnique({
     where: { id: Number(req.params.id) },
     include: { client: true, company: true, order: { include: { items: { include: { site: true } } } } },

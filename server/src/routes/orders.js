@@ -3,7 +3,7 @@ const dayjs = require('dayjs');
 const PDFDocument = require('pdfkit');
 const { Prisma } = require('@prisma/client');
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 const { computeOrder, computeLine, recomputeOrderTotals, computeTds } = require('../utils/pricing');
 const { settleInCash } = require('../utils/settle');
 const { applyPaymentEdit } = require('../utils/payments');
@@ -240,7 +240,7 @@ async function priceFromBody(body) {
 }
 
 // Create an order (quotation) with its site line-items, add-ons and reminders.
-router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+router.post('/', requirePermission('campaigns', 'add'), async (req, res) => {
   const body = req.body || {};
   const {
     clientId, categoryId, companyId, items = [], type = 'REGULAR', bookingDate, description,
@@ -627,7 +627,7 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
 });
 
 // Order status transitions with cascade to line + site status.
-router.post('/:id/status', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+router.post('/:id/status', requirePermission('campaigns', 'edit'), async (req, res) => {
   const { status } = req.body || {};
   const id = Number(req.params.id);
   const order = await prisma.order.findUnique({ where: { id }, include: { items: true } });
@@ -692,7 +692,7 @@ router.post('/:id/status', requireRole('SALES', 'MANAGER', 'FINANCE'), async (re
 // `amount` is the gross settled against the order. Where the client deducts TDS
 // at source they remit it to the government on our behalf, so the order is
 // still credited the full gross; `netReceived` is what reached the bank.
-router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (req, res) => {
+router.post('/:id/payments', requirePermission('payments', 'add'), async (req, res) => {
   const id = Number(req.params.id);
   const { amount, mode = 'CASH', reference, notes, tdsApplicable = false, tdsPct = 0, tdsMode, tdsAmount: tdsAmountBody, receivedAt } = req.body || {};
   const order = await prisma.order.findUnique({ where: { id } });
@@ -769,7 +769,7 @@ router.post('/:id/payments', requireRole('FINANCE', 'MANAGER', 'SALES'), async (
 // in step (and any receivable balance grows accordingly).
 // Edit a recorded payment directly — reviewers only (Manager / Super-Admin).
 // Everyone else routes an edit through the approval queue (EDIT_PAYMENT).
-router.patch('/:id/payments/:pid', requireRole('MANAGER'), async (req, res) => {
+router.patch('/:id/payments/:pid', requirePermission('payments', 'edit'), async (req, res) => {
   const orderId = Number(req.params.id);
   const pid = Number(req.params.pid);
   if (!Number.isInteger(orderId) || !Number.isInteger(pid)) return res.status(400).json({ error: 'Invalid id' });
@@ -789,7 +789,7 @@ router.patch('/:id/payments/:pid', requireRole('MANAGER'), async (req, res) => {
   res.json(withDerived(full));
 });
 
-router.post('/:id/addons', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) => {
+router.post('/:id/addons', requirePermission('campaigns', 'edit'), async (req, res) => {
   const id = Number(req.params.id);
   const { label, amount, kind } = req.body || {};
   const amt = Math.round(Number(amount) || 0);
@@ -821,7 +821,7 @@ router.post('/:id/addons', requireRole('MANAGER', 'FINANCE', 'SALES'), async (re
 // Switch an order's tax treatment after the fact — e.g. a campaign started
 // under GST that the client later asks to settle in cash (Non-GST) at billing
 // time. Re-prices so CGST/SGST/IGST and the grand total update.
-router.patch('/:id/tax', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.patch('/:id/tax', requirePermission('campaigns', 'edit'), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid order id' });
   const { taxCategory } = req.body || {};
@@ -860,7 +860,7 @@ router.patch('/:id/tax', requireRole('MANAGER', 'FINANCE'), async (req, res) => 
 // before anything was collected or billed. Money and invoices are hard records,
 // so refuse if either exists (cancel instead); otherwise cascade removes the
 // bookings/add-ons/reminders and the freed sites are released.
-router.delete('/:id', requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+router.delete('/:id', requirePermission('campaigns', 'delete'), async (req, res) => {
   const id = Number(req.params.id);
   const order = await prisma.order.findUnique({
     where: { id },
@@ -883,7 +883,7 @@ router.delete('/:id', requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) =>
 // ── Line-item operations ────────────────────────────────────────────────────
 
 // Edit a line's display notes (they print on the quotation + invoice).
-router.patch('/:id/items/:lineId', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) => {
+router.patch('/:id/items/:lineId', requirePermission('campaigns', 'edit'), async (req, res) => {
   const { displayNotes } = req.body || {};
   const line = await prisma.booking.findUnique({ where: { id: Number(req.params.lineId) } });
   if (!line || line.orderId !== Number(req.params.id)) return res.status(404).json({ error: 'Line not found on this order' });
@@ -897,7 +897,7 @@ router.patch('/:id/items/:lineId', requireRole('MANAGER', 'FINANCE', 'SALES'), a
 });
 
 // Shift a live line onto a different site, keeping the same dates and price.
-router.post('/:id/items/:lineId/shift', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+router.post('/:id/items/:lineId/shift', requirePermission('campaigns', 'edit'), async (req, res) => {
   const { toSiteId, reason } = req.body || {};
   const orderId = Number(req.params.id);
   const line = await prisma.booking.findUnique({ where: { id: Number(req.params.lineId) } });
@@ -951,7 +951,7 @@ router.post('/:id/items/:lineId/shift', requireRole('SALES', 'MANAGER', 'FINANCE
 });
 
 // Stop a display immediately: bill only the days it actually ran, free the site.
-router.post('/:id/items/:lineId/stop', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+router.post('/:id/items/:lineId/stop', requirePermission('campaigns', 'edit'), async (req, res) => {
   const { reason } = req.body || {};
   const orderId = Number(req.params.id);
   const line = await prisma.booking.findUnique({ where: { id: Number(req.params.lineId) }, include: { site: true } });

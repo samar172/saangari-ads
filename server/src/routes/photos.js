@@ -3,7 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 
 const storage = multer.memoryStorage();
 const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
@@ -40,7 +40,7 @@ async function phaseIsComplete(orderId, phase) {
 
 // Ops uploads one of the three monitoring proofs for a phase, with geo-tag.
 // Re-uploading the same (line, phase, kind) replaces the previous file.
-router.post('/', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), upload.single('photo'), async (req, res) => {
+router.post('/', requirePermission('monitoring', 'add'), upload.single('photo'), async (req, res) => {
   const { bookingId, phase, kind = 'NORMAL', latitude, longitude, remarks, takenAt, cycleMonth } = req.body || {};
   if (!req.file) return res.status(400).json({ error: 'Photo file is required' });
   if (!bookingId || !phase) return res.status(400).json({ error: 'bookingId and phase are required' });
@@ -104,7 +104,7 @@ router.post('/', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), upload.singl
 
 // Set the monitoring date for a whole phase of a line at once, so the exported
 // START / MID / END slides carry the real survey dates instead of upload time.
-router.patch('/date', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+router.patch('/date', requirePermission('monitoring', 'edit'), async (req, res) => {
   const { bookingId, phase, takenAt, cycleMonth } = req.body || {};
   if (!bookingId || !phase) return res.status(400).json({ error: 'bookingId and phase are required' });
   if (!PHASES.includes(phase)) return res.status(400).json({ error: `phase must be one of ${PHASES.join(', ')}` });
@@ -116,7 +116,7 @@ router.patch('/date', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), async (
   res.json({ ok: true });
 });
 
-router.delete('/:id', requireRole('OPS', 'SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+router.delete('/:id', requirePermission('monitoring', 'delete'), async (req, res) => {
   const photo = await prisma.monitoringPhoto.findUnique({ where: { id: Number(req.params.id) } });
   if (photo) {
     await removeFile(photo.filePath);

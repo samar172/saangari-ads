@@ -2,12 +2,12 @@ const router = require('express').Router();
 const dayjs = require('dayjs');
 const ExcelJS = require('exceljs');
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
 
 // All payments, optionally filtered by company and date range
-router.get('/', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+router.get('/', requirePermission('payments', 'view'), async (req, res) => {
   const { companyId, from, to } = req.query;
   const where = {};
   if (companyId) where.companyId = Number(companyId);
@@ -31,7 +31,7 @@ router.get('/', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
 });
 
 // Date-wise aggregated payments
-router.get('/datewise', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+router.get('/datewise', requirePermission('payments', 'view'), async (req, res) => {
   const { companyId, from, to } = req.query;
   const where = {};
   if (companyId) where.companyId = Number(companyId);
@@ -72,7 +72,7 @@ router.get('/datewise', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
 });
 
 // Excel export of payments
-router.get('/export/excel', requireRole('FINANCE', 'MANAGER'), async (req, res) => {
+router.get('/export/excel', requirePermission('payments', 'view'), async (req, res) => {
   const { companyId, from, to } = req.query;
   const where = {};
   if (companyId) where.companyId = Number(companyId);

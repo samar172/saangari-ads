@@ -1,9 +1,9 @@
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 
-router.get('/', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/', requirePermission('users', 'view'), async (req, res) => {
   const users = await prisma.user.findMany({
     select: { id: true, name: true, email: true, phone: true, role: true, active: true, createdAt: true, pin: true },
     orderBy: { id: 'asc' },

@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const PDFDocument = require('pdfkit');
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 const { logActivity } = require('../utils/activity');
 
 const INR = (n) => 'Rs ' + Math.round(Number(n || 0)).toLocaleString('en-IN');
@@ -388,7 +388,7 @@ router.delete('/bills/:bid', requireRole('MANAGER', 'FINANCE'), async (req, res)
   res.json({ ok: true });
 });
 
-router.post('/', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.post('/', requirePermission('printingPartners', 'add'), async (req, res) => {
   const { name, contact, phone, email, address, gstin, machines, ratePerSqft, notes } = req.body || {};
   if (!name) return res.status(400).json({ error: 'Name is required' });
   const partner = await prisma.printingPartner.create({
@@ -397,7 +397,7 @@ router.post('/', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
   res.status(201).json(partner);
 });
 
-router.patch('/:id', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.patch('/:id', requirePermission('printingPartners', 'edit'), async (req, res) => {
   const { name, contact, phone, email, address, gstin, machines, ratePerSqft, notes, active } = req.body || {};
   const data = {};
   for (const [k, v] of Object.entries({ name, contact, phone, email, address, gstin, machines, notes })) if (v !== undefined) data[k] = v;
@@ -409,7 +409,7 @@ router.patch('/:id', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
 
 // Delete a printing partner. Refused if any campaign still references it (their
 // history would break) — deactivate instead. Materials/payments/bills cascade.
-router.delete('/:id', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.delete('/:id', requirePermission('printingPartners', 'delete'), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid partner id' });
   const orderCount = await prisma.order.count({ where: { printingPartnerId: id } });

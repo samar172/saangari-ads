@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 
 // Default message templates. Placeholders are filled client-side when opening a
 // wa.me link (manual) and server-side when auto-sending (API phase).
@@ -19,14 +19,14 @@ async function getOrCreate() {
 }
 
 // Read config. Managers/Finance can read (the manual send buttons need templates).
-router.get('/', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/', requirePermission('whatsapp', 'view'), async (req, res) => {
   const s = await getOrCreate();
   // Never leak the raw API token to the browser — expose only whether it's set.
   res.json({ ...s, apiToken: undefined, hasApiToken: !!s.apiToken });
 });
 
 // Save config. Only Manager / Super-Admin.
-router.put('/', requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+router.put('/', requirePermission('whatsapp', 'edit'), async (req, res) => {
   const b = req.body || {};
   const provider = ['MANUAL', 'CLOUD_API', 'BSP'].includes(b.provider) ? b.provider : 'MANUAL';
   const data = {
@@ -47,7 +47,7 @@ router.put('/', requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
 });
 
 // Record a send (called after the client opens wa.me / mailto).
-router.post('/log', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) => {
+router.post('/log', requirePermission('whatsapp', 'add'), async (req, res) => {
   const b = req.body || {};
   const entry = await prisma.whatsAppLog.create({
     data: {
@@ -63,7 +63,7 @@ router.post('/log', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res)
 });
 
 // Recent send log.
-router.get('/log', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) => {
+router.get('/log', requirePermission('whatsapp', 'view'), async (req, res) => {
   const rows = await prisma.whatsAppLog.findMany({
     orderBy: { sentAt: 'desc' }, take: 100,
     include: { sentBy: { select: { name: true } } },
@@ -74,7 +74,7 @@ router.get('/log', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) 
 // Outbox: action lists — Invoices (send bill), Campaigns (booking confirmation),
 // Ending soon (expiry reminder, campaigns ending ≤30d), Invoice due (payment
 // reminder, unpaid invoices) — each with its own sent/not-sent status by kind.
-router.get('/outbox', requireRole('MANAGER', 'FINANCE', 'SALES'), async (req, res) => {
+router.get('/outbox', requirePermission('whatsapp', 'view'), async (req, res) => {
   const { companyId } = req.query;
   const cw = companyId ? { companyId: Number(companyId) } : {};
   const today = new Date(); today.setHours(0, 0, 0, 0);

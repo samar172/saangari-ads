@@ -29,6 +29,7 @@ export default function Login() {
         const { data } = await api.post('/auth/login', { phone: phone.trim(), pin });
         localStorage.setItem('token', data.token);
         localStorage.setItem('user', JSON.stringify(data.user));
+        try { if (data.permissions) localStorage.setItem('permissions', JSON.stringify(data.permissions)); } catch { /* ignore */ }
         window.location.assign('/dashboard');
       } catch (err) {
         setError(err.response?.data?.error || 'Login failed');

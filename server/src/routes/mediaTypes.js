@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 
 // Site media types the admin maintains (unipole, gantry, kiosk…). The Inventory
 // tabs only show active ones; the admin page asks for all. Each carries a live
@@ -17,7 +17,7 @@ router.get('/', async (req, res) => {
   res.json(types.map((t) => ({ ...t, siteCount: countByCode[t.code] || 0 })));
 });
 
-router.post('/', requireRole('MANAGER'), async (req, res) => {
+router.post('/', requirePermission('settings', 'add'), async (req, res) => {
   const { code, label, sortOrder } = req.body || {};
   const cleanLabel = String(label || '').trim();
   // The code is what sites store; default it from the label when not supplied.
@@ -36,7 +36,7 @@ router.post('/', requireRole('MANAGER'), async (req, res) => {
 
 // Only the label / order / active flag are editable — the code is what Site.type
 // stores, so renaming it would orphan existing sites.
-router.patch('/:id', requireRole('MANAGER'), async (req, res) => {
+router.patch('/:id', requirePermission('settings', 'edit'), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid media type id' });
   const { label, sortOrder, active } = req.body || {};
@@ -50,7 +50,7 @@ router.patch('/:id', requireRole('MANAGER'), async (req, res) => {
 
 // Hard-delete only if no site uses the code; otherwise deactivate so existing
 // sites keep a valid type.
-router.delete('/:id', requireRole('MANAGER'), async (req, res) => {
+router.delete('/:id', requirePermission('settings', 'delete'), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid media type id' });
   const type = await prisma.mediaType.findUnique({ where: { id } });

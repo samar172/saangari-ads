@@ -1,8 +1,8 @@
 const router = require('express').Router();
 const prisma = require('../db');
-const { requireRole } = require('../middleware/auth');
+const { requireRole, requirePermission } = require('../middleware/auth');
 
-router.get('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/', requirePermission('clients', 'view'), async (req, res) => {
   const { q } = req.query;
   const where = q
     ? {
@@ -21,7 +21,7 @@ router.get('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => 
   res.json(clients);
 });
 
-router.get('/:id', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+router.get('/:id', requirePermission('clients', 'view'), async (req, res) => {
   const client = await prisma.client.findUnique({
     where: { id: Number(req.params.id) },
     include: {
@@ -40,7 +40,7 @@ router.get('/:id', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) 
   res.json({ ...client, balance: debit - credit });
 });
 
-router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+router.post('/', requirePermission('clients', 'add'), async (req, res) => {
   const { name, phone, email, company, gstNumber, taxCategory, address, state, categoryId } = req.body || {};
   if (!name || !phone) return res.status(400).json({ error: 'Name and phone are required' });
   try {
@@ -60,7 +60,7 @@ router.post('/', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) =>
   }
 });
 
-router.patch('/:id', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+router.patch('/:id', requirePermission('clients', 'edit'), async (req, res) => {
   const { name, phone, email, company, gstNumber, taxCategory, address, state, categoryId } = req.body || {};
   const data = { name, phone, email, company, gstNumber, taxCategory, address, state };
   Object.keys(data).forEach((k) => data[k] === undefined && delete data[k]);

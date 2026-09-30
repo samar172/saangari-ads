@@ -144,6 +144,18 @@ model User {
   approvalsReviewed  ApprovalRequest[] @relation("ApprovalReviewedBy")
 }
 
+// Per-role RBAC overrides. One row per configurable role (SALES/MANAGER/OPS/
+// FINANCE); SUPER_ADMIN is never stored (always full access). `permissions` is a
+// partial { module: { action: bool } } map layered over code DEFAULTS, so a fresh
+// install with no rows behaves exactly like the legacy requireRole() gates.
+model RolePermission {
+  id          Int      @id @default(autoincrement())
+  role        Role     @unique
+  permissions Json     @default("{}")
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
 // Operating entity — Saangari Ads (Non-GST only) vs Saangari Company (GST mandatory)
 model Company {
   id                 Int      @id @default(autoincrement())
