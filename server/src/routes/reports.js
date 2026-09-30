@@ -335,8 +335,8 @@ router.get('/receivables', requireRole('MANAGER', 'FINANCE'), async (req, res) =
 // FY Booking Analysis — mirrors the client's workbook (Dashboard, Month-wise,
 // Category-wise, Customer-wise, Payment Status, Pending Follow-up).
 router.get('/booking-analysis', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
-  const { companyId, from, to, category, customer, zone, paymentStatus, paymentTerms } = req.query;
-  const data = await computeBookingAnalysis({ companyId, from, to, category, customer, zone, paymentStatus, paymentTerms });
+  const { companyId, from, to, category, customer, zone, mediaType, paymentStatus, paymentTerms } = req.query;
+  const data = await computeBookingAnalysis({ companyId, from, to, category, customer, zone, mediaType, paymentStatus, paymentTerms });
   delete data.lines; // raw lines are for the Excel export only
   res.json(data);
 });

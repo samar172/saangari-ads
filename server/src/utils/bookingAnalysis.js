@@ -19,10 +19,14 @@ function lineStatus(orderReceived, grandTotal) {
 }
 
 async function computeBookingAnalysis(params = {}) {
-  const { companyId, from, to, category, customer, zone, paymentStatus, paymentTerms } = params;
+  const { companyId, from, to, category, customer, zone, mediaType, paymentStatus, paymentTerms } = params;
 
   const where = { status: { in: RECEIVABLE } };
   if (companyId) where.companyId = Number(companyId);
+
+  // Media-type code → label, so the item-wise filter reads "Gantry" not "GANTRY".
+  const mediaTypeRows = await prisma.mediaType.findMany({ select: { code: true, label: true } });
+  const mediaLabel = Object.fromEntries(mediaTypeRows.map((m) => [m.code, m.label]));
 
   const orders = await prisma.order.findMany({
     where,
@@ -33,13 +37,13 @@ async function computeBookingAnalysis(params = {}) {
       payments: { select: { amount: true } },
       items: {
         where: { status: { notIn: ['CANCELLED'] } },
-        select: { id: true, startDate: true, endDate: true, days: true, subtotal: true, site: { select: { zone: true, code: true } } },
+        select: { id: true, startDate: true, endDate: true, days: true, subtotal: true, site: { select: { zone: true, code: true, type: true } } },
       },
     },
   });
 
   // Flatten to lines with allocated receipts. Collect filter option sets too.
-  const catSet = new Set(), custSet = new Set(), zoneSet = new Set();
+  const catSet = new Set(), custSet = new Set(), zoneSet = new Set(), mediaSet = new Set();
   let lines = [];
   for (const o of orders) {
     const orderReceived = o.payments.reduce((s, p) => s + p.amount, 0);
@@ -55,10 +59,13 @@ async function computeBookingAnalysis(params = {}) {
       const received = o.grandTotal > 0 ? Math.round(orderReceived * (total / o.grandTotal)) : 0;
       const zoneName = it.site?.zone || '—';
       zoneSet.add(zoneName);
+      const mediaCode = it.site?.type || '—';
+      const mediaName = mediaLabel[mediaCode] || mediaCode;
+      mediaSet.add(mediaName);
       lines.push({
         orderId: o.id, orderNo: o.orderNo, month: monthKey(it.startDate),
         category: catName, customer: custName, clientId: o.client.id,
-        contact: o.client.name, phone: o.client.phone, zone: zoneName,
+        contact: o.client.name, phone: o.client.phone, zone: zoneName, mediaType: mediaName,
         siteMonths: Math.round(((it.days || 0) / 30) * 100) / 100,
         billingExGst, gst, total,
         received: Math.min(total, received),
@@ -75,6 +82,7 @@ async function computeBookingAnalysis(params = {}) {
     (!category || l.category === category) &&
     (!customer || l.customer === customer) &&
     (!zone || l.zone === zone) &&
+    (!mediaType || l.mediaType === mediaType) &&
     (!paymentStatus || l.paymentStatus === paymentStatus) &&
     (!paymentTerms || l.paymentTerms === paymentTerms) &&
     inRange(l.month)
@@ -186,6 +194,7 @@ async function computeBookingAnalysis(params = {}) {
     paymentStatus: paymentStatusRows, pendingFollowup,
     filters: {
       categories: [...catSet].sort(), customers: [...custSet].sort(), zones: [...zoneSet].sort(),
+      mediaTypes: [...mediaSet].sort(),
     },
     lines, // raw (used by the Excel "Data" sheet)
   };

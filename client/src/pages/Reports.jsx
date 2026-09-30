@@ -18,9 +18,6 @@ const fyRange = (y) => ({ label: `FY ${y}-${String((y + 1) % 100).padStart(2, '0
 // Date-range presets for the whole dashboard: quick presets + explicit FYs.
 const RANGES = {
   MONTH: { label: 'This month', from: () => dayjs().startOf('month'), to: () => dayjs() },
-  FY: { label: 'This FY', from: () => fyStart(), to: () => dayjs() },
-  LAST_FY: { label: 'Last FY', from: () => fyStart().subtract(1, 'year'), to: () => fyStart().subtract(1, 'day') },
-  FY_2024: fyRange(2024),
   FY_2025: fyRange(2025),
   FY_2026: fyRange(2026),
   ALL: { label: 'All time', from: () => null, to: () => null },
@@ -48,7 +45,7 @@ export default function Reports() {
   const [series, setSeries] = useState([]);
   const [topClients, setTopClients] = useState([]);
   const [expandedCat, setExpandedCat] = useState(null);
-  const [rangeKey, setRangeKey] = useState('FY');
+  const [rangeKey, setRangeKey] = useState('FY_2026');
   const [profit, setProfit] = useState(null);
   const [receivables, setReceivables] = useState(null);
 

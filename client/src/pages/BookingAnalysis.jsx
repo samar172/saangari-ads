@@ -11,9 +11,6 @@ const fyStart = () => (dayjs().month() >= 3 ? dayjs().month(3) : dayjs().subtrac
 const fyRange = (y) => ({ label: `FY ${y}-${String((y + 1) % 100).padStart(2, '0')}`, from: () => dayjs(`${y}-04-01`), to: () => dayjs(`${y + 1}-03-31`) });
 const RANGES = {
   MONTH: { label: 'This month', from: () => dayjs().startOf('month'), to: () => dayjs() },
-  FY: { label: 'This FY', from: () => fyStart(), to: () => dayjs() },
-  LAST_FY: { label: 'Last FY', from: () => fyStart().subtract(1, 'year'), to: () => fyStart().subtract(1, 'day') },
-  FY_2024: fyRange(2024),
   FY_2025: fyRange(2025),
   FY_2026: fyRange(2026),
   ALL: { label: 'All time', from: () => null, to: () => null },
@@ -26,10 +23,11 @@ const TABS = ['Month-wise', 'Category-wise', 'Customer-wise', 'Payment Status', 
 export default function BookingAnalysis() {
   const { companies, activeCompany } = useCompany();
   const [localCid, setLocalCid] = useState(activeCompany?.id || 'ALL');
-  const [rangeKey, setRangeKey] = useState('FY');
+  const [rangeKey, setRangeKey] = useState('FY_2026');
   const [category, setCategory] = useState('');
   const [customer, setCustomer] = useState('');
   const [zone, setZone] = useState('');
+  const [mediaType, setMediaType] = useState('');
   const [paymentStatus, setPaymentStatus] = useState('');
   const [paymentTerms, setPaymentTerms] = useState('');
   const [data, setData] = useState(null);
@@ -44,12 +42,12 @@ export default function BookingAnalysis() {
     if (activeCompany && localCid !== 'ALL' && localCid !== activeCompany.id) setLocalCid(activeCompany.id);
   }, [activeCompany]);
 
-  const params = { companyId: cid, from, to, category: category || undefined, customer: customer || undefined, zone: zone || undefined, paymentStatus: paymentStatus || undefined, paymentTerms: paymentTerms || undefined };
+  const params = { companyId: cid, from, to, category: category || undefined, customer: customer || undefined, zone: zone || undefined, mediaType: mediaType || undefined, paymentStatus: paymentStatus || undefined, paymentTerms: paymentTerms || undefined };
 
   useEffect(() => {
     setData(null);
     api.get('/reports/booking-analysis', { params }).then((res) => setData(res.data)).catch(() => setData(null));
-  }, [cid, from, to, category, customer, zone, paymentStatus, paymentTerms]);
+  }, [cid, from, to, category, customer, zone, mediaType, paymentStatus, paymentTerms]);
 
   function exportExcel() {
     const qs = new URLSearchParams();
@@ -57,7 +55,7 @@ export default function BookingAnalysis() {
     downloadFile(`/exports/booking-analysis?${qs.toString()}`, 'FY_Booking_Analysis.xlsx');
   }
 
-  const filters = data?.filters || { categories: [], customers: [], zones: [] };
+  const filters = data?.filters || { categories: [], customers: [], zones: [], mediaTypes: [] };
 
   return (
     <div>
@@ -91,6 +89,10 @@ export default function BookingAnalysis() {
         <select className="input w-auto py-1.5" value={zone} onChange={(e) => setZone(e.target.value)} title="Zone">
           <option value="">All zones</option>
           {filters.zones.map((z) => <option key={z} value={z}>{z}</option>)}
+        </select>
+        <select className="input w-auto py-1.5" value={mediaType} onChange={(e) => setMediaType(e.target.value)} title="Media type">
+          <option value="">All media types</option>
+          {(filters.mediaTypes || []).map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
         <select className="input w-auto py-1.5" value={paymentStatus} onChange={(e) => setPaymentStatus(e.target.value)} title="Payment status">
           <option value="">All statuses</option>

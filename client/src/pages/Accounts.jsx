@@ -20,10 +20,7 @@ function Bal({ value }) {
 const fyStart = () => (dayjs().month() >= 3 ? dayjs().month(3) : dayjs().subtract(1, 'year').month(3)).date(1);
 const RANGES = {
   MONTH: { label: 'This month', from: () => dayjs().startOf('month'), to: () => dayjs() },
-  FY: { label: 'This FY', from: () => fyStart(), to: () => dayjs() },
-  LAST_FY: { label: 'Last FY', from: () => fyStart().subtract(1, 'year'), to: () => fyStart().subtract(1, 'day') },
   // Explicit financial-year picks (Apr 1 → Mar 31).
-  FY_2024: { label: 'FY 2024-25', from: () => dayjs('2024-04-01'), to: () => dayjs('2025-03-31') },
   FY_2025: { label: 'FY 2025-26', from: () => dayjs('2025-04-01'), to: () => dayjs('2026-03-31') },
   FY_2026: { label: 'FY 2026-27', from: () => dayjs('2026-04-01'), to: () => dayjs('2027-03-31') },
   ALL: { label: 'All time', from: () => null, to: () => null },
@@ -49,7 +46,7 @@ export default function Accounts() {
   const { companies, activeCompany } = useCompany();
   const { user } = useAuth();
   const [localCid, setLocalCid] = useState(activeCompany?.id || 'ALL');
-  const [rangeKey, setRangeKey] = useState('FY');
+  const [rangeKey, setRangeKey] = useState('FY_2026');
   const [tab, setTab] = useState('receivables');
   const [clients, setClients] = useState([]);
   const [partyId, setPartyId] = useState('');

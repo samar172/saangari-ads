@@ -754,8 +754,8 @@ router.get('/orders/:id/photos.pptx', requireRole('SALES', 'MANAGER', 'FINANCE',
 
 // FY Booking Analysis — multi-sheet workbook mirroring the client's reference file.
 router.get('/booking-analysis', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
-  const { companyId, from, to, category, customer, zone, paymentStatus, paymentTerms } = req.query;
-  const d = await computeBookingAnalysis({ companyId, from, to, category, customer, zone, paymentStatus, paymentTerms });
+  const { companyId, from, to, category, customer, zone, mediaType, paymentStatus, paymentTerms } = req.query;
+  const d = await computeBookingAnalysis({ companyId, from, to, category, customer, zone, mediaType, paymentStatus, paymentTerms });
   const wb = new ExcelJS.Workbook();
   const money = (n) => Math.round(Number(n || 0));
   const pctCell = (f) => (f == null ? '' : Math.round(f * 1000) / 10 + '%');

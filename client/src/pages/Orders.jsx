@@ -50,7 +50,6 @@ const COLUMNS = [
     ) },
   { key: 'start', label: 'Start', align: 'left', cell: (o) => <span className="whitespace-nowrap text-slate-600">{fmt(displayPeriod(o.items).start)}</span> },
   { key: 'end', label: 'End', align: 'left', cell: (o) => <span className="whitespace-nowrap text-slate-600">{fmt(displayPeriod(o.items).end)}</span> },
-  { key: 'total', label: 'Grand Total', align: 'right', cell: (o) => <span className="font-semibold text-slate-700"><Money value={o.grandTotal} /></span> },
   { key: 'paid', label: 'Paid', align: 'right', cell: (o) => o.receivable ? <span className="text-emerald-600"><Money value={o.amountPaid} /></span> : <span className="text-slate-300">—</span> },
   // Invoiced-to-date (how much of the campaign has actually been billed).
   { key: 'invoiced', label: 'Invoiced', align: 'right', cell: (o) => o.receivable ? <span className="text-slate-700"><Money value={o.invoicedToDate || 0} /></span> : <span className="text-slate-300">—</span> },
@@ -87,9 +86,11 @@ const COLUMNS = [
       const n = o.items.reduce((a, it) => a + it.photos.length, 0);
       return n > 0 ? <span className="flex items-center gap-1"><Camera size={14} className="text-slate-500" /> {n}</span> : <span className="text-slate-300">—</span>;
     } },
+  // Grand Total kept as the last column so it reads as the row's bottom-line figure.
+  { key: 'total', label: 'Grand Total', align: 'right', cell: (o) => <span className="font-semibold text-slate-700"><Money value={o.grandTotal} /></span> },
 ];
 
-const DEFAULT_VISIBLE = ['order', 'client', 'sites', 'start', 'end', 'total', 'invoiced', 'outstanding', 'balance', 'lastInvoice', 'terms', 'status', 'photos'];
+const DEFAULT_VISIBLE = ['order', 'client', 'sites', 'start', 'end', 'invoiced', 'outstanding', 'balance', 'lastInvoice', 'terms', 'status', 'photos', 'total'];
 const STORAGE_KEY = 'orders.columns.v3';
 
 function loadVisible() {
