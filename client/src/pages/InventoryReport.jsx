@@ -10,7 +10,14 @@ import {
 } from 'recharts';
 
 const COLORS = ['#1e3a8a', '#f59e0b', '#059669', '#7c3aed', '#dc2626', '#0891b2', '#db2777', '#65a30d'];
-const fyStart = (dayjs().month() >= 3 ? dayjs().month(3) : dayjs().subtract(1, 'year').month(3)).date(1).format('YYYY-MM-DD');
+// Financial-year presets, matching Reports / Booking Analysis / Accounts.
+const fyRange = (y) => ({ label: `FY ${y}-${String((y + 1) % 100).padStart(2, '0')}`, from: () => dayjs(`${y}-04-01`), to: () => dayjs(`${y + 1}-03-31`) });
+const RANGES = {
+  MONTH: { label: 'This month', from: () => dayjs().startOf('month'), to: () => dayjs() },
+  FY_2025: fyRange(2025),
+  FY_2026: fyRange(2026),
+  ALL: { label: 'All time', from: () => null, to: () => null },
+};
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 const compact = (n) => (n >= 1e5 ? `₹${(n / 1e5).toFixed(1)}L` : n >= 1e3 ? `₹${Math.round(n / 1e3)}k` : `₹${n}`);
 
@@ -20,8 +27,7 @@ export default function InventoryReport() {
   const navigate = useNavigate();
   const { companies, activeCompany } = useCompany();
   const [companyId, setCompanyId] = useState(activeCompany?.id ? String(activeCompany.id) : '');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const [rangeKey, setRangeKey] = useState('FY_2026');
   const [zone, setZone] = useState('');
   const [type, setType] = useState('');
   const [q, setQ] = useState('');
@@ -32,6 +38,11 @@ export default function InventoryReport() {
   const [selected, setSelected] = useState(null); // site row opened in the drawer
 
   useEffect(() => { setCompanyId(activeCompany?.id ? String(activeCompany.id) : ''); }, [activeCompany]);
+
+  // Resolve the selected FY/period preset into from/to for the API.
+  const r = RANGES[rangeKey];
+  const from = r.from() ? r.from().format('YYYY-MM-DD') : '';
+  const to = r.to() ? r.to().format('YYYY-MM-DD') : '';
 
   function load() {
     setLoading(true);
@@ -44,7 +55,7 @@ export default function InventoryReport() {
     }).then((r) => setData(r.data)).finally(() => setLoading(false));
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, [companyId, from, to, zone, type, bookedOnly]);
+  useEffect(load, [companyId, rangeKey, zone, type, bookedOnly]);
   // Search is debounced on Enter / blur to avoid a request per keystroke.
 
   const filters = data?.filters || { zones: [], types: [] };
@@ -120,12 +131,10 @@ export default function InventoryReport() {
             </select>
           </div>
           <div>
-            <label className="label">From</label>
-            <input type="date" className="input" value={from} onChange={(e) => setFrom(e.target.value)} />
-          </div>
-          <div>
-            <label className="label">To</label>
-            <input type="date" className="input" value={to} onChange={(e) => setTo(e.target.value)} />
+            <label className="label">Period</label>
+            <select className="input w-auto" value={rangeKey} onChange={(e) => setRangeKey(e.target.value)}>
+              {Object.entries(RANGES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
           </div>
           <div>
             <label className="label">Search site</label>
@@ -136,11 +145,6 @@ export default function InventoryReport() {
           <label className="flex items-center gap-2 text-sm text-slate-600 pb-2 cursor-pointer">
             <input type="checkbox" checked={bookedOnly} onChange={(e) => setBookedOnly(e.target.checked)} /> Booked only
           </label>
-          <div className="flex flex-wrap gap-1.5 pb-1">
-            <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(''); setTo(''); }}>All time</button>
-            <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(dayjs().startOf('month').format('YYYY-MM-DD')); setTo(dayjs().format('YYYY-MM-DD')); }}>This month</button>
-            <button className="btn-ghost text-xs py-1.5" onClick={() => { setFrom(fyStart); setTo(dayjs().format('YYYY-MM-DD')); }}>This FY</button>
-          </div>
         </div>
       </div>
 
