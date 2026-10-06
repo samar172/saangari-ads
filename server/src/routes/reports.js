@@ -45,7 +45,7 @@ router.get('/overview', requirePermission('reports', 'view'), async (req, res) =
     }),
     prisma.booking.findMany({
       where: { ...bookingWhere, ...(companyId ? { order: { companyId: Number(companyId) } } : {}) },
-      select: { subtotal: true, site: { select: { type: true, zone: true } } },
+      select: { subtotal: true, days: true, site: { select: { id: true, code: true, location: true, city: true, type: true, zone: true } } },
     }),
     prisma.payment.aggregate({ where: paymentWhere, _sum: { amount: true, tdsAmount: true, netReceived: true } }),
     prisma.client.count(),
@@ -88,6 +88,22 @@ router.get('/overview', requirePermission('reports', 'view'), async (req, res) =
     cntByType[l.site.type] = (cntByType[l.site.type] || 0) + 1;
   }
   const topCategory = Object.entries(revByType).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+
+  // Site-wise performance: revenue (ex-GST rental) + booking count + days booked
+  // per individual site. Feeds the Site-wise Revenue and Site-wise Booking
+  // reports (same data, sorted differently on the client).
+  const siteAgg = {};
+  for (const l of lines) {
+    const s = l.site; if (!s) continue;
+    const a = (siteAgg[s.id] = siteAgg[s.id] || {
+      siteId: s.id, code: s.code, location: s.location, city: s.city, zone: s.zone, type: s.type,
+      revenue: 0, bookings: 0, days: 0,
+    });
+    a.revenue += l.subtotal || 0;
+    a.bookings += 1;
+    a.days += l.days || 0;
+  }
+  const siteWise = Object.values(siteAgg);
 
   // Revenue by the client's booking category (institute, hospital, …). Also keep
   // a per-category client breakdown so a category row can expand to reveal which
@@ -150,6 +166,7 @@ router.get('/overview', requirePermission('reports', 'view'), async (req, res) =
     revenueByType: revByType, bookingsByType: cntByType, topCategory,
     revenueByCategory: revByCategory,
     revenueByCategoryClients: revByCategoryClients,
+    siteWise,
   });
 });
 

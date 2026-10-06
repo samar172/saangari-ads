@@ -166,7 +166,7 @@ function DateRow({ day, expanded, onToggle, showCompany }) {
       {expanded && day.payments.map((p) => (
         <tr key={p.id} className="bg-slate-50/80 border-t border-slate-100">
           <td className="px-4 py-1.5 pl-10 text-xs text-slate-600">
-            {p.client.name}
+            {p.client.company?.trim() || p.client.name}
             <span className="text-slate-400 ml-1">· {p.order.orderNo}</span>
             {/* Which entity the money landed in — only ambiguous when unscoped. */}
             {showCompany && p.company && (

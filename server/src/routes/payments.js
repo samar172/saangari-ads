@@ -21,7 +21,7 @@ router.get('/', requirePermission('payments', 'view'), async (req, res) => {
     where,
     orderBy: { receivedAt: 'desc' },
     include: {
-      client: { select: { id: true, name: true, phone: true } },
+      client: { select: { id: true, name: true, company: true, phone: true } },
       order: { select: { id: true, orderNo: true } },
       company: { select: { id: true, name: true, code: true } },
       recordedBy: { select: { name: true } },
@@ -45,7 +45,7 @@ router.get('/datewise', requirePermission('payments', 'view'), async (req, res) 
     where,
     orderBy: { receivedAt: 'desc' },
     include: {
-      client: { select: { id: true, name: true, phone: true } },
+      client: { select: { id: true, name: true, company: true, phone: true } },
       order: { select: { id: true, orderNo: true } },
       company: { select: { id: true, name: true, code: true } },
       recordedBy: { select: { name: true } },
@@ -86,7 +86,7 @@ router.get('/export/excel', requirePermission('payments', 'view'), async (req, r
     where,
     orderBy: { receivedAt: 'desc' },
     include: {
-      client: { select: { name: true } },
+      client: { select: { name: true, company: true } },
       order: { select: { orderNo: true } },
       company: { select: { name: true } },
       recordedBy: { select: { name: true } },
@@ -114,7 +114,7 @@ router.get('/export/excel', requirePermission('payments', 'view'), async (req, r
   for (const p of payments) {
     ws.addRow({
       date: new Date(p.receivedAt).toLocaleDateString('en-IN'),
-      client: p.client.name,
+      client: p.client.company?.trim() || p.client.name,
       order: p.order.orderNo,
       company: p.company.name,
       amount: p.amount,
