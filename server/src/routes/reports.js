@@ -367,7 +367,7 @@ router.get('/site-wise', requirePermission('reports', 'view'), async (req, res) 
       select: { id: true, code: true, location: true, city: true, zone: true, type: true, imageUrl: true, monthlyRate: true, status: true },
       orderBy: { code: 'asc' },
     }),
-    prisma.booking.findMany({ where: bookingWhere, select: { siteId: true, subtotal: true, days: true } }),
+    prisma.booking.findMany({ where: bookingWhere, select: { siteId: true, subtotal: true, days: true, startDate: true } }),
     prisma.mediaType.findMany({ select: { code: true, label: true } }),
   ]);
 
@@ -401,6 +401,23 @@ router.get('/site-wise', requirePermission('reports', 'view'), async (req, res) 
     t.revenue += r.revenue; t.bookings += r.bookings;
   }
 
+  // Month-wise comparison: revenue / bookings / days per calendar month (by the
+  // booking's display start), scoped to the sites matching the current filters.
+  const siteIds = new Set(sites.map((s) => s.id));
+  const monthMap = {};
+  for (const b of bookings) {
+    if (!siteIds.has(b.siteId) || !b.startDate) continue;
+    const d = new Date(b.startDate);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const m = (monthMap[key] = monthMap[key] || { month: key, revenue: 0, bookings: 0, days: 0 });
+    m.revenue += b.subtotal || 0;
+    m.bookings += 1;
+    m.days += b.days || 0;
+  }
+  const byMonth = Object.values(monthMap)
+    .map((m) => ({ ...m, revenue: Math.round(m.revenue) }))
+    .sort((a, b) => a.month.localeCompare(b.month));
+
   const summary = {
     siteCount: rows.length,
     bookedSites: rows.filter((r) => r.bookings > 0).length,
@@ -419,6 +436,7 @@ router.get('/site-wise', requirePermission('reports', 'view'), async (req, res) 
     summary,
     byZone: Object.values(zoneMap).sort((a, b) => b.revenue - a.revenue),
     byType: Object.values(typeMap).sort((a, b) => b.revenue - a.revenue),
+    byMonth,
     filters: { zones, types },
   });
 });

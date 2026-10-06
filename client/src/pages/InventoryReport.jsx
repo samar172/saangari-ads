@@ -7,6 +7,7 @@ import { useCompany } from '../CompanyContext';
 import { Money, Spinner, Badge } from '../components/ui';
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  ComposedChart, Line, Legend,
 } from 'recharts';
 
 const COLORS = ['#1e3a8a', '#f59e0b', '#059669', '#7c3aed', '#dc2626', '#0891b2', '#db2777', '#65a30d'];
@@ -74,6 +75,8 @@ export default function InventoryReport() {
 
   const topSites = useMemo(() => [...sites].sort((a, b) => b.revenue - a.revenue).slice(0, 10)
     .map((s) => ({ name: s.code, revenue: s.revenue })), [sites]);
+
+  const byMonth = useMemo(() => (data?.byMonth || []).map((m) => ({ ...m, label: dayjs(m.month + '-01').format('MMM YY') })), [data]);
 
   function toggleSort(key) {
     setSort((s) => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' });
@@ -208,6 +211,59 @@ export default function InventoryReport() {
                 </BarChart>
               </ResponsiveContainer>
             </div>
+          </div>
+
+          {/* Month-wise comparison */}
+          <div className="card p-5 mb-5">
+            <h2 className="font-semibold text-slate-700 mb-3">Month-wise comparison</h2>
+            {byMonth.length === 0 ? (
+              <div className="py-10 text-center text-slate-400 text-sm">No bookings in this period</div>
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height={280}>
+                  <ComposedChart data={byMonth}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                    <XAxis dataKey="label" fontSize={11} />
+                    <YAxis yAxisId="left" fontSize={11} tickFormatter={compact} width={52} />
+                    <YAxis yAxisId="right" orientation="right" fontSize={11} allowDecimals={false} width={34} />
+                    <Tooltip formatter={(v, n) => (n === 'Revenue' ? inr(v) : v)} />
+                    <Legend />
+                    <Bar yAxisId="left" dataKey="revenue" name="Revenue" fill="#1e3a8a" radius={[4, 4, 0, 0]} />
+                    <Line yAxisId="right" dataKey="bookings" name="Bookings" stroke="#f59e0b" strokeWidth={2} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+                <div className="overflow-x-auto mt-3">
+                  <table className="w-full text-sm min-w-[480px]">
+                    <thead className="text-xs text-slate-500 uppercase">
+                      <tr>
+                        <th className="text-left py-1">Month</th>
+                        <th className="text-right py-1">Bookings</th>
+                        <th className="text-right py-1">Days</th>
+                        <th className="text-right py-1">Revenue</th>
+                        <th className="text-right py-1">MoM</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {byMonth.map((m, i) => {
+                        const prev = i > 0 ? byMonth[i - 1].revenue : 0;
+                        const mom = prev > 0 ? Math.round(((m.revenue - prev) / prev) * 100) : null;
+                        return (
+                          <tr key={m.month} className="border-t border-slate-100">
+                            <td className="py-1.5 font-medium text-slate-700">{m.label}</td>
+                            <td className="py-1.5 text-right">{m.bookings}</td>
+                            <td className="py-1.5 text-right text-slate-600">{m.days}</td>
+                            <td className="py-1.5 text-right font-medium"><Money value={m.revenue} /></td>
+                            <td className={`py-1.5 text-right text-xs ${mom == null ? 'text-slate-300' : mom >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                              {mom == null ? '—' : `${mom >= 0 ? '+' : ''}${mom}%`}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Table */}
