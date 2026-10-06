@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Download, X, ExternalLink, ArrowUp, ArrowDown, ImageOff, MapPin } from 'lucide-react';
+import { Download, X, ExternalLink, ArrowUp, ArrowDown, ArrowUpDown, ImageOff, MapPin } from 'lucide-react';
 import dayjs from 'dayjs';
 import api, { downloadFile } from '../api';
 import { useCompany } from '../CompanyContext';
@@ -78,11 +78,23 @@ export default function InventoryReport() {
   function toggleSort(key) {
     setSort((s) => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' });
   }
-  const SortHead = ({ k, label, align = 'right' }) => (
-    <th className={`px-3 py-2 ${align === 'right' ? 'text-right' : 'text-left'} cursor-pointer select-none hover:text-slate-700`} onClick={() => toggleSort(k)}>
-      <span className="inline-flex items-center gap-1">{label}{sort.key === k && (sort.dir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}</span>
-    </th>
-  );
+  const SortHead = ({ k, label, align = 'right' }) => {
+    const active = sort.key === k;
+    return (
+      <th
+        className={`px-3 py-2 ${align === 'right' ? 'text-right' : 'text-left'} cursor-pointer select-none transition ${active ? 'text-slate-700' : 'hover:text-slate-700'}`}
+        onClick={() => toggleSort(k)}
+        title="Click to sort"
+      >
+        <span className={`inline-flex items-center gap-1 ${align === 'right' ? 'flex-row-reverse' : ''}`}>
+          {label}
+          {active
+            ? (sort.dir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)
+            : <ArrowUpDown size={12} className="text-slate-300" />}
+        </span>
+      </th>
+    );
+  };
 
   function exportExcel() {
     const p = new URLSearchParams();
