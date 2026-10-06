@@ -21,6 +21,7 @@ import PartnerForm from './pages/PartnerForm';
 import InvoiceGenerate from './pages/InvoiceGenerate';
 import InvoiceEdit from './pages/InvoiceEdit';
 import BookingAnalysis from './pages/BookingAnalysis';
+import InventoryReport from './pages/InventoryReport';
 import Dashboard from './pages/Dashboard';
 import WhatsAppSettings from './pages/WhatsAppSettings';
 import WhatsAppOutbox from './pages/WhatsAppOutbox';
@@ -78,6 +79,7 @@ export default function App() {
             <Route path="/invoices/:id" element={<Protected><InvoiceDetail /></Protected>} />
             <Route path="/invoices/:id/edit" element={<Protected><InvoiceEdit /></Protected>} />
             <Route path="/reports" element={<Protected><Reports /></Protected>} />
+            <Route path="/reports/sites" element={<Protected><InventoryReport /></Protected>} />
             <Route path="/booking-analysis" element={<Protected><BookingAnalysis /></Protected>} />
             <Route path="/payments" element={<Protected><Payments /></Protected>} />
             <Route path="/payments/record" element={<Protected><PaymentRecord /></Protected>} />

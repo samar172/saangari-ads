@@ -76,11 +76,6 @@ export default function Reports() {
   const revByType = Object.entries(overview.revenueByType).map(([name, value]) => ({ name, value }));
   const bookingsByType = Object.entries(overview.bookingsByType).map(([name, value]) => ({ name, value }));
 
-  // Site-wise reports — same per-site rows, ranked two ways.
-  const siteWise = overview.siteWise || [];
-  const siteByRevenue = [...siteWise].sort((a, b) => b.revenue - a.revenue);
-  const siteByBookings = [...siteWise].sort((a, b) => b.bookings - a.bookings || b.revenue - a.revenue);
-
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
@@ -311,69 +306,6 @@ export default function Reports() {
             </tbody>
           </table>
         </div>
-      </div>
-
-      {/* Site-wise reports — revenue earned and bookings taken per hoarding/site. */}
-      <div className="grid lg:grid-cols-2 gap-5 mt-5">
-        <SiteReport
-          title="Site-wise Revenue"
-          rows={siteByRevenue}
-          emptyText="No bookings yet"
-          columns={[
-            { key: 'bookings', label: 'Bookings', align: 'right', cell: (s) => s.bookings },
-            { key: 'revenue', label: 'Revenue (ex-GST)', align: 'right', cell: (s) => <Money value={s.revenue} /> },
-          ]}
-        />
-        <SiteReport
-          title="Site-wise Bookings"
-          rows={siteByBookings}
-          emptyText="No bookings yet"
-          columns={[
-            { key: 'bookings', label: 'Bookings', align: 'right', cell: (s) => s.bookings },
-            { key: 'days', label: 'Days', align: 'right', cell: (s) => s.days },
-            { key: 'revenue', label: 'Revenue', align: 'right', cell: (s) => <Money value={s.revenue} /> },
-          ]}
-        />
-      </div>
-    </div>
-  );
-}
-
-// A scrollable site ranking table shared by the two site-wise reports.
-function SiteReport({ title, rows, columns, emptyText }) {
-  return (
-    <div className="card p-5">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="font-semibold text-slate-700">{title}</h2>
-        <span className="text-xs text-slate-400">{rows.length} site{rows.length !== 1 ? 's' : ''}</span>
-      </div>
-      <div className="max-h-96 overflow-y-auto">
-        <table className="w-full text-sm">
-          <thead className="text-xs text-slate-500 uppercase sticky top-0 bg-white">
-            <tr>
-              <th className="text-left py-1 w-8">#</th>
-              <th className="text-left py-1">Site</th>
-              {columns.map((c) => <th key={c.key} className={`py-1 ${c.align === 'right' ? 'text-right' : 'text-left'}`}>{c.label}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((s, i) => (
-              <tr key={s.siteId} className="border-t border-slate-100">
-                <td className="py-1.5 text-slate-400">{i + 1}</td>
-                <td className="py-1.5">
-                  <span className="font-medium text-slate-700">{s.code}</span>
-                  <div className="text-[11px] text-slate-400 truncate max-w-[180px]">
-                    {[s.type, s.zone, s.location || s.city].filter(Boolean).join(' · ')}
-                  </div>
-                </td>
-                {columns.map((c) => (
-                  <td key={c.key} className={`py-1.5 ${c.align === 'right' ? 'text-right font-medium' : ''}`}>{c.cell(s)}</td>
-                ))}
-              </tr>
-            ))}
-            {rows.length === 0 && <tr><td colSpan={2 + columns.length} className="py-6 text-center text-slate-400">{emptyText}</td></tr>}
-          </tbody>
-        </table>
       </div>
     </div>
   );

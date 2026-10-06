@@ -215,6 +215,58 @@ async function sendWorkbook(res, filename, sheetName, columns, rows) {
   res.end();
 }
 
+// Site-wise / inventory report export — mirrors the Site-wise Report page.
+router.get('/site-wise/excel', requireRole('MANAGER', 'FINANCE'), async (req, res) => {
+  const { companyId, from, to, zone, type, q, bookedOnly } = req.query;
+  const range = {};
+  if (from) range.gte = new Date(from);
+  if (to) { const d = new Date(to); d.setHours(23, 59, 59, 999); range.lte = d; }
+  const hasRange = Object.keys(range).length > 0;
+
+  const siteWhere = { active: true };
+  if (zone) siteWhere.zone = zone;
+  if (type) siteWhere.type = type;
+  if (q && q.trim()) {
+    siteWhere.OR = [
+      { code: { contains: q.trim(), mode: 'insensitive' } },
+      { location: { contains: q.trim(), mode: 'insensitive' } },
+      { city: { contains: q.trim(), mode: 'insensitive' } },
+    ];
+  }
+  const bookingWhere = {
+    status: { notIn: ['CANCELLED'] },
+    order: { status: { notIn: ['CANCELLED'] }, ...(companyId ? { companyId: Number(companyId) } : {}), ...(hasRange ? { bookingDate: range } : {}) },
+  };
+
+  const [sites, bookings, mediaTypes] = await Promise.all([
+    prisma.site.findMany({ where: siteWhere, select: { id: true, code: true, location: true, city: true, zone: true, type: true, monthlyRate: true }, orderBy: { code: 'asc' } }),
+    prisma.booking.findMany({ where: bookingWhere, select: { siteId: true, subtotal: true, days: true } }),
+    prisma.mediaType.findMany({ select: { code: true, label: true } }),
+  ]);
+  const mediaLabel = Object.fromEntries(mediaTypes.map((m) => [m.code, m.label]));
+  const agg = {};
+  for (const b of bookings) {
+    const a = (agg[b.siteId] = agg[b.siteId] || { revenue: 0, bookings: 0, days: 0 });
+    a.revenue += b.subtotal || 0; a.bookings += 1; a.days += b.days || 0;
+  }
+  let rows = sites.map((sx) => ({
+    code: sx.code, type: mediaLabel[sx.type] || sx.type, zone: sx.zone || '', location: sx.location || sx.city || '',
+    bookings: agg[sx.id]?.bookings || 0, days: agg[sx.id]?.days || 0, revenue: Math.round(agg[sx.id]?.revenue || 0),
+  }));
+  if (bookedOnly === 'true' || bookedOnly === '1') rows = rows.filter((r) => r.bookings > 0);
+  rows.sort((a, b) => b.revenue - a.revenue);
+
+  await sendWorkbook(res, 'site-wise-report.xlsx', 'Site-wise', [
+    { header: 'Site', key: 'code', width: 10 },
+    { header: 'Type', key: 'type', width: 14 },
+    { header: 'Zone', key: 'zone', width: 10 },
+    { header: 'Location', key: 'location', width: 42 },
+    { header: 'Bookings', key: 'bookings', width: 10 },
+    { header: 'Days', key: 'days', width: 8 },
+    { header: 'Revenue (ex-GST)', key: 'revenue', width: 16 },
+  ], rows);
+});
+
 // Campaigns / quotations export. `status` narrows to one; `excludeStatus` drops
 // some (the Campaigns tab passes QUOTATION here). Mirrors the on-screen list.
 router.get('/orders/excel', requireRole('MANAGER', 'FINANCE'), async (req, res) => {

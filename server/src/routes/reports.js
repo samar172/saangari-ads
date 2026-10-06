@@ -45,7 +45,7 @@ router.get('/overview', requirePermission('reports', 'view'), async (req, res) =
     }),
     prisma.booking.findMany({
       where: { ...bookingWhere, ...(companyId ? { order: { companyId: Number(companyId) } } : {}) },
-      select: { subtotal: true, days: true, site: { select: { id: true, code: true, location: true, city: true, type: true, zone: true } } },
+      select: { subtotal: true, site: { select: { type: true, zone: true } } },
     }),
     prisma.payment.aggregate({ where: paymentWhere, _sum: { amount: true, tdsAmount: true, netReceived: true } }),
     prisma.client.count(),
@@ -88,22 +88,6 @@ router.get('/overview', requirePermission('reports', 'view'), async (req, res) =
     cntByType[l.site.type] = (cntByType[l.site.type] || 0) + 1;
   }
   const topCategory = Object.entries(revByType).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-
-  // Site-wise performance: revenue (ex-GST rental) + booking count + days booked
-  // per individual site. Feeds the Site-wise Revenue and Site-wise Booking
-  // reports (same data, sorted differently on the client).
-  const siteAgg = {};
-  for (const l of lines) {
-    const s = l.site; if (!s) continue;
-    const a = (siteAgg[s.id] = siteAgg[s.id] || {
-      siteId: s.id, code: s.code, location: s.location, city: s.city, zone: s.zone, type: s.type,
-      revenue: 0, bookings: 0, days: 0,
-    });
-    a.revenue += l.subtotal || 0;
-    a.bookings += 1;
-    a.days += l.days || 0;
-  }
-  const siteWise = Object.values(siteAgg);
 
   // Revenue by the client's booking category (institute, hospital, …). Also keep
   // a per-category client breakdown so a category row can expand to reveal which
@@ -166,7 +150,6 @@ router.get('/overview', requirePermission('reports', 'view'), async (req, res) =
     revenueByType: revByType, bookingsByType: cntByType, topCategory,
     revenueByCategory: revByCategory,
     revenueByCategoryClients: revByCategoryClients,
-    siteWise,
   });
 });
 
@@ -346,6 +329,97 @@ router.get('/receivables', requirePermission('reports', 'view'), async (req, res
     dso,
     overdue: overdue.slice(0, 25),
     overdueCount: overdue.length,
+  });
+});
+
+// Site-wise / inventory report: per-site revenue (ex-GST rental), booking count
+// and days booked, filterable by company, date (booking date), zone, media type
+// and free text. Returns every active site (so unbooked inventory is visible too)
+// plus zone/type rollups and filter option lists for the UI.
+router.get('/site-wise', requirePermission('reports', 'view'), async (req, res) => {
+  const { companyId, from, to, zone, type, q, bookedOnly } = req.query;
+  const range = dateRange(from, to);
+
+  const siteWhere = { active: true };
+  if (zone) siteWhere.zone = zone;
+  if (type) siteWhere.type = type;
+  if (q && q.trim()) {
+    const term = q.trim();
+    siteWhere.OR = [
+      { code: { contains: term, mode: 'insensitive' } },
+      { location: { contains: term, mode: 'insensitive' } },
+      { city: { contains: term, mode: 'insensitive' } },
+    ];
+  }
+
+  const bookingWhere = {
+    status: NON_CANCELLED,
+    order: {
+      status: NON_CANCELLED,
+      ...(companyId ? { companyId: Number(companyId) } : {}),
+      ...(range ? { bookingDate: range } : {}),
+    },
+  };
+
+  const [sites, bookings, mediaTypes] = await Promise.all([
+    prisma.site.findMany({
+      where: siteWhere,
+      select: { id: true, code: true, location: true, city: true, zone: true, type: true, imageUrl: true, monthlyRate: true, status: true },
+      orderBy: { code: 'asc' },
+    }),
+    prisma.booking.findMany({ where: bookingWhere, select: { siteId: true, subtotal: true, days: true } }),
+    prisma.mediaType.findMany({ select: { code: true, label: true } }),
+  ]);
+
+  const mediaLabel = Object.fromEntries(mediaTypes.map((m) => [m.code, m.label]));
+
+  // Aggregate bookings by site.
+  const agg = {};
+  for (const b of bookings) {
+    const a = (agg[b.siteId] = agg[b.siteId] || { revenue: 0, bookings: 0, days: 0 });
+    a.revenue += b.subtotal || 0;
+    a.bookings += 1;
+    a.days += b.days || 0;
+  }
+
+  let rows = sites.map((s) => ({
+    siteId: s.id, code: s.code, location: s.location, city: s.city, zone: s.zone,
+    type: s.type, typeLabel: mediaLabel[s.type] || s.type, imageUrl: s.imageUrl,
+    monthlyRate: s.monthlyRate, status: s.status,
+    revenue: Math.round(agg[s.id]?.revenue || 0),
+    bookings: agg[s.id]?.bookings || 0,
+    days: agg[s.id]?.days || 0,
+  }));
+  if (bookedOnly === 'true' || bookedOnly === '1') rows = rows.filter((r) => r.bookings > 0);
+
+  // Zone / type rollups for the charts.
+  const zoneMap = {}, typeMap = {};
+  for (const r of rows) {
+    const z = (zoneMap[r.zone || '—'] = zoneMap[r.zone || '—'] || { zone: r.zone || '—', revenue: 0, bookings: 0 });
+    z.revenue += r.revenue; z.bookings += r.bookings;
+    const t = (typeMap[r.type] = typeMap[r.type] || { type: r.type, label: r.typeLabel, revenue: 0, bookings: 0 });
+    t.revenue += r.revenue; t.bookings += r.bookings;
+  }
+
+  const summary = {
+    siteCount: rows.length,
+    bookedSites: rows.filter((r) => r.bookings > 0).length,
+    totalRevenue: rows.reduce((s, r) => s + r.revenue, 0),
+    totalBookings: rows.reduce((s, r) => s + r.bookings, 0),
+    totalDays: rows.reduce((s, r) => s + r.days, 0),
+  };
+
+  // Filter option lists (from all active sites, unaffected by current filters).
+  const allSites = await prisma.site.findMany({ where: { active: true }, select: { zone: true, type: true } });
+  const zones = [...new Set(allSites.map((s) => s.zone).filter(Boolean))].sort();
+  const types = [...new Set(allSites.map((s) => s.type))].sort().map((code) => ({ code, label: mediaLabel[code] || code }));
+
+  res.json({
+    sites: rows,
+    summary,
+    byZone: Object.values(zoneMap).sort((a, b) => b.revenue - a.revenue),
+    byType: Object.values(typeMap).sort((a, b) => b.revenue - a.revenue),
+    filters: { zones, types },
   });
 });
 

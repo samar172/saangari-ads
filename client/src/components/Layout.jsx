@@ -5,7 +5,7 @@ import { useCompany } from '../CompanyContext';
 import api from '../api';
 import NotificationBar from './NotificationBar';
 import SearchPalette from './SearchPalette';
-import { Map, ClipboardList, PlusSquare, Bell, Users, Printer, Receipt, Banknote, BarChart3, Building2, Settings, LogOut, FileText, Menu, X, ShieldCheck, BookOpen, TrendingUp, LayoutDashboard, Search, MessageCircle } from 'lucide-react';
+import { Map, ClipboardList, PlusSquare, Bell, Users, Printer, Receipt, Banknote, BarChart3, Building2, Settings, LogOut, FileText, Menu, X, ShieldCheck, BookOpen, TrendingUp, LayoutDashboard, Search, MessageCircle, ChevronDown, ChevronRight } from 'lucide-react';
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, show: () => true },
@@ -17,8 +17,13 @@ const NAV = [
   { to: '/printing-partners', label: 'Printing Partners', icon: Printer, show: (u) => can(u, 'viewPartners') },
   { to: '/invoices', label: 'Invoices', icon: Receipt, show: (u) => can(u, 'viewInvoices') },
   { to: '/payments', label: 'Payments', icon: Banknote, show: (u) => can(u, 'viewPayments') },
-  { to: '/reports', label: 'Reports', icon: BarChart3, show: (u) => can(u, 'viewReports') },
-  { to: '/booking-analysis', label: 'Booking Analysis', icon: TrendingUp, show: (u) => can(u, 'viewBookingAnalysis') },
+  { label: 'Reports', icon: BarChart3, group: 'reports',
+    show: (u) => can(u, 'viewReports') || can(u, 'viewBookingAnalysis'),
+    children: [
+      { to: '/reports', label: 'Overview', show: (u) => can(u, 'viewReports') },
+      { to: '/reports/sites', label: 'Site-wise', show: (u) => can(u, 'viewReports') },
+      { to: '/booking-analysis', label: 'Booking Analysis', show: (u) => can(u, 'viewBookingAnalysis') },
+    ] },
   { to: '/accounts', label: 'Accounts', icon: BookOpen, show: (u) => can(u, 'viewAccounts') },
   { to: '/approvals', label: 'Approvals', icon: ShieldCheck, show: (u) => u.role === 'MANAGER' || u.role === 'SUPER_ADMIN', badge: 'approvals' },
   { to: '/settings/companies', label: 'Business Setup', icon: Building2, show: (u) => can(u, 'manageSettings') },
@@ -31,6 +36,47 @@ const ROLE_LABEL = {
   SALES: 'Sales Executive', MANAGER: 'Manager', OPS: 'Ops / Field',
   FINANCE: 'Finance', SUPER_ADMIN: 'Super Admin',
 };
+
+// A collapsible nav section (e.g. Reports → Overview / Site-wise / Booking
+// Analysis). Opens automatically when one of its routes is active.
+function NavGroup({ item, user }) {
+  const location = useLocation();
+  const Icon = item.icon;
+  const children = item.children.filter((c) => c.show(user));
+  const isChildActive = children.some((c) => location.pathname === c.to || (c.to !== '/' && location.pathname.startsWith(c.to + '/')));
+  const [open, setOpen] = useState(isChildActive);
+  useEffect(() => { if (isChildActive) setOpen(true); }, [isChildActive]);
+  if (children.length === 0) return null;
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`w-full flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${isChildActive ? 'text-white' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}
+      >
+        <Icon size={18} />
+        <span className="flex-1 text-left">{item.label}</span>
+        {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+      </button>
+      {open && (
+        <div className="mt-1 ml-4 pl-3 border-l border-white/15 space-y-1">
+          {children.map((c) => (
+            <NavLink
+              key={c.to}
+              to={c.to}
+              end={c.to === '/reports'}
+              className={({ isActive }) =>
+                `block rounded-lg px-3 py-1.5 text-sm transition ${isActive ? 'bg-white/15 text-white font-medium' : 'text-white/60 hover:bg-white/10 hover:text-white'}`
+              }
+            >
+              {c.label}
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
@@ -118,6 +164,7 @@ export default function Layout({ children }) {
 
         <nav className="flex-1 p-3 space-y-1">
           {NAV.filter((n) => n.show(user)).map((n) => {
+            if (n.group) return <NavGroup key={n.group} item={n} user={user} />;
             const Icon = n.icon;
             return (
               <NavLink
