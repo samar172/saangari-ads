@@ -6,9 +6,10 @@ const HOLDING = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
 // Line statuses that are finished or otherwise excluded from auto-advancement.
 const LINE_TERMINAL = ['CANCELLED', 'STOPPED', 'WAITLIST', 'COMPLETED'];
 
-// Free a site back to AVAILABLE unless another still-holding booking wants it.
+// Free a site back to AVAILABLE unless another still-holding REGULAR booking
+// wants it. Loose bookings are rotational and never occupy the inventory tile.
 async function releaseSite(tx, siteId) {
-  const held = await tx.booking.findFirst({ where: { siteId, status: { in: HOLDING } } });
+  const held = await tx.booking.findFirst({ where: { siteId, status: { in: HOLDING }, type: { not: 'LOOSE' } } });
   if (!held) await tx.site.update({ where: { id: siteId }, data: { status: 'AVAILABLE' } });
 }
 
@@ -51,7 +52,8 @@ async function advanceCampaignLifecycle(now = new Date()) {
       }
       for (const l of toLive) {
         await tx.booking.update({ where: { id: l.id }, data: { status: 'LIVE' } });
-        await tx.site.update({ where: { id: l.siteId }, data: { status: 'BOOKED' } });
+        // Loose bookings are rotational and never occupy the inventory tile.
+        if (l.type !== 'LOOSE') await tx.site.update({ where: { id: l.siteId }, data: { status: 'BOOKED' } });
       }
       if (target !== o.status) await tx.order.update({ where: { id: o.id }, data: { status: target } });
     });

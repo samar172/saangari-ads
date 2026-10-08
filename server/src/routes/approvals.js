@@ -133,7 +133,8 @@ async function execute(request, approver) {
         for (const line of order.items) {
           if (['STOPPED', 'CANCELLED', 'WAITLIST'].includes(line.status)) continue;
           await tx.booking.update({ where: { id: line.id }, data: { status: 'CONFIRMED' } });
-          await tx.site.update({ where: { id: line.siteId }, data: { status: 'BOOKED' } });
+          // Loose bookings are rotational and never occupy the inventory tile.
+          if (line.type !== 'LOOSE') await tx.site.update({ where: { id: line.siteId }, data: { status: 'BOOKED' } });
         }
       });
       try { await advanceCampaignLifecycle(); } catch (e) { console.error('[lifecycle] post-confirm failed:', e.message); }

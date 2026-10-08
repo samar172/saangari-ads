@@ -85,10 +85,14 @@ router.post('/', requirePermission('monitoring', 'add'), upload.single('photo'),
     photo = await prisma.monitoringPhoto.create({ data });
   }
 
-  // First photo moves a confirmed booking to LIVE (proof-of-display gate satisfied)
+  // First photo moves a confirmed booking to LIVE (proof-of-display gate satisfied).
+  // A loose booking is rotational and never occupies the inventory tile, so its
+  // site stays AVAILABLE even once live.
   if (booking.status === 'CONFIRMED') {
     await prisma.booking.update({ where: { id: booking.id }, data: { status: 'LIVE' } });
-    await prisma.site.update({ where: { id: booking.siteId }, data: { status: 'BOOKED' } });
+    if (booking.type !== 'LOOSE') {
+      await prisma.site.update({ where: { id: booking.siteId }, data: { status: 'BOOKED' } });
+    }
   }
 
   // Only close the phase reminder once the whole order has all nine proofs

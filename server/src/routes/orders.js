@@ -87,10 +87,12 @@ const orderInclude = {
   },
 };
 
-// Release a site back to AVAILABLE unless another live booking still holds it.
+// Release a site back to AVAILABLE unless another live REGULAR booking still
+// holds it. Loose bookings are rotational and never occupy the inventory tile, so
+// they don't keep a site marked BOOKED.
 async function releaseSite(tx, siteId, exceptBookingId) {
   const stillHeld = await tx.booking.findFirst({
-    where: { siteId, status: { in: ACTIVE }, id: exceptBookingId ? { not: exceptBookingId } : undefined },
+    where: { siteId, status: { in: ACTIVE }, type: { not: 'LOOSE' }, id: exceptBookingId ? { not: exceptBookingId } : undefined },
   });
   if (!stillHeld) await tx.site.update({ where: { id: siteId }, data: { status: 'AVAILABLE' } });
 }
@@ -389,9 +391,12 @@ router.post('/', requirePermission('campaigns', 'add'), async (req, res) => {
           displayNotes: src.displayNotes || null,
         },
       });
-      // Reflect hold on the tile
-      if (st === 'TENTATIVE') await tx.site.update({ where: { id: line.siteId }, data: { status: 'TENTATIVE' } });
-      if (st === 'CONFIRMED') await tx.site.update({ where: { id: line.siteId }, data: { status: 'BOOKED' } });
+      // Reflect hold on the tile — but a loose booking never occupies the tile
+      // (rotational), so it leaves the site AVAILABLE in inventory.
+      if (type !== 'LOOSE') {
+        if (st === 'TENTATIVE') await tx.site.update({ where: { id: line.siteId }, data: { status: 'TENTATIVE' } });
+        if (st === 'CONFIRMED') await tx.site.update({ where: { id: line.siteId }, data: { status: 'BOOKED' } });
+      }
     }
 
     return tx.order.findUnique({ where: { id: created.id }, include: orderInclude });
@@ -560,8 +565,10 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
         } else {
           await tx.booking.create({ data: { ...data, bookingNo: await nextBookingNo(), orderId: id } });
         }
-        if (st === 'TENTATIVE') await tx.site.update({ where: { id: line.siteId }, data: { status: 'TENTATIVE' } });
-        if (st === 'CONFIRMED') await tx.site.update({ where: { id: line.siteId }, data: { status: 'BOOKED' } });
+        if (type !== 'LOOSE') {
+          if (st === 'TENTATIVE') await tx.site.update({ where: { id: line.siteId }, data: { status: 'TENTATIVE' } });
+          if (st === 'CONFIRMED') await tx.site.update({ where: { id: line.siteId }, data: { status: 'BOOKED' } });
+        }
       }
 
       // Rebuild reminders from the fresh monitoring settings + date envelope.
@@ -673,7 +680,7 @@ router.post('/:id/status', requirePermission('campaigns', 'edit'), async (req, r
         // still holds it (a site can carry back-to-back or overlapping campaigns);
         // confirming/going live marks it booked.
         if (siteFor[status] === 'AVAILABLE') await releaseSite(tx, line.siteId, line.id);
-        else if (siteFor[status]) await tx.site.update({ where: { id: line.siteId }, data: { status: siteFor[status] } });
+        else if (siteFor[status] && line.type !== 'LOOSE') await tx.site.update({ where: { id: line.siteId }, data: { status: siteFor[status] } });
       }
     }
   });
@@ -931,10 +938,13 @@ router.post('/:id/items/:lineId/shift', requirePermission('campaigns', 'edit'), 
         data: { bookingId: line.id, fromSiteId, toSiteId: target, reason: reason || null, byId: req.user.id },
       });
       await releaseSite(tx, fromSiteId, line.id);
-      await tx.site.update({
-        where: { id: target },
-        data: { status: status === 'TENTATIVE' ? 'TENTATIVE' : 'BOOKED' },
-      });
+      // Loose lines are rotational and never occupy the inventory tile.
+      if (line.type !== 'LOOSE') {
+        await tx.site.update({
+          where: { id: target },
+          data: { status: status === 'TENTATIVE' ? 'TENTATIVE' : 'BOOKED' },
+        });
+      }
     });
   } catch (e) {
     if (e instanceof BookingConflict) return res.status(409).json({ error: e.message });
