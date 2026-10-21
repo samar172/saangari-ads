@@ -44,6 +44,17 @@ export default function InvoiceEdit() {
   }
 
   if (!invoice || !form) return <Spinner />;
+  if (invoice.lock && !invoice.lock.editable) {
+    return (
+      <div>
+        <button className="btn-ghost mb-5" onClick={() => navigate(`/invoices/${id}`)}>← Back</button>
+        <div className="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-700 max-w-2xl">
+          <b>{invoice.invoiceNo} is locked</b> ({invoice.lock.reason}). Invoices can be edited only within 24 hours of being generated.
+          To correct it, cancel it with a reason from the invoice page and generate a fresh invoice.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>

@@ -51,6 +51,7 @@ export default function EditCampaign() {
         // Server stores mounting as a total (per-print × count). Edit it here PER
         // PRINT (like New Booking): seed from stored total ÷ prints, re-multiply on save.
         mountingCost: (o.noOfPrints || 0) > 0 ? Math.round((o.mountingCost || 0) / o.noOfPrints) : (o.mountingCost || 0),
+        chargeMode: o.chargesPerSite ? 'SITE' : 'PRINT',
         monitoring: o.monitoring, monitorStart: o.monitorStart, monitorMid: o.monitorMid, monitorEnd: o.monitorEnd,
         taxCategory: o.taxCategory, interState: o.interState, placeOfSupply: o.placeOfSupply || 'Rajasthan',
         paymentTerms: o.paymentTerms,
@@ -74,6 +75,8 @@ export default function EditCampaign() {
           dayRateOverride: loose ? String(b.dayRate || '') : '',
           monthlyRateOverride: loose ? '' : (b.days > 0 ? String(Math.round((b.subtotal * 30) / b.days)) : ''),
           displayNotes: b.displayNotes || '',
+          printCharge: o.chargesPerSite ? String(b.printCharge || 0) : undefined,
+          mountCharge: o.chargesPerSite ? String(b.mountCharge || 0) : undefined,
         };
       }));
       setAddOns((o.addOns || []).map((a) => ({ label: a.label, amount: a.amount })));
@@ -101,8 +104,24 @@ export default function EditCampaign() {
     if (!ids || ids.length === 0) return;
     setLines((ls) => [
       ...ls,
-      ...ids.map((sid) => ({ id: undefined, siteId: Number(sid), startDate: addStart, endDate: addEnd, dayRateOverride: '', monthlyRateOverride: '', displayNotes: '' })),
+      ...ids.map((sid) => {
+        const s = siteById[Number(sid)];
+        const perSite = form?.chargeMode === 'SITE'
+          ? { printCharge: s?.printingCost ? String(s.printingCost) : '', mountCharge: s?.mountingCost ? String(s.mountingCost) : '' }
+          : {};
+        return { id: undefined, siteId: Number(sid), startDate: addStart, endDate: addEnd, dayRateOverride: '', monthlyRateOverride: '', displayNotes: '', ...perSite };
+      }),
     ]);
+  }
+
+  // Per-site printing & mounting: switching on pre-fills each site from Inventory.
+  function setChargeMode(mode) {
+    set('chargeMode', mode);
+    if (mode !== 'SITE') return;
+    setLines((ls) => ls.map((l) => {
+      const s = siteById[l.siteId];
+      return { ...l, printCharge: l.printCharge ?? (s?.printingCost ? String(s.printingCost) : ''), mountCharge: l.mountCharge ?? (s?.mountingCost ? String(s.mountingCost) : '') };
+    }));
   }
   const updateLine = (i, k, v) => setLines((ls) => ls.map((l, idx) => (idx === i ? { ...l, [k]: v } : l)));
   const removeLine = (i) => setLines((ls) => ls.filter((_, idx) => idx !== i));
@@ -112,11 +131,12 @@ export default function EditCampaign() {
   useEffect(() => {
     if (!form) return;
     const items = lines.filter((l) => l.siteId && l.startDate && l.endDate)
-      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, monthlyRateOverride: l.monthlyRateOverride || undefined, dayRateOverride: l.dayRateOverride || undefined }));
+      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, monthlyRateOverride: l.monthlyRateOverride || undefined, dayRateOverride: l.dayRateOverride || undefined, printCharge: l.printCharge, mountCharge: l.mountCharge }));
     if (items.length === 0) { setQuote(null); return; }
     const t = setTimeout(() => {
       api.post('/orders/quote', {
         items, type: form.bookingType,
+        chargesPerSite: form.chargeMode === 'SITE',
         addOns: addOns.filter((a) => a.label),
         noOfPrints: Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
@@ -148,6 +168,7 @@ export default function EditCampaign() {
         printCost: Number(form.printCost) || 0,
         printRemarks: form.printRemarks || null,
         mountingCost: (Number(form.mountingCost) || 0) * (Number(form.noOfPrints) > 0 ? Number(form.noOfPrints) : 1),
+        chargesPerSite: form.chargeMode === 'SITE',
         monitoring: form.monitoring,
         monitorStart: form.monitoring && form.monitorStart,
         monitorMid: form.monitoring && form.monitorMid,
@@ -169,6 +190,8 @@ export default function EditCampaign() {
           monthlyRateOverride: l.monthlyRateOverride || undefined,
           dayRateOverride: l.dayRateOverride || undefined,
           displayNotes: l.displayNotes || undefined,
+          printCharge: form.chargeMode === 'SITE' ? Number(l.printCharge) || 0 : undefined,
+          mountCharge: form.chargeMode === 'SITE' ? Number(l.mountCharge) || 0 : undefined,
         })),
       });
       navigate(`/orders/${data.id}`);
@@ -258,6 +281,16 @@ export default function EditCampaign() {
                         )}
                         <div><div className="text-[10px] text-slate-400 mb-0.5">Days</div><input type="text" className="input py-1 text-xs bg-slate-50" value={days > 0 ? days : ''} readOnly /></div>
                       </div>
+                      {form.chargeMode === 'SITE' && (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+                          {[['printCharge', 'Printing ₹'], ['mountCharge', 'Mounting ₹']].map(([k, label]) => (
+                            <div key={k}>
+                              <div className="text-[10px] text-slate-400 mb-0.5">{label}</div>
+                              <input type="number" min="0" className="input py-1 text-xs" value={l[k] ?? ''} onChange={(e) => updateLine(i, k, e.target.value)} />
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <div className="mt-2">
                         <div className="text-[10px] text-slate-400 mb-0.5">Display notes <span className="text-slate-300">(prints on the billing plan)</span></div>
                         <input className="input py-1 text-xs" value={l.displayNotes || ''} onChange={(e) => updateLine(i, 'displayNotes', e.target.value)} />
@@ -272,6 +305,18 @@ export default function EditCampaign() {
           {/* Printing partner (for invoicing) */}
           <div className="card p-5 space-y-4">
             <div className="text-sm font-semibold text-slate-700">Printing partner (for invoicing)</div>
+            <div>
+              <label className="label">Charge printing &amp; mounting</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {[['PRINT', 'Per print', 'No. of prints × rate, mounting per print'], ['SITE', 'Per site', 'Own printing + mounting amount on each site']].map(([v, l, d]) => (
+                  <button type="button" key={v} onClick={() => setChargeMode(v)}
+                    className={`rounded-lg border p-3 text-left transition ${form.chargeMode === v ? 'border-brand bg-brand/5' : 'border-slate-200'}`}>
+                    <div className="font-medium text-sm">{l}</div>
+                    <div className="text-xs text-slate-500">{d}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
                 <label className="label">Printing Partner</label>
@@ -299,19 +344,21 @@ export default function EditCampaign() {
                   );
                 })()}
               </div>
-              <div>
-                <label className="label">No. of Prints</label>
-                <input type="number" min="0" className="input" value={form.noOfPrints} onChange={(e) => set('noOfPrints', e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Rate per Print</label>
-                <input type="number" min="0" className="input" value={form.printRate} onChange={(e) => set('printRate', e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Mounting Cost (per print)</label>
-                <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
-                <div className="text-[11px] text-slate-400 mt-1">Per print × no. of prints = mounting total.</div>
-              </div>
+              {form.chargeMode !== 'SITE' && (<>
+                <div>
+                  <label className="label">No. of Prints</label>
+                  <input type="number" min="0" className="input" value={form.noOfPrints} onChange={(e) => set('noOfPrints', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Rate per Print</label>
+                  <input type="number" min="0" className="input" value={form.printRate} onChange={(e) => set('printRate', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Mounting Cost (per print)</label>
+                  <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
+                  <div className="text-[11px] text-slate-400 mt-1">Per print × no. of prints = mounting total.</div>
+                </div>
+              </>)}
               <div>
                 <label className="label">Partner cost (total you pay)</label>
                 <input type="number" min="0" className="input" value={form.printCost} onChange={(e) => set('printCost', e.target.value)} placeholder="What you pay the printer" />
@@ -322,7 +369,9 @@ export default function EditCampaign() {
               <textarea className="input h-16" value={form.printRemarks} onChange={(e) => set('printRemarks', e.target.value)} placeholder="Notes for the printing partner / invoicing (e.g. material, sizes, delivery)" />
             </div>
             {(() => {
-              const charge = (Number(form.noOfPrints) || 0) * (Number(form.printRate) || 0);
+              const charge = form.chargeMode === 'SITE'
+                ? lines.reduce((s, l) => s + (Number(l.printCharge) || 0), 0)
+                : (Number(form.noOfPrints) || 0) * (Number(form.printRate) || 0);
               const cost = Number(form.printCost) || 0;
               if (charge <= 0 && cost <= 0) return null;
               const margin = charge - cost;
@@ -450,7 +499,7 @@ export default function EditCampaign() {
             ) : (
               <dl className="space-y-2 text-sm">
                 <Line k={`Rental (${lines.length} site${lines.length !== 1 ? 's' : ''})`} v={<Money value={quote.rentalSubtotal} />} />
-                {quote.printingTotal > 0 && <Line k={`Printing (${form.noOfPrints})`} v={<Money value={quote.printingTotal} />} />}
+                {quote.printingTotal > 0 && <Line k={form.chargeMode === 'SITE' ? 'Printing (per site)' : `Printing (${form.noOfPrints})`} v={<Money value={quote.printingTotal} />} />}
                 {quote.mountingTotal > 0 && <Line k="Mounting" v={<Money value={quote.mountingTotal} />} />}
                 {quote.addOnTotal > 0 && <Line k="Add-ons" v={<Money value={quote.addOnTotal} />} />}
                 {quote.discountAmount > 0 && <Line k={`Discount (${form.discountPct}%)`} v={<span className="text-red-600">−<Money value={quote.discountAmount} /></span>} />}

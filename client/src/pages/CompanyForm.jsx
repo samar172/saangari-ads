@@ -10,6 +10,7 @@ const EMPTY = {
   address: '', phone: '', email: '',
   gstMandatory: false, gstHidden: false,
   brandColor: '', termsAndConditions: '',
+  bankName: '', bankAccountNo: '', bankBranchIfsc: '',
 };
 
 // Full-page create/edit for a business entity (replaces the Companies modal).
@@ -34,6 +35,7 @@ export default function CompanyForm() {
         phone: c.phone || '', email: c.email || '',
         gstMandatory: !!c.gstMandatory, gstHidden: !!c.gstHidden,
         brandColor: c.brandColor || '', termsAndConditions: c.termsAndConditions || '',
+        bankName: c.bankName || '', bankAccountNo: c.bankAccountNo || '', bankBranchIfsc: c.bankBranchIfsc || '',
       });
     }).finally(() => setLoading(false));
   }, [id, editing]);
@@ -83,7 +85,19 @@ export default function CompanyForm() {
             <Field label="PAN"><input className="input" value={form.pan} onChange={(e) => set('pan', e.target.value)} /></Field>
             <Field label="Phone"><input className="input" value={form.phone} onChange={(e) => set('phone', e.target.value)} /></Field>
             <Field label="Email"><input className="input" value={form.email} onChange={(e) => set('email', e.target.value)} /></Field>
-            <Field label="Address" span><input className="input" value={form.address} onChange={(e) => set('address', e.target.value)} /></Field>
+            <Field label="Address (printed as 'Bill From' — one line per row)" span>
+              <textarea className="input h-20 resize-y" value={form.address} onChange={(e) => set('address', e.target.value)} />
+            </Field>
+          </div>
+
+          <div className="card p-4 bg-slate-50 border-slate-200">
+            <div className="font-semibold text-slate-800 text-sm mb-1">Bank Details</div>
+            <div className="text-xs text-slate-500 mb-3">Printed on the Excel bill under "Company's Bank Details".</div>
+            <div className="grid sm:grid-cols-3 gap-4">
+              <Field label="Bank Name"><input className="input" value={form.bankName} onChange={(e) => set('bankName', e.target.value)} placeholder="HDFC Bank" /></Field>
+              <Field label="A/C No."><input className="input" value={form.bankAccountNo} onChange={(e) => set('bankAccountNo', e.target.value)} /></Field>
+              <Field label="Branch & IFSC"><input className="input" value={form.bankBranchIfsc} onChange={(e) => set('bankBranchIfsc', e.target.value)} placeholder="HDFC0009247 (Samta Nagar)" /></Field>
+            </div>
           </div>
 
           <div className="card p-4 bg-slate-50 border-slate-200">

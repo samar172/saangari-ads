@@ -11,6 +11,9 @@ const { advanceCampaignLifecycle } = require('../utils/lifecycle');
 const { nextOrderNo, nextBookingNo } = require('../utils/counters');
 const { logActivity } = require('../utils/activity');
 const { writeLineNotes } = require('../utils/pdf');
+const { buildQuotationDocx } = require('../utils/quotationDocx');
+const { billingPlan } = require('../utils/billingPlan');
+const { planInclude } = require('../utils/invoicing');
 
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
 const ACTIVE = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
@@ -168,7 +171,7 @@ router.get('/', async (req, res) => {
         },
       },
       payments: { select: { amount: true } },
-      invoices: { select: { id: true, invoiceNo: true, status: true, issuedAt: true, total: true } },
+      invoices: { select: { id: true, invoiceNo: true, status: true, issuedAt: true, total: true, editableUntil: true, periodLabel: true } },
     },
   });
   // Flag orders that have an open Sales-raised approval (confirm/invoice) so the
@@ -216,6 +219,7 @@ async function priceFromBody(body) {
   const {
     items = [], addOns = [], noOfPrints = 0, printRate = 0, mountingCost = 0,
     discountPct = 0, discountFlat = 0, taxCategory = 'NON_GST', interState = false, type = 'REGULAR',
+    chargesPerSite = false,
   } = body;
   if (!Array.isArray(items) || items.length === 0) throw new Error('Add at least one site');
 
@@ -228,7 +232,11 @@ async function priceFromBody(body) {
   const pricedItems = items.map((i) => {
     const site = byId[Number(i.siteId)];
     if (!site) throw new Error(`Site ${i.siteId} not found`);
-    return { siteId: site.id, monthlyRate: site.monthlyRate, dayRate: site.dayRate, billPerDay, startDate: i.startDate, endDate: i.endDate, dayRateOverride: i.dayRateOverride, monthlyRateOverride: i.monthlyRateOverride };
+    return {
+      siteId: site.id, monthlyRate: site.monthlyRate, dayRate: site.dayRate, billPerDay, startDate: i.startDate, endDate: i.endDate,
+      dayRateOverride: i.dayRateOverride, monthlyRateOverride: i.monthlyRateOverride,
+      printCharge: i.printCharge, mountCharge: i.mountCharge,
+    };
   });
 
   // Discount is a percentage — clamp to [0,100] so a stray value can't drive
@@ -237,6 +245,7 @@ async function priceFromBody(body) {
   const result = computeOrder({
     items: pricedItems, addOns, noOfPrints, printRate, mountingCost,
     discountPct: discPct, discountFlat: Math.max(0, Number(discountFlat) || 0), taxCategory, interState,
+    chargesPerSite: !!chargesPerSite,
   });
   return { result, sites: byId };
 }
@@ -251,7 +260,7 @@ router.post('/', requirePermission('campaigns', 'add'), async (req, res) => {
     taxCategory: rawTaxCategory = 'NON_GST', interState = false, placeOfSupply,
     paymentTerms: rawPaymentTerms = 'ADVANCE',
     discountPct = 0, discountFlat = 0, discountRemarks, printRemarks, addOns = [], notes, status = 'QUOTATION',
-    billingCycle = null, nextBillingDate = null,
+    billingCycle = null, nextBillingDate = null, chargesPerSite = false,
   } = body;
 
   // Only the two known terms are allowed; anything else falls back to ADVANCE.
@@ -295,7 +304,7 @@ router.post('/', requirePermission('campaigns', 'add'), async (req, res) => {
 
   // Price it
   let priced;
-  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, discountFlat, taxCategory, interState, type }); }
+  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, discountFlat, taxCategory, interState, type, chargesPerSite }); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   // Reject a request that double-books the same site against itself: two lines
@@ -355,12 +364,14 @@ router.post('/', requirePermission('campaigns', 'add'), async (req, res) => {
         bookingDate: bookingDate ? new Date(bookingDate) : new Date(),
         description,
         billingCycle: billingCycle || null,
-        nextBillingDate: nextBillingDate ? new Date(nextBillingDate) : null,
+        // On a billing cycle the first bill is due when the campaign starts,
+        // unless a date was chosen; it then rolls forward with each bill.
+        nextBillingDate: nextBillingDate ? new Date(nextBillingDate) : (billingCycle ? new Date(minStart.format('YYYY-MM-DD')) : null),
         printingPartnerId: printingPartnerId ? Number(printingPartnerId) : null,
         printMaterial: printMaterial || null,
         noOfPrints: Number(noOfPrints) || 0, printRate: Number(printRate) || 0, printingTotal: r.printingTotal,
         printCost: Math.round(Number(printCost) || 0),
-        mountingCost: r.mountingTotal,
+        mountingCost: r.mountingTotal, chargesPerSite: !!chargesPerSite,
         monitoring: !!monitoring, monitorStart: !!monitorStart, monitorMid: !!monitorMid, monitorEnd: !!monitorEnd,
         taxCategory, interState: !!interState, placeOfSupply: placeOfSupply || 'Rajasthan',
         paymentTerms,
@@ -388,6 +399,7 @@ router.post('/', requirePermission('campaigns', 'add'), async (req, res) => {
           startDate: new Date(src.startDate),
           endDate: new Date(src.endDate),
           days: line.days, dayRate: line.dayRate, subtotal: line.subtotal,
+          printCharge: line.printCharge, mountCharge: line.mountCharge,
           displayNotes: src.displayNotes || null,
         },
       });
@@ -448,8 +460,10 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
     include: { items: true, invoices: true },
   });
   if (!existing) return res.status(404).json({ error: 'Order not found' });
-  if (existing.invoices.length) {
-    return res.status(409).json({ error: 'This campaign already has an invoice. Void the invoice before editing it.' });
+  // Cancelled invoices don't count — once a wrong bill is cancelled the
+  // campaign can be corrected and re-billed.
+  if (existing.invoices.some((i) => i.status !== 'CANCELLED')) {
+    return res.status(409).json({ error: 'This campaign already has an invoice. Cancel the invoice before editing it.' });
   }
 
   const body = req.body || {};
@@ -462,6 +476,7 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
     paymentTerms: rawPaymentTerms = 'ADVANCE',
     discountPct = 0, discountFlat = existing.discountFlat, discountRemarks, printRemarks = existing.printRemarks, addOns = [], notes,
     billingCycle = existing.billingCycle, nextBillingDate = existing.nextBillingDate,
+    chargesPerSite = existing.chargesPerSite,
   } = body;
 
   const paymentTerms = rawPaymentTerms === 'POSTPAID' ? 'POSTPAID' : 'ADVANCE';
@@ -486,7 +501,7 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
   }
 
   let priced;
-  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, discountFlat, taxCategory, interState, type }); }
+  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, discountFlat, taxCategory, interState, type, chargesPerSite }); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   // Same self-overlap guard as create: two lines on one site with overlapping
@@ -557,6 +572,7 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
           siteId: line.siteId, type, status: st,
           startDate: new Date(src.startDate), endDate: new Date(src.endDate),
           days: line.days, dayRate: line.dayRate, subtotal: line.subtotal,
+          printCharge: line.printCharge, mountCharge: line.mountCharge,
           displayNotes: src.displayNotes || null,
         };
         const matchId = Number(src.id) || null;
@@ -592,12 +608,12 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
           printMaterial: printMaterial || null,
           noOfPrints: Number(noOfPrints) || 0, printRate: Number(printRate) || 0, printingTotal: r.printingTotal,
           printCost: Math.round(Number(printCost) || 0),
-          mountingCost: r.mountingTotal,
+          mountingCost: r.mountingTotal, chargesPerSite: !!chargesPerSite,
           monitoring: !!monitoring, monitorStart: !!monitorStart, monitorMid: !!monitorMid, monitorEnd: !!monitorEnd,
           taxCategory, interState: !!interState, placeOfSupply: placeOfSupply || 'Rajasthan',
           paymentTerms,
           billingCycle: billingCycle || null,
-          nextBillingDate: nextBillingDate ? new Date(nextBillingDate) : null,
+          nextBillingDate: nextBillingDate ? new Date(nextBillingDate) : (billingCycle ? new Date(minStart.format('YYYY-MM-DD')) : null),
           discountPct: Math.min(100, Math.max(0, Number(discountPct) || 0)),
           discountFlat: Math.max(0, Number(discountFlat) || 0), discountRemarks, printRemarks: printRemarks || null,
           rentalSubtotal: r.rentalSubtotal, addOnTotal: r.addOnTotal, discountAmount: r.discountAmount,
@@ -994,6 +1010,28 @@ router.post('/:id/items/:lineId/stop', requirePermission('campaigns', 'edit'), a
 
   const full = await prisma.order.findUnique({ where: { id: orderId }, include: orderInclude });
   res.json(withDerived(full));
+});
+
+// The campaign's billing plan: its bill periods (one for a one-time campaign,
+// one per month/quarter on a cycle), which are invoiced, and a preview of the
+// next bill.
+router.get('/:id/billing-plan', requirePermission('invoices', 'view'), async (req, res) => {
+  const order = await prisma.order.findUnique({ where: { id: Number(req.params.id) }, include: planInclude });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  res.json(billingPlan(order));
+});
+
+// Quotation letter as an editable Word file on the Saangari letterhead — the
+// same format the sales team sends today (see utils/quotationDocx.js).
+router.get('/:id/quotation.docx', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
+  const order = await prisma.order.findUnique({ where: { id: Number(req.params.id) }, include: orderInclude });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (salesForbidden(req, order)) return res.status(404).json({ error: 'Order not found' });
+  const mediaLabels = Object.fromEntries((await prisma.mediaType.findMany()).map((m) => [m.code, m.label]));
+  const { buffer } = await buildQuotationDocx(order, { mediaLabels });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  res.setHeader('Content-Disposition', `attachment; filename="Quotation-${order.orderNo}.docx"`);
+  res.end(buffer);
 });
 
 // Quotation PDF for the client

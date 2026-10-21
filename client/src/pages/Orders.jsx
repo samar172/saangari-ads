@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
-import { Camera, ChevronRight, ChevronDown, ExternalLink, Download, SlidersHorizontal, Plus } from 'lucide-react';
+import { Camera, ChevronRight, ChevronDown, ExternalLink, Download, SlidersHorizontal, Plus, Eye, Pencil, FileSpreadsheet, FileText, Lock } from 'lucide-react';
 import api, { downloadFile } from '../api';
-import { useAuth } from '../auth';
+import { useAuth, usePerms } from '../auth';
+import { lockInfo } from '../components/InvoiceLock';
 import { useCompany } from '../CompanyContext';
 import { Badge, Money, Spinner } from '../components/ui';
 import { OrderTabs } from './OrderDetail';
@@ -86,23 +87,74 @@ const COLUMNS = [
       const n = o.items.reduce((a, it) => a + it.photos.length, 0);
       return n > 0 ? <span className="flex items-center gap-1"><Camera size={14} className="text-slate-500" /> {n}</span> : <span className="text-slate-300">—</span>;
     } },
+  // The campaign's current invoice, with quick actions: view, edit, and the
+  // Excel bill. No invoice yet → a Generate link for confirmed campaigns.
+  { key: 'invoice', label: 'Invoice', align: 'left',
+    cell: (o, ctx) => {
+      const inv = [...(o.invoices || [])].filter((i) => i.status !== 'CANCELLED')
+        .sort((a, b) => new Date(b.issuedAt || 0) - new Date(a.issuedAt || 0) || b.id - a.id)[0];
+      if (!inv) {
+        return o.receivable && ctx.canDo('invoices', 'add')
+          ? <RowAction icon={Plus} label="Generate" onClick={() => ctx.navigate(`/invoices/new?orderId=${o.id}`)} />
+          : <span className="text-slate-300">—</span>;
+      }
+      if (!ctx.canDo('invoices', 'view')) return <span className="text-slate-600 whitespace-nowrap">{inv.invoiceNo}</span>;
+      return (
+        <div className="whitespace-nowrap">
+          <div className="text-xs font-medium text-slate-700 flex items-center gap-1">
+            {inv.invoiceNo}
+            {!lockInfo(inv).editable && <Lock size={11} className="text-slate-400" title="Locked" />}
+            {inv.periodLabel && <span className="text-[10px] font-normal text-slate-400">· {inv.periodLabel}</span>}
+          </div>
+          <div className="flex items-center gap-1 mt-1">
+            <RowAction icon={Eye} label="View" onClick={() => ctx.navigate(`/invoices/${inv.id}`)} />
+            {ctx.canDo('invoices', 'edit') && lockInfo(inv).editable && <RowAction icon={Pencil} label="Edit" title="Editable for 24 hours after generation" onClick={() => ctx.navigate(`/invoices/${inv.id}/edit`)} />}
+            <RowAction icon={FileSpreadsheet} label="Bill" title="Download the Excel bill"
+              onClick={() => downloadFile(`/invoices/${inv.id}/bill.xlsx`, `Bill-${inv.invoiceNo.replace(/\//g, '-')}.xlsx`)} />
+          </div>
+        </div>
+      );
+    } },
+  // Quotation letter (.docx on the Saangari letterhead), straight from the row.
+  { key: 'quotation', label: 'Quotation', align: 'left',
+    cell: (o, ctx) => ctx.canQuote
+      ? <RowAction icon={FileText} label="Download" title="Download the quotation (Word)"
+          onClick={() => downloadFile(`/orders/${o.id}/quotation.docx`, `Quotation-${o.orderNo}.docx`)} />
+      : <span className="text-slate-300">—</span> },
   // Grand Total kept as the last column so it reads as the row's bottom-line figure.
   { key: 'total', label: 'Grand Total', align: 'right', cell: (o) => <span className="font-semibold text-slate-700"><Money value={o.grandTotal} /></span> },
 ];
 
-const DEFAULT_VISIBLE = ['order', 'client', 'sites', 'start', 'end', 'invoiced', 'outstanding', 'balance', 'lastInvoice', 'terms', 'status', 'photos', 'total'];
-const STORAGE_KEY = 'orders.columns.v3';
+const DEFAULT_VISIBLE = ['order', 'client', 'sites', 'start', 'end', 'invoiced', 'outstanding', 'balance', 'lastInvoice', 'terms', 'status', 'photos', 'invoice', 'quotation', 'total'];
+const STORAGE_KEY = 'orders.columns.v4';
+const PREV_STORAGE_KEY = 'orders.columns.v3';
 
 function loadVisible() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (Array.isArray(saved) && saved.length) return saved;
+    // Carry a v3 column choice forward, switching on the new Invoice/Quotation columns.
+    const prev = JSON.parse(localStorage.getItem(PREV_STORAGE_KEY));
+    if (Array.isArray(prev) && prev.length) return [...new Set([...prev, 'invoice', 'quotation'])];
   } catch (e) { /* ignore */ }
   return DEFAULT_VISIBLE;
 }
 
+// Small inline button for actions inside a table cell. Stops the click from
+// also toggling the row's expansion.
+function RowAction({ icon: Icon, label, title, onClick }) {
+  return (
+    <button type="button" title={title || label}
+      className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:border-brand hover:text-brand"
+      onClick={(e) => { e.stopPropagation(); onClick(); }}>
+      <Icon size={12} /> {label}
+    </button>
+  );
+}
+
 export default function Orders() {
   const { user } = useAuth();
+  const { canDo } = usePerms();
   const { activeCompany } = useCompany();
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -122,6 +174,9 @@ export default function Orders() {
   const [visible, setVisible] = useState(loadVisible);
   useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(visible)); }, [visible]);
   const cols = COLUMNS.filter((c) => c.always || visible.includes(c.key));
+  // Passed to cells that need permissions or navigation. Quotation letters are
+  // served to Sales/Manager/Finance (and Super Admin), not Ops.
+  const cellCtx = { canDo, navigate, canQuote: user?.role !== 'OPS' };
 
   function exportExcel() {
     const p = new URLSearchParams();
@@ -272,7 +327,7 @@ export default function Orders() {
                               {open ? <ChevronDown size={14} className="inline" /> : <ChevronRight size={14} className="inline" />}
                             </span>
                           )}
-                          {c.cell(o)}
+                          {c.cell(o, cellCtx)}
                         </td>
                       ))}
                     </tr>

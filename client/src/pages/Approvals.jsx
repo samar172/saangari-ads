@@ -12,6 +12,9 @@ const ACTION_LABEL = {
   SETTLE_CASH: 'Settle in cash (Non-GST)',
   DISABLE_USER: 'Disable user',
   EDIT_PAYMENT: 'Edit payment',
+  CONFIRM_ORDER: 'Confirm booking',
+  GENERATE_INVOICE: 'Generate invoice',
+  CANCEL_INVOICE: 'Cancel invoice',
   OTHER: 'Other',
 };
 
@@ -87,6 +90,11 @@ export default function Approvals() {
                         <span className={`badge text-[10px] ${STATUS_STYLE[r.status]}`}>{r.status}</span>
                       </div>
                       <div className="text-sm text-slate-600 truncate">{r.label || `${r.entityType} #${r.entityId ?? ''}`}</div>
+                      {r.order && (
+                        <div className="text-xs text-slate-500 truncate mt-0.5">
+                          {r.order.client?.company || r.order.client?.name} · {r.order._count?.items ?? 0} site{r.order._count?.items === 1 ? '' : 's'} · ₹{Math.round(r.order.grandTotal || 0).toLocaleString('en-IN')}
+                        </div>
+                      )}
                       <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1">
                         <Clock size={11} /> {new Date(r.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                         {' · by '}{r.requestedBy?.name}

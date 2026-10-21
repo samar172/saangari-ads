@@ -7,7 +7,8 @@ const { nextInvoiceNo } = require('../utils/counters');
 const { GST_RATE, recomputeOrderTotals } = require('../utils/pricing');
 const { writeLineNotes } = require('../utils/pdf');
 const { logActivity } = require('../utils/activity');
-const { createInvoiceForOrder, lastWorkingDayOfMonth, gstSplit } = require('../utils/invoicing');
+const { createInvoiceForOrder, redraftInvoice, cancelInvoice, lockState, lastWorkingDayOfMonth, gstSplit } = require('../utils/invoicing');
+const { buildBillXlsx } = require('../utils/billXlsx');
 
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
 
@@ -45,7 +46,10 @@ router.get('/:id', requirePermission('invoices', 'view'), async (req, res) => {
     },
   });
   if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
-  res.json(invoice);
+  // Edit-window state + the invoice's own audit trail (raised, edits with
+  // before → after, shares, cancellation).
+  const history = await prisma.activityLog.findMany({ where: { invoiceId: invoice.id }, orderBy: { createdAt: 'desc' } });
+  res.json({ ...invoice, lock: lockState(invoice), history });
 });
 
 // Log that a bill was shared with the client over WhatsApp / email. The message
@@ -75,11 +79,22 @@ router.patch('/:id/commercials', requirePermission('invoices', 'edit'), async (r
 
   const invoice = await prisma.invoice.findUnique({
     where: { id: Number(id) },
-    include: { order: { include: { items: true } } }
+    include: { order: { include: { items: true, addOns: true } } }
   });
   if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+  // Editable only inside its 24h window; after that it's locked — a wrong
+  // bill is cancelled and re-issued instead.
+  const lock = lockState(invoice);
+  if (!lock.editable) {
+    return res.status(423).json({ error: `${invoice.invoiceNo} is locked (${lock.reason}). Cancel it and generate a fresh invoice to correct it.` });
+  }
 
   const order = invoice.order;
+  const before = {
+    amount: invoice.amount, total: invoice.total, discountPct: order.discountPct, printingTotal: order.printingTotal,
+    mountingCost: order.mountingCost, addOns: (order.addOns || []).map((a) => `${a.label} ₹${a.amount}`).join(', '),
+    dueDate: invoice.dueDate, issuedAt: invoice.issuedAt,
+  };
 
   // 1. Update Order's add-ons
   await prisma.orderAddOn.deleteMany({ where: { orderId: order.id } });
@@ -123,13 +138,16 @@ router.patch('/:id/commercials', requirePermission('invoices', 'edit'), async (r
     }
   });
 
-  // 4. Update Invoice — honour the invoice's own tax category (which may have
-  // been overridden at billing time), and allow editing the due date.
-  const split = gstSplit(invoice.taxCategory, invoice.interState, newTotals.taxableAmount);
+  // 4. Update Invoice — re-draft this bill's own period from the new
+  // commercials (a monthly bill only carries its month), honour the invoice's
+  // own tax category, and allow editing the issue/due dates.
+  const draft = await redraftInvoice(invoice.id);
+  const split = gstSplit(invoice.taxCategory, invoice.interState, draft.taxable);
   const updatedInvoice = await prisma.invoice.update({
     where: { id: invoice.id },
     data: {
-      amount: newTotals.taxableAmount,
+      amount: draft.taxable,
+      lines: draft.rows,
       cgst: split.cgst,
       sgst: split.sgst,
       igst: split.igst,
@@ -152,16 +170,53 @@ router.patch('/:id/commercials', requirePermission('invoices', 'edit'), async (r
     });
   }
 
+  // Audit log: exactly what changed, before → after.
+  const fmtD = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
+  const after = {
+    amount: updatedInvoice.amount, total: updatedInvoice.total, discountPct: testOrder.discountPct, printingTotal: testOrder.printingTotal,
+    mountingCost: testOrder.mountingCost, addOns: (addOns || []).map((a) => `${a.label} ₹${Number(a.amount) || 0}`).join(', '),
+    dueDate: updatedInvoice.dueDate, issuedAt: updatedInvoice.issuedAt,
+  };
+  const LABEL = { total: 'Total', amount: 'Taxable', discountPct: 'Discount %', printingTotal: 'Printing', mountingCost: 'Mounting', addOns: 'Add-ons', dueDate: 'Due date', issuedAt: 'Invoice date' };
+  const changes = Object.keys(LABEL).filter((k) => {
+    const a = before[k], b = after[k];
+    return (k === 'dueDate' || k === 'issuedAt') ? fmtD(a) !== fmtD(b) : String(a ?? '') !== String(b ?? '');
+  }).map((k) => {
+    const show = (v) => {
+      if (k === 'dueDate' || k === 'issuedAt') return fmtD(v);
+      if (k === 'discountPct') return `${Number(v) || 0}%`;
+      if (typeof v === 'number') return `₹${v.toLocaleString('en-IN')}`;
+      return v || '—';
+    };
+    return `${LABEL[k]}: ${show(before[k])} → ${show(after[k])}`;
+  });
+  logActivity({
+    type: 'INVOICE_EDIT', user: req.user, orderId: order.id, orderNo: order.orderNo, invoiceId: invoice.id,
+    summary: `Invoice edited · ${invoice.invoiceNo}`,
+    detail: changes.length ? changes.join(' · ') : 'Saved with no changes',
+  });
+
   res.json(updatedInvoice);
+});
+
+// Cancel a wrong bill (reason required). Manager / Super Admin cancel directly;
+// everyone else files a CANCEL_INVOICE approval from the invoice screen.
+router.post('/:id/cancel', requireRole('MANAGER'), async (req, res) => {
+  try {
+    const inv = await cancelInvoice({ invoiceId: Number(req.params.id), reason: req.body?.reason, user: req.user });
+    res.json(inv);
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'Could not cancel the invoice' });
+  }
 });
 
 // Generate a tax invoice for an order. Blocked until at least one monitoring
 // photo exists on any line (proof-of-display gate) — but purely loose orders
 // are 1–2 day displays with no monitoring cycle, so they invoice straight away.
 router.post('/', requirePermission('invoices', 'add'), async (req, res) => {
-  const { orderId, force, dueDate } = req.body || {};
+  const { orderId, force, dueDate, periodIndex } = req.body || {};
   try {
-    const invoice = await createInvoiceForOrder({ orderId, force: !!force, dueDate, user: req.user });
+    const invoice = await createInvoiceForOrder({ orderId, force: !!force, dueDate, periodIndex, user: req.user });
     res.status(201).json(invoice);
   } catch (e) {
     const body = { error: e.message || 'Could not generate invoice' };
@@ -175,16 +230,21 @@ router.post('/:id/mark-paid', requireRole('FINANCE'), async (req, res) => {
   const invoice = await prisma.invoice.findUnique({ where: { id } });
   if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
   if (invoice.status === 'PAID') return res.json(invoice); // idempotent — no replayed credit
+  if (invoice.status === 'CANCELLED') return res.status(400).json({ error: `${invoice.invoiceNo} is cancelled.` });
 
   const updated = await prisma.$transaction(async (tx) => {
     const inv = await tx.invoice.update({ where: { id }, data: { status: 'PAID' } });
-    // Settle the order's OUTSTANDING balance (not blindly the full invoice total)
-    // so this can't double-count money already recorded via the payments route.
-    // Mirrors that route: one Payment row (clears order balance) + one ledger
-    // CREDIT (clears the client ledger).
-    const order = await tx.order.findUnique({ where: { id: invoice.orderId }, include: { payments: { select: { amount: true } } } });
+    // Settle what is still owed on BILLED amounts, capped at this invoice — a
+    // campaign billed monthly must not be marked fully paid off one month's
+    // bill, and money already recorded via the payments route isn't counted
+    // twice. Mirrors that route: one Payment row + one ledger CREDIT.
+    const order = await tx.order.findUnique({
+      where: { id: invoice.orderId },
+      include: { payments: { select: { amount: true } }, invoices: { select: { status: true, total: true } } },
+    });
     const paid = (order?.payments || []).reduce((s, p) => s + p.amount, 0);
-    const remaining = Math.max(0, Math.round((order?.grandTotal || 0) - paid));
+    const billed = (order?.invoices || []).filter((i) => i.status !== 'CANCELLED').reduce((s, i) => s + (i.total || 0), 0);
+    const remaining = Math.max(0, Math.min(Math.round(invoice.total), Math.round(billed - paid)));
     if (remaining > 0) {
       const payment = await tx.payment.create({
         data: {
@@ -200,6 +260,19 @@ router.post('/:id/mark-paid', requireRole('FINANCE'), async (req, res) => {
     return inv;
   });
   res.json(updated);
+});
+
+// Editable Excel bill in the accounts team's own bill.xlsx layout.
+router.get('/:id/bill.xlsx', requirePermission('invoices', 'view'), async (req, res) => {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: Number(req.params.id) },
+    include: { client: true, company: true, order: { include: { items: { include: { site: true } }, addOns: true } } },
+  });
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+  const buffer = await buildBillXlsx(invoice);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="Bill-${invoice.invoiceNo.replace(/\//g, '-')}.xlsx"`);
+  res.end(Buffer.from(buffer));
 });
 
 // Downloadable PDF tax invoice
@@ -255,17 +328,38 @@ router.get('/:id/pdf', requirePermission('invoices', 'view'), async (req, res) =
     .text('Days', x.days, y).text('Amount', x.amt, y, { width: 80, align: 'right' });
   y += 20;
   doc.fillColor('#333').font('Helvetica');
-  for (const it of order.items) {
-    const period = `${new Date(it.startDate).toLocaleDateString('en-IN')}–${new Date(it.endDate).toLocaleDateString('en-IN')}`;
-    doc.font('Helvetica').fillColor('#333').fontSize(8)
-      .text(it.site.code, x.code, y, { width: 60 })
-      .text(it.site.location, x.loc, y, { width: 185 })
-      .text(period, x.period, y, { width: 115 })
-      .text(String(it.days), x.days, y, { width: 40 })
-      .text(INR(it.subtotal), x.amt, y, { width: 80, align: 'right' });
-    y += Math.max(16, doc.heightOfString(it.site.location, { width: 185, fontSize: 8 }));
-    y = writeLineNotes(doc, it, x.loc, y);
-    if (y > 720) { doc.addPage(); y = 60; }
+  // Invoices carry the rows exactly as issued (a monthly bill holds only its
+  // month); older invoices fall back to the campaign's lines.
+  const issued = Array.isArray(invoice.lines) ? invoice.lines : null;
+  if (issued) {
+    if (invoice.periodLabel) {
+      doc.font('Helvetica-Oblique').fontSize(8).fillColor('#555')
+        .text(`${invoice.periodLabel}: ${new Date(invoice.periodStart).toLocaleDateString('en-IN')} – ${new Date(invoice.periodEnd).toLocaleDateString('en-IN')}`, x.code, y - 22, { width: 505, align: 'right' });
+    }
+    for (const r of issued) {
+      const period = r.from ? `${new Date(r.from).toLocaleDateString('en-IN')}–${new Date(r.till).toLocaleDateString('en-IN')}` : '';
+      doc.font('Helvetica').fillColor('#333').fontSize(8)
+        .text(r.code || '', x.code, y, { width: 60 })
+        .text(r.location, x.loc, y, { width: 185 })
+        .text(period, x.period, y, { width: 115 })
+        .text(r.duration || (r.qty > 1 ? `× ${r.qty}` : ''), x.days, y, { width: 50 })
+        .text(INR(r.qty * r.price), x.amt, y, { width: 80, align: 'right' });
+      y += Math.max(16, doc.heightOfString(r.location, { width: 185, fontSize: 8 }));
+      if (y > 720) { doc.addPage(); y = 60; }
+    }
+  } else {
+    for (const it of order.items) {
+      const period = `${new Date(it.startDate).toLocaleDateString('en-IN')}–${new Date(it.endDate).toLocaleDateString('en-IN')}`;
+      doc.font('Helvetica').fillColor('#333').fontSize(8)
+        .text(it.site.code, x.code, y, { width: 60 })
+        .text(it.site.location, x.loc, y, { width: 185 })
+        .text(period, x.period, y, { width: 115 })
+        .text(String(it.days), x.days, y, { width: 40 })
+        .text(INR(it.subtotal), x.amt, y, { width: 80, align: 'right' });
+      y += Math.max(16, doc.heightOfString(it.site.location, { width: 185, fontSize: 8 }));
+      y = writeLineNotes(doc, it, x.loc, y);
+      if (y > 720) { doc.addPage(); y = 60; }
+    }
   }
 
   y += 8;
@@ -275,10 +369,12 @@ router.get('/:id/pdf', requirePermission('invoices', 'view'), async (req, res) =
       .text(INR(v), x.amt, y, { width: 80, align: 'right' });
     y += bold ? 20 : 15;
   };
-  if (order.printingTotal) totalRow('Printing', order.printingTotal);
-  if (order.mountingCost) totalRow('Mounting', order.mountingCost);
-  if (order.addOnTotal) totalRow('Add-ons', order.addOnTotal);
-  if (order.discountAmount) totalRow(`Discount (${order.discountPct}%)`, -order.discountAmount);
+  if (!issued) {
+    if (order.printingTotal) totalRow('Printing', order.printingTotal);
+    if (order.mountingCost) totalRow('Mounting', order.mountingCost);
+    if (order.addOnTotal) totalRow('Add-ons', order.addOnTotal);
+    if (order.discountAmount) totalRow(`Discount (${order.discountPct}%)`, -order.discountAmount);
+  }
   totalRow('Taxable Value', invoice.amount);
   if (invoice.taxCategory === 'GST') {
     if (invoice.interState) totalRow('IGST 18%', invoice.igst);
@@ -286,6 +382,10 @@ router.get('/:id/pdf', requirePermission('invoices', 'view'), async (req, res) =
   }
   totalRow('Grand Total', invoice.total, true);
 
+  if (invoice.status === 'CANCELLED') {
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('#dc2626')
+      .text(`CANCELLED on ${new Date(invoice.cancelledAt).toLocaleDateString('en-IN')} — ${invoice.cancelReason || ''}`, 45, 770, { align: 'center', width: 505 });
+  }
   doc.font('Helvetica').fontSize(8).fillColor('#888').text('This is a computer-generated invoice.', 45, 790, { align: 'center', width: 505 });
   doc.end();
 });

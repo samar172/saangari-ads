@@ -3,11 +3,11 @@ const prisma = require('../db');
 const { requireRole, requirePermission } = require('../middleware/auth');
 const { settleInCash } = require('../utils/settle');
 const { applyPaymentEdit } = require('../utils/payments');
-const { createInvoiceForOrder } = require('../utils/invoicing');
+const { createInvoiceForOrder, cancelInvoice } = require('../utils/invoicing');
 const { advanceCampaignLifecycle } = require('../utils/lifecycle');
 const { logActivity } = require('../utils/activity');
 
-const ACTIONS = ['DELETE_ORDER', 'CANCEL_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'EDIT_PAYMENT', 'CONFIRM_ORDER', 'GENERATE_INVOICE', 'OTHER'];
+const ACTIONS = ['DELETE_ORDER', 'CANCEL_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'EDIT_PAYMENT', 'CONFIRM_ORDER', 'GENERATE_INVOICE', 'CANCEL_INVOICE', 'OTHER'];
 const ACTIVE = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
 
 // Release a site back to AVAILABLE unless another live booking still holds it.
@@ -54,7 +54,19 @@ router.get('/', async (req, res) => {
   const requests = await prisma.approvalRequest.findMany({
     where, orderBy: { createdAt: 'desc' }, include: requestInclude,
   });
-  res.json(requests);
+  // Attach a short campaign summary to order requests so the queue reads at a
+  // glance (client · sites · value) without opening each one.
+  const orderIds = [...new Set(requests.filter((r) => r.entityType === 'order' && r.entityId).map((r) => r.entityId))];
+  const orders = orderIds.length ? await prisma.order.findMany({
+    where: { id: { in: orderIds } },
+    select: {
+      id: true, orderNo: true, status: true, grandTotal: true,
+      client: { select: { name: true, company: true } },
+      _count: { select: { items: true } },
+    },
+  }) : [];
+  const byId = new Map(orders.map((o) => [o.id, o]));
+  res.json(requests.map((r) => (r.entityType === 'order' && byId.has(r.entityId) ? { ...r, order: byId.get(r.entityId) } : r)));
 });
 
 // Badge count of pending requests awaiting a reviewer.
@@ -62,6 +74,50 @@ router.get('/count', async (req, res) => {
   if (!isReviewer(req.user)) return res.json({ pending: 0 });
   const pending = await prisma.approvalRequest.count({ where: { status: 'PENDING' } });
   res.json({ pending });
+});
+
+// Everything a reviewer needs to decide on a campaign request without leaving
+// the page: client, commercials, sites, printing & mounting, schedule, billing.
+const orderContextInclude = {
+  client: { include: { contacts: { orderBy: [{ billsTo: 'desc' }, { createdAt: 'asc' }] } } },
+  company: { select: { id: true, name: true, code: true } },
+  category: { select: { name: true } },
+  createdBy: { select: { name: true } },
+  printingPartner: { select: { name: true, phone: true } },
+  addOns: true,
+  reminders: { orderBy: { dueDate: 'asc' } },
+  invoices: { select: { id: true, invoiceNo: true, status: true, issuedAt: true, dueDate: true, total: true } },
+  payments: { select: { amount: true } },
+  items: {
+    orderBy: { startDate: 'asc' },
+    include: { site: { select: { code: true, location: true, zone: true, type: true, width: true, height: true, sqft: true, light: true, imageUrl: true } } },
+  },
+};
+
+// One request with its context (the campaign / invoice / payment it is about).
+router.get('/:id', async (req, res) => {
+  const request = await prisma.approvalRequest.findUnique({ where: { id: Number(req.params.id) }, include: requestInclude });
+  if (!request) return res.status(404).json({ error: 'Request not found' });
+  if (!isReviewer(req.user) && request.requestedById !== req.user.id) return res.status(404).json({ error: 'Request not found' });
+
+  let orderId = null;
+  const context = {};
+  if (request.entityType === 'invoice' && request.entityId) {
+    context.invoice = await prisma.invoice.findUnique({ where: { id: request.entityId } });
+    orderId = context.invoice?.orderId ?? null;
+  } else if (request.entityType === 'payment' && request.entityId) {
+    context.payment = await prisma.payment.findUnique({ where: { id: request.entityId }, include: { recordedBy: { select: { name: true } } } });
+    orderId = context.payment?.orderId ?? null;
+  } else if (request.entityType === 'order') {
+    orderId = request.entityId;
+  } else if (request.entityType === 'user' && request.entityId) {
+    context.user = await prisma.user.findUnique({ where: { id: request.entityId }, select: { id: true, name: true, email: true, role: true, active: true } });
+  }
+  if (orderId) {
+    const order = await prisma.order.findUnique({ where: { id: orderId }, include: orderContextInclude });
+    if (order) context.order = { ...order, amountPaid: order.payments.reduce((s, p) => s + p.amount, 0) };
+  }
+  res.json({ ...request, context });
 });
 
 // Carry out the requested action inside a transaction.
@@ -144,7 +200,13 @@ async function execute(request, approver) {
       // Raise the invoice a Sales user requested. force:true — the reviewer has
       // decided; the proof-of-display gate was their call to make.
       const payload = request.payload || {};
-      await createInvoiceForOrder({ orderId: id, force: true, dueDate: payload.dueDate, user: approver });
+      await createInvoiceForOrder({ orderId: id, force: true, dueDate: payload.dueDate, periodIndex: payload.periodIndex, user: approver });
+      return;
+    }
+    case 'CANCEL_INVOICE': {
+      // Cancel a wrong bill on the requester's stated reason; the reviewer is
+      // recorded as the one who cancelled it.
+      await cancelInvoice({ invoiceId: id, reason: request.reason || request.payload?.reason, user: approver });
       return;
     }
     case 'DISABLE_USER': {
@@ -193,7 +255,7 @@ router.post('/:id/approve', requirePermission('approvals', 'edit'), async (req, 
 
   // Record the approved action in the activity feed (a cancellation, a payment
   // edit, a cash settlement, …). orderId only when the request was about an order.
-  const ACTIVITY_TYPE = { CANCEL_ORDER: 'CANCEL', EDIT_PAYMENT: 'PAYMENT_EDIT', DELETE_ORDER: 'CANCEL', CONFIRM_ORDER: 'BOOKING', GENERATE_INVOICE: 'INVOICE' };
+  const ACTIVITY_TYPE = { CANCEL_ORDER: 'CANCEL', EDIT_PAYMENT: 'PAYMENT_EDIT', DELETE_ORDER: 'CANCEL', CONFIRM_ORDER: 'BOOKING', GENERATE_INVOICE: 'INVOICE', CANCEL_INVOICE: 'INVOICE_CANCEL' };
   logActivity({
     type: ACTIVITY_TYPE[request.action] || 'CAMPAIGN_EDIT', user: req.user,
     orderId: request.entityType === 'order' ? request.entityId : undefined,

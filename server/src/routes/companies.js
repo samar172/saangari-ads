@@ -13,7 +13,7 @@ router.get('/', async (req, res) => {
 
 function cleanCompanyData(body) {
   const data = {};
-  const strFields = ['name', 'legalName', 'gstin', 'pan', 'address', 'phone', 'email', 'termsAndConditions', 'brandColor'];
+  const strFields = ['name', 'legalName', 'gstin', 'pan', 'address', 'phone', 'email', 'termsAndConditions', 'brandColor', 'bankName', 'bankAccountNo', 'bankBranchIfsc'];
   const boolFields = ['gstMandatory', 'gstHidden', 'active'];
   
   for (const f of strFields) {

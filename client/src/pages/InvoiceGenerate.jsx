@@ -14,13 +14,23 @@ export default function InvoiceGenerate() {
   const [err, setErr] = useState('');
   const [warn, setWarn] = useState(''); // soft photo-gate → offer "invoice anyway"
   const [busy, setBusy] = useState(false);
+  const [plan, setPlan] = useState(null);
 
   useEffect(() => {
-    // Confirmed/live orders not yet invoiced
-    api.get('/orders').then((r) => setOrders(r.data.filter((o) => ['CONFIRMED', 'LIVE', 'COMPLETED'].includes(o.status) && o.invoices.length === 0)));
+    // Confirmed/live orders with something left to bill: never invoiced, or on
+    // a monthly/quarterly cycle (the billing plan below says which period is next).
+    api.get('/orders').then((r) => setOrders(r.data.filter((o) => ['CONFIRMED', 'LIVE', 'COMPLETED'].includes(o.status)
+      && (o.billingCycle || !o.invoices.some((i) => i.status !== 'CANCELLED')))));
   }, []);
 
+  useEffect(() => {
+    setPlan(null);
+    if (orderId) api.get(`/orders/${orderId}/billing-plan`).then((r) => setPlan(r.data)).catch(() => setPlan(null));
+  }, [orderId]);
+
   const selectedOrder = orders.find((o) => String(o.id) === String(orderId));
+  const next = plan?.next;
+  const gst = (t) => (selectedOrder?.taxCategory === 'GST' ? Math.round(t * 0.18) : 0);
 
   async function submit(force) {
     setBusy(true); setErr(''); if (force) setWarn('');
@@ -28,6 +38,7 @@ export default function InvoiceGenerate() {
       const { data } = await api.post('/invoices', {
         orderId: Number(orderId),
         force: !!force,
+        periodIndex: next?.index,
         dueDate: dueDate || undefined,
       });
       navigate(data?.id ? `/invoices/${data.id}` : '/invoices');
@@ -47,7 +58,7 @@ export default function InvoiceGenerate() {
 
       <div className="card p-5 max-w-xl">
         {err && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
-        <label className="label">Order (confirmed/live, not yet invoiced)</label>
+        <label className="label">Order (confirmed/live, with an unbilled period)</label>
         <select className="input" value={orderId} onChange={(e) => { setOrderId(e.target.value); setWarn(''); }}>
           <option value="">Select order…</option>
           {orders.map((o) => {
@@ -55,6 +66,17 @@ export default function InvoiceGenerate() {
             return <option key={o.id} value={o.id}>{o.orderNo} — {o.client.company || o.client.name} — {o.items.length} site(s) {photos === 0 ? '(no photo!)' : ''}</option>;
           })}
         </select>
+
+        {plan && (
+          <div className={`mt-3 rounded-lg border px-3 py-2 text-sm ${next ? 'bg-slate-50 border-slate-200 text-slate-700' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+            {next ? (
+              <>
+                <b>{next.label || 'Full campaign'}</b>: {new Date(next.periodStart).toLocaleDateString('en-IN')} → {new Date(next.periodEnd).toLocaleDateString('en-IN')}
+                {' · '}₹{(next.draft.taxable + gst(next.draft.taxable)).toLocaleString('en-IN')}{selectedOrder?.taxCategory === 'GST' ? ' incl. GST' : ''}
+              </>
+            ) : 'Every billing period of this campaign is already invoiced.'}
+          </div>
+        )}
 
         <div className="mt-3">
           <label className="label">Due date</label>
@@ -73,7 +95,7 @@ export default function InvoiceGenerate() {
         ) : (
           <>
             <p className="text-xs text-slate-500 mt-3">A monitoring photo (proof-of-display) is recommended before invoicing — you'll be asked to confirm if it's missing.</p>
-            <button className="btn-primary w-full mt-3 flex items-center justify-center gap-1.5" disabled={busy || !orderId} onClick={() => submit(false)}><Plus size={16} /> {busy ? 'Generating…' : 'Generate'}</button>
+            <button className="btn-primary w-full mt-3 flex items-center justify-center gap-1.5" disabled={busy || !orderId || (plan && !next)} onClick={() => submit(false)}><Plus size={16} /> {busy ? 'Generating…' : 'Generate'}</button>
           </>
         )}
       </div>

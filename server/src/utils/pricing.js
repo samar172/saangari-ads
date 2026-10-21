@@ -116,14 +116,25 @@ function computeOrder({
   discountFlat = 0,
   taxCategory = 'NON_GST',
   interState = false,
+  // Per-site mode: each item carries its own printCharge / mountCharge and the
+  // order's printing & mounting are their sums (noOfPrints/printRate ignored).
+  chargesPerSite = false,
 }) {
-  const lines = items.map((it) => ({ ...computeLine(it), siteId: it.siteId }));
+  const lines = items.map((it) => ({
+    ...computeLine(it), siteId: it.siteId,
+    printCharge: chargesPerSite ? Math.round(Math.max(0, Number(it.printCharge) || 0)) : 0,
+    mountCharge: chargesPerSite ? Math.round(Math.max(0, Number(it.mountCharge) || 0)) : 0,
+  }));
 
   const totals = applyOrderCharges({
     rentalSubtotal: lines.reduce((s, l) => s + l.subtotal, 0),
     addOnTotal: (addOns || []).reduce((s, a) => s + (Number(a.amount) || 0), 0),
-    printingTotal: Math.round((Number(noOfPrints) || 0) * (Number(printRate) || 0)),
-    mountingTotal: Math.round(Number(mountingCost) || 0),
+    printingTotal: chargesPerSite
+      ? lines.reduce((s, l) => s + l.printCharge, 0)
+      : Math.round((Number(noOfPrints) || 0) * (Number(printRate) || 0)),
+    mountingTotal: chargesPerSite
+      ? lines.reduce((s, l) => s + l.mountCharge, 0)
+      : Math.round(Number(mountingCost) || 0),
     discountPct, discountFlat, taxCategory, interState,
   });
 
@@ -142,4 +153,4 @@ function computeTds(gross, pct, isGst) {
   return { tdsAmount, netReceived: g - tdsAmount };
 }
 
-module.exports = { computeOrder, computeLine, recomputeOrderTotals, dayRateOf, GST_RATE, computeTds };
+module.exports = { computeOrder, computeLine, recomputeOrderTotals, applyOrderCharges, dayRateOf, GST_RATE, computeTds };

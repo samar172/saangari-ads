@@ -108,6 +108,7 @@ enum ApprovalAction {
   EDIT_PAYMENT
   CONFIRM_ORDER
   GENERATE_INVOICE
+  CANCEL_INVOICE
   OTHER
 }
 
@@ -171,6 +172,10 @@ model Company {
   gstHidden          Boolean  @default(false) // true → GST option hidden on booking form
   brandColor         String? // sidebar/brand hex, e.g. "#9E2015" (maroon)
   termsAndConditions String? // T&Cs appended to quotation PDFs
+  // Bank details printed on the Excel bill ("Company's Bank Details" block).
+  bankName           String?
+  bankAccountNo      String?
+  bankBranchIfsc     String? // e.g. "HDFC0009247 (Samta Nagar)"
   active             Boolean  @default(true)
   createdAt          DateTime @default(now())
 
@@ -385,6 +390,9 @@ model Order {
 
   // Mounting (30-day mounting cycle)
   mountingCost Float @default(0)
+  // true → printing & mounting are charged per site (Booking.printCharge /
+  // mountCharge) instead of "no. of prints × rate" + mounting per print.
+  chargesPerSite Boolean @default(false)
 
   // Monitoring plan → drives reminders
   monitoring   Boolean @default(false)
@@ -450,6 +458,11 @@ model Booking {
   days      Int
   dayRate   Float
   subtotal  Float
+
+  // Per-site printing & mounting charge (used when the order bills printing
+  // per site — Order.chargesPerSite). Summed into the order's totals.
+  printCharge Float @default(0)
+  mountCharge Float @default(0)
 
   // Free-text note that prints on the billing plan (quotation + invoice)
   displayNotes String?
@@ -565,6 +578,24 @@ model Invoice {
   dueDate       DateTime?
   generatedBy   User          @relation("GeneratedBy", fields: [generatedById], references: [id])
   generatedById Int
+
+  // Billing period this invoice covers. One-time campaigns: the whole run.
+  // Monthly/quarterly campaigns: one invoice per cycle period.
+  periodStart DateTime?
+  periodEnd   DateTime?
+  periodLabel String? // e.g. "Month 2 of 3"
+  // The bill rows exactly as issued (site, dates, qty, price…) so a reprinted
+  // bill never drifts when the campaign is edited later.
+  lines       Json?
+  // Edit window: editable until this moment (24h after generation), then
+  // locked. Null = issued before locking existed → treated as locked.
+  editableUntil   DateTime?
+  // A wrong bill is cancelled (never deleted): kept on record with who/why,
+  // its amount reversed in the client ledger, and a fresh invoice issued.
+  cancelledAt     DateTime?
+  cancelReason    String?
+  cancelledById   Int?
+  cancelledByName String?
 
   ledgerEntries LedgerEntry[]
 }

@@ -6,6 +6,7 @@ import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
 import { Badge, Money, Spinner } from '../components/ui';
 import { tdsAmountOf } from '../lib/tds';
+import { lockInfo, LockBadge, CancelInvoiceForm } from '../components/InvoiceLock';
 
 const PHASES = ['START', 'MID', 'END'];
 const KINDS = [['GPS', <><MapPin size={14} className="inline mr-1" /> GPS</>], ['NORMAL', <><ImageIcon size={14} className="inline mr-1" /> Normal</>], ['NEWSPAPER', <><Newspaper size={14} className="inline mr-1" /> Newspaper</>]];
@@ -841,17 +842,31 @@ function PhotoSection({ booking, monitoring, onUploaded }) {
   );
 }
 
-// Per-campaign invoice history + a generate control, so a bill can be raised
-// straight from the order it belongs to. Every generated PDF is listed line by
-// line; Finance can generate again (e.g. a monthly bill) and download any of them.
+// Per-campaign billing: the billing plan (one bill for a one-time campaign, one
+// per month/quarter on a cycle), every invoice raised with its lock state, and
+// a control to raise the next bill. A wrong bill is cancelled (reason required)
+// and its period becomes billable again.
 function InvoicesPanel({ o, user, onChanged }) {
+  const navigate = useNavigate();
   const invoices = [...(o.invoices || [])].sort((a, b) => new Date(b.issuedAt) - new Date(a.issuedAt));
   const canGenerate = can(user, 'generateInvoice');
-  const hasInvoice = invoices.some((i) => i.status !== 'CANCELLED');
+  const isReviewer = user.role === 'MANAGER' || user.role === 'SUPER_ADMIN';
+  const [plan, setPlan] = useState(null);
   const [dueDate, setDueDate] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [note, setNote] = useState('');
   const [warn, setWarn] = useState(''); // soft photo-gate → offer "invoice anyway"
+  const [cancelling, setCancelling] = useState(null); // invoice being cancelled
+
+  useEffect(() => {
+    if (!can(user, 'viewInvoices')) return;
+    api.get(`/orders/${o.id}/billing-plan`).then((r) => setPlan(r.data)).catch(() => setPlan(null));
+  }, [o.id, o.invoices?.length, o.invoices?.map((i) => i.status).join()]); // eslint-disable-line
+
+  const next = plan?.next;
+  const gstOf = (taxable) => (o.taxCategory === 'GST' ? Math.round(taxable * 0.18) : 0);
+  const fmtD = (d) => new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
   async function markPaid(id) {
     if (busy) return;
@@ -865,7 +880,7 @@ function InvoicesPanel({ o, user, onChanged }) {
     setBusy(true); setErr(''); if (force) setWarn('');
     try {
       await api.post('/invoices', {
-        orderId: o.id, force: !!force,
+        orderId: o.id, force: !!force, periodIndex: next?.index,
         dueDate: dueDate || undefined,
       });
       setDueDate('');
@@ -878,14 +893,14 @@ function InvoicesPanel({ o, user, onChanged }) {
   }
 
   // Sales cannot bill directly — they file a GENERATE_INVOICE approval for a
-  // Manager/Admin to raise the invoice.
+  // Manager/Admin to raise the invoice (for the next unbilled period).
   async function requestInvoice() {
     setBusy(true); setErr('');
     try {
       await api.post('/approvals', {
         action: 'GENERATE_INVOICE', entityType: 'order', entityId: o.id,
-        label: `${o.orderNo} · ${o.client.company || o.client.name} · generate invoice`,
-        payload: { dueDate: dueDate || undefined },
+        label: `${o.orderNo} · ${o.client.company || o.client.name} · generate invoice${next?.label ? ` (${next.label})` : ''}`,
+        payload: { dueDate: dueDate || undefined, periodIndex: next?.index },
       });
       onChanged();
     } catch (e) { setErr(e.response?.data?.error || 'Could not request invoice'); }
@@ -894,67 +909,134 @@ function InvoicesPanel({ o, user, onChanged }) {
 
   return (
     <div className="space-y-5">
-      {/* Generated PDF history — one row per invoice */}
-      <div>
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Generated invoices ({invoices.length})</div>
-        {invoices.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">No invoices generated for this campaign yet.</div>
-        ) : (
+      {note && <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-sm text-emerald-800">{note}</div>}
+
+      {/* Billing plan — only worth showing when the campaign bills in parts. */}
+      {plan && plan.periods.length > 1 && (
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+            Billing plan · {plan.cycle === 'QUARTERLY' ? 'quarterly' : 'monthly'} ({plan.periods.length} bills)
+          </div>
           <div className="card overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
+            <table className="w-full min-w-[560px] text-sm">
               <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
                 <tr>
-                  <th className="px-3 py-2 text-left">Invoice No</th>
-                  <th className="px-3 py-2 text-left">Date</th>
-                  <th className="px-3 py-2 text-left">Due</th>
-                  <th className="px-3 py-2 text-left">Type</th>
-                  <th className="px-3 py-2 text-right">Total</th>
-                  <th className="px-3 py-2 text-left">Status</th>
-                  <th className="px-3 py-2 text-right">PDF</th>
+                  <th className="px-3 py-2 text-left">Period</th>
+                  <th className="px-3 py-2 text-left">Dates</th>
+                  <th className="px-3 py-2 text-right">Amount (incl. GST)</th>
+                  <th className="px-3 py-2 text-left">Bill</th>
                 </tr>
               </thead>
               <tbody>
-                {invoices.map((i) => (
-                  <tr key={i.id} className="border-t border-slate-100">
-                    <td className="px-3 py-2 font-medium text-slate-800">{i.invoiceNo}</td>
-                    <td className="px-3 py-2 text-slate-500">{new Date(i.issuedAt).toLocaleDateString('en-IN')}</td>
-                    <td className="px-3 py-2 text-slate-500">{i.dueDate ? new Date(i.dueDate).toLocaleDateString('en-IN') : '—'}</td>
-                    <td className="px-3 py-2">{i.taxCategory === 'GST' ? <Badge status="LIVE">{i.interState ? 'IGST' : 'CGST+SGST'}</Badge> : <span className="text-slate-400">Non-GST</span>}</td>
-                    <td className="px-3 py-2 text-right font-medium"><Money value={i.total} /></td>
-                    <td className="px-3 py-2"><Badge status={i.status} /></td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap space-x-2">
-                      <button className="text-brand-light underline text-xs" onClick={() => downloadFile(`/invoices/${i.id}/pdf`, `${i.invoiceNo}.pdf`)}>Download</button>
-                      {canGenerate && i.status !== 'PAID' && (
-                        <button className="text-emerald-600 underline text-xs" onClick={() => markPaid(i.id)}>Mark paid</button>
-                      )}
+                {plan.periods.map((p) => (
+                  <tr key={p.index} className={`border-t border-slate-100 ${next?.index === p.index ? 'bg-amber-50/60' : ''}`}>
+                    <td className="px-3 py-2 font-medium text-slate-700">{p.label}</td>
+                    <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{fmtD(p.periodStart)} → {fmtD(p.periodEnd)}</td>
+                    <td className="px-3 py-2 text-right"><Money value={p.invoice ? p.invoice.total : p.draft.taxable + gstOf(p.draft.taxable)} /></td>
+                    <td className="px-3 py-2">
+                      {p.invoice ? <span className="text-slate-700">{p.invoice.invoiceNo} <Badge status={p.invoice.status} /></span>
+                        : next?.index === p.index ? <span className="badge bg-amber-100 text-amber-800">Next to bill</span>
+                          : <span className="text-slate-400 text-xs">Upcoming</span>}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Invoices raised — one row each, with lock state and actions */}
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Generated invoices ({invoices.length})</div>
+        {err && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
+        {invoices.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">No invoices generated for this campaign yet.</div>
+        ) : (
+          <div className="card overflow-x-auto">
+            <table className="w-full min-w-[760px] text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
+                <tr>
+                  <th className="px-3 py-2 text-left">Invoice No</th>
+                  <th className="px-3 py-2 text-left">Date</th>
+                  <th className="px-3 py-2 text-left">Period</th>
+                  <th className="px-3 py-2 text-left">Type</th>
+                  <th className="px-3 py-2 text-right">Total</th>
+                  <th className="px-3 py-2 text-left">Status</th>
+                  <th className="px-3 py-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoices.map((i) => {
+                  const lk = lockInfo(i);
+                  return (
+                    <Fragment key={i.id}>
+                      <tr className={`border-t border-slate-100 ${i.status === 'CANCELLED' ? 'opacity-60' : ''}`}>
+                        <td className="px-3 py-2 font-medium text-slate-800">
+                          <button className="hover:underline" onClick={() => navigate(`/invoices/${i.id}`)}>{i.invoiceNo}</button>
+                        </td>
+                        <td className="px-3 py-2 text-slate-500">{new Date(i.issuedAt).toLocaleDateString('en-IN')}</td>
+                        <td className="px-3 py-2 text-slate-500 text-xs">{i.periodLabel || (i.periodStart ? 'Full campaign' : '—')}</td>
+                        <td className="px-3 py-2">{i.taxCategory === 'GST' ? <Badge status="LIVE">{i.interState ? 'IGST' : 'CGST+SGST'}</Badge> : <span className="text-slate-400">Non-GST</span>}</td>
+                        <td className="px-3 py-2 text-right font-medium"><Money value={i.total} /></td>
+                        <td className="px-3 py-2"><div className="flex flex-wrap gap-1"><Badge status={i.status} /><LockBadge invoice={i} /></div></td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap space-x-2">
+                          <button className="text-brand-light underline text-xs" onClick={() => downloadFile(`/invoices/${i.id}/bill.xlsx`, `Bill-${i.invoiceNo.replace(/\//g, '-')}.xlsx`)}>Excel bill</button>
+                          <button className="text-brand-light underline text-xs" onClick={() => downloadFile(`/invoices/${i.id}/pdf`, `${i.invoiceNo}.pdf`)}>PDF</button>
+                          {lk.editable && canGenerate && (
+                            <button className="text-slate-600 underline text-xs" onClick={() => navigate(`/invoices/${i.id}/edit`)}>Edit</button>
+                          )}
+                          {canGenerate && !['PAID', 'CANCELLED'].includes(i.status) && (
+                            <button className="text-emerald-600 underline text-xs" onClick={() => markPaid(i.id)}>Mark paid</button>
+                          )}
+                          {i.status !== 'CANCELLED' && (
+                            <button className="text-red-600 underline text-xs" onClick={() => setCancelling(cancelling?.id === i.id ? null : i)}>
+                              {isReviewer ? 'Cancel' : 'Request cancel'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                      {i.status === 'CANCELLED' && i.cancelReason && (
+                        <tr><td colSpan={7} className="px-3 pb-2 text-xs text-red-700">Cancelled {i.cancelledAt ? fmtD(i.cancelledAt) : ''}{i.cancelledByName ? ` by ${i.cancelledByName}` : ''} — {i.cancelReason}</td></tr>
+                      )}
+                      {cancelling?.id === i.id && (
+                        <tr><td colSpan={7} className="px-3 pb-3">
+                          <CancelInvoiceForm invoice={i} isReviewer={isReviewer} onClose={() => setCancelling(null)}
+                            onDone={(r) => { setCancelling(null); setNote(r === 'cancelled' ? `${i.invoiceNo} cancelled. You can now generate a fresh invoice.` : `Cancellation of ${i.invoiceNo} sent for Manager/Admin approval.`); onChanged(); }} />
+                        </td></tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
-      {/* Generate the campaign's invoice — one per campaign; to re-bill, void the
-          existing one; to bill in cash, settle the campaign in cash first. */}
+      {/* Raise the next bill. One-time campaigns get one invoice; cycle
+          campaigns one per period, in order. */}
       {canGenerate && (
         !o.receivable ? (
           <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700">
             {o.status === 'QUOTATION' ? 'Confirm this quotation before invoicing.' : 'This campaign is cancelled — nothing to invoice.'}
           </div>
-        ) : hasInvoice ? (
+        ) : plan && !next ? (
           <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2.5 text-xs text-slate-500">
-            This campaign is already invoiced. To re-issue, void the existing invoice first; to bill it in cash, settle the campaign in cash (Overview) before invoicing.
+            This campaign is fully invoiced. To correct a wrong bill, cancel it (reason required) and generate it again; to bill it in cash, settle the campaign in cash (Overview) before invoicing.
           </div>
-        ) : (
+        ) : next ? (
           <div className="rounded-xl border border-slate-200 p-5 bg-slate-50">
-            <div className="flex items-center gap-2 text-base font-semibold text-slate-800 mb-3"><Receipt size={18} /> Generate invoice for {o.orderNo}</div>
-            {err && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
+            <div className="flex items-center gap-2 text-base font-semibold text-slate-800 mb-1"><Receipt size={18} /> Generate invoice for {o.orderNo}{next.label ? ` — ${next.label}` : ''}</div>
+            <div className="text-sm text-slate-600 mb-3">
+              {fmtD(next.periodStart)} → {fmtD(next.periodEnd)} · taxable <Money value={next.draft.taxable} />
+              {o.taxCategory === 'GST' && <> + GST <Money value={gstOf(next.draft.taxable)} /></>}
+              {' '}= <b><Money value={next.draft.taxable + gstOf(next.draft.taxable)} /></b>
+            </div>
             <div className="sm:max-w-xs">
               <label className="label">Due date</label>
               <input type="date" className="input" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-              <p className="text-[11px] text-slate-400 mt-1">Blank = last working day of this month. Tax follows the campaign ({o.taxCategory === 'GST' ? 'GST' : 'Non-GST'}).</p>
+              <p className="text-[11px] text-slate-400 mt-1">Blank = last working day of this month. Tax follows the campaign ({o.taxCategory === 'GST' ? 'GST' : 'Non-GST'}). The invoice stays editable for 24 hours, then locks.</p>
             </div>
             {warn ? (
               <div className="mt-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
@@ -966,21 +1048,20 @@ function InvoicesPanel({ o, user, onChanged }) {
               </div>
             ) : (
               <button className="btn-primary mt-3 flex items-center gap-1.5" disabled={busy} onClick={() => generate(false)}>
-                <Plus size={16} /> {busy ? 'Generating…' : 'Generate invoice'}
+                <Plus size={16} /> {busy ? 'Generating…' : `Generate invoice${next.label ? ` (${next.label})` : ''}`}
               </button>
             )}
           </div>
-        )
+        ) : null
       )}
 
       {/* Sales path: request an invoice (Manager/Admin approves and raises it). */}
-      {!canGenerate && o.receivable && !hasInvoice && (
+      {!canGenerate && o.receivable && next && (
         o.pendingApprovals?.includes('GENERATE_INVOICE') ? (
           <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 text-sm text-amber-800">Invoice requested — awaiting Manager/Admin approval.</div>
         ) : (
           <div className="rounded-xl border border-slate-200 p-5 bg-slate-50">
-            <div className="flex items-center gap-2 text-base font-semibold text-slate-800 mb-3"><Receipt size={18} /> Request invoice for {o.orderNo}</div>
-            {err && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
+            <div className="flex items-center gap-2 text-base font-semibold text-slate-800 mb-3"><Receipt size={18} /> Request invoice for {o.orderNo}{next.label ? ` — ${next.label}` : ''}</div>
             <div className="sm:max-w-xs">
               <label className="label">Due date (optional)</label>
               <input type="date" className="input" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />

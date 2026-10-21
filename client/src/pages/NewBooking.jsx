@@ -95,6 +95,9 @@ export default function NewBooking() {
     printCost: 0,
     printRemarks: '',
     mountingCost: 0,
+    // 'PRINT' = no. of prints × rate + mounting per print; 'SITE' = an own
+    // printing + mounting charge on every site line.
+    chargeMode: 'PRINT',
     monitoring: true,
     monitorStart: true,
     monitorMid: true,
@@ -188,7 +191,13 @@ export default function NewBooking() {
     if (!ids || ids.length === 0) return;
     setLines((ls) => [
       ...ls,
-      ...ids.map(id => ({ siteId: Number(id), startDate: form.defaultStart, endDate: form.defaultEnd, dayRateOverride: '', displayNotes: '' }))
+      ...ids.map((id) => {
+        const s = siteById[Number(id)];
+        const perSite = form.chargeMode === 'SITE'
+          ? { printCharge: s?.printingCost ? String(s.printingCost) : '', mountCharge: s?.mountingCost ? String(s.mountingCost) : '' }
+          : {};
+        return { siteId: Number(id), startDate: form.defaultStart, endDate: form.defaultEnd, dayRateOverride: '', displayNotes: '', ...perSite };
+      }),
     ]);
   }
   const updateLine = (i, k, v) => setLines((ls) => ls.map((l, idx) => (idx === i ? { ...l, [k]: v } : l)));
@@ -208,17 +217,33 @@ export default function NewBooking() {
     setLines((ls) => ls.map((l) => ({ ...l, [field]: value })));
   };
 
+  // Per-site printing & mounting: switching it on pre-fills every site with its
+  // listed printing/mounting cost (Inventory), which can then be overridden.
+  function setChargeMode(mode) {
+    set('chargeMode', mode);
+    if (mode !== 'SITE') return;
+    setLines((ls) => ls.map((l) => {
+      const s = siteById[l.siteId];
+      return {
+        ...l,
+        printCharge: l.printCharge ?? (s?.printingCost ? String(s.printingCost) : ''),
+        mountCharge: l.mountCharge ?? (s?.mountingCost ? String(s.mountingCost) : ''),
+      };
+    }));
+  }
+
   const updateAddOn = (i, k, v) => setAddOns((a) => a.map((x, idx) => (idx === i ? { ...x, [k]: v } : x)));
 
   // Live order quote
   useEffect(() => {
     const items = lines.filter((l) => l.siteId && l.startDate && l.endDate)
-      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, monthlyRateOverride: l.monthlyRateOverride || undefined, dayRateOverride: l.dayRateOverride || undefined }));
+      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, monthlyRateOverride: l.monthlyRateOverride || undefined, dayRateOverride: l.dayRateOverride || undefined, printCharge: l.printCharge, mountCharge: l.mountCharge }));
     if (items.length === 0) { setQuote(null); return; }
     const t = setTimeout(() => {
       api.post('/orders/quote', {
         items,
         type: form.bookingType,
+        chargesPerSite: form.chargeMode === 'SITE',
         addOns: addOns.filter((a) => a.label),
         noOfPrints: Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
@@ -232,7 +257,7 @@ export default function NewBooking() {
       }).then((r) => setQuote(r.data)).catch(() => setQuote(null));
     }, 250);
     return () => clearTimeout(t);
-  }, [lines, addOns, form.bookingType, form.noOfPrints, form.printRate, form.mountingCost, form.discountPct, form.taxCategory, form.interState]);
+  }, [lines, addOns, form.bookingType, form.noOfPrints, form.printRate, form.mountingCost, form.chargeMode, form.discountPct, form.taxCategory, form.interState]);
 
   // Validate the essentials, then open the review modal instead of posting
   // straight away — the client asked for a fill → review → confirm flow.
@@ -291,6 +316,7 @@ export default function NewBooking() {
         // Mounting is charged per print (one mount per flex), not per site. Fall
         // back to the site count when no print quantity is entered.
         mountingCost: (Number(form.mountingCost) || 0) * (Number(form.noOfPrints) > 0 ? Number(form.noOfPrints) : lines.length),
+        chargesPerSite: form.chargeMode === 'SITE',
         monitoring: form.monitoring,
         monitorStart: form.monitoring && form.monitorStart,
         monitorMid: form.monitoring && form.monitorMid,
@@ -311,6 +337,8 @@ export default function NewBooking() {
           monthlyRateOverride: l.monthlyRateOverride || undefined,
           dayRateOverride: l.dayRateOverride || undefined,
           displayNotes: l.displayNotes || undefined,
+          printCharge: form.chargeMode === 'SITE' ? Number(l.printCharge) || 0 : undefined,
+          mountCharge: form.chargeMode === 'SITE' ? Number(l.mountCharge) || 0 : undefined,
         })),
       });
       navigate(`/orders?highlight=${data.id}`);
@@ -508,6 +536,18 @@ export default function NewBooking() {
                           }} />
                         </div>
                       </div>
+                      {form.chargeMode === 'SITE' && (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+                          {[['printCharge', 'Printing ₹'], ['mountCharge', 'Mounting ₹']].map(([k, label]) => (
+                            <div key={k}>
+                              <div className="text-[10px] text-slate-400 mb-0.5 flex items-center justify-between">{label}
+                                {lines.length > 1 && l[k] !== '' && l[k] != null && <button type="button" className="text-brand hover:underline" title="Apply to all sites" onClick={() => applyRateToAll(k, l[k])}>→ all</button>}
+                              </div>
+                              <input type="number" min="0" className="input py-1 text-xs" value={l[k] ?? ''} onChange={(e) => updateLine(i, k, e.target.value)} />
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <div className="mt-2">
                         <div className="text-[10px] text-slate-400 mb-0.5">Display notes <span className="text-slate-300">(prints on the billing plan)</span></div>
                         <input className="input py-1 text-xs" placeholder="e.g. Facing the highway exit — client wants it lit"
@@ -523,6 +563,25 @@ export default function NewBooking() {
           {/* Printing partner (for invoicing) */}
           <div className="card p-5 space-y-4">
             <div className="text-sm font-semibold text-slate-700">Printing partner (for invoicing)</div>
+            <div>
+              <label className="label">Charge printing &amp; mounting</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {[['PRINT', 'Per print', 'No. of prints × rate, mounting per print'], ['SITE', 'Per site', 'Own printing + mounting amount on each site']].map(([v, l, d]) => (
+                  <button type="button" key={v} onClick={() => setChargeMode(v)}
+                    className={`rounded-lg border p-3 text-left transition ${form.chargeMode === v ? 'border-brand bg-brand/5' : 'border-slate-200'}`}>
+                    <div className="font-medium text-sm">{l}</div>
+                    <div className="text-xs text-slate-500">{d}</div>
+                  </button>
+                ))}
+              </div>
+              {form.chargeMode === 'SITE' && (
+                <p className="text-[11px] text-slate-500 mt-1.5">
+                  Enter printing and mounting on each site above (pre-filled from Inventory).
+                  Total: ₹{lines.reduce((s, l) => s + (Number(l.printCharge) || 0), 0).toLocaleString('en-IN')} printing
+                  + ₹{lines.reduce((s, l) => s + (Number(l.mountCharge) || 0), 0).toLocaleString('en-IN')} mounting.
+                </p>
+              )}
+            </div>
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
                 <label className="label">Printing Partner</label>
@@ -551,18 +610,20 @@ export default function NewBooking() {
                   );
                 })()}
               </div>
-              <div>
-                <label className="label">No. of Prints</label>
-                <input type="number" min="0" className="input" value={form.noOfPrints} onChange={(e) => set('noOfPrints', e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Rate per Print</label>
-                <input type="number" min="0" className="input" value={form.printRate} onChange={(e) => set('printRate', e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Mounting Cost (per print)</label>
-                <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
-              </div>
+              {form.chargeMode !== 'SITE' && (<>
+                <div>
+                  <label className="label">No. of Prints</label>
+                  <input type="number" min="0" className="input" value={form.noOfPrints} onChange={(e) => set('noOfPrints', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Rate per Print</label>
+                  <input type="number" min="0" className="input" value={form.printRate} onChange={(e) => set('printRate', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Mounting Cost (per print)</label>
+                  <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
+                </div>
+              </>)}
               <div>
                 <label className="label">Partner cost (total you pay)</label>
                 <input type="number" min="0" className="input" value={form.printCost} onChange={(e) => set('printCost', e.target.value)} placeholder="What you pay the printer" />
@@ -570,7 +631,9 @@ export default function NewBooking() {
             </div>
             {/* Internal printing P&L preview — customer never sees this. */}
             {(() => {
-              const charge = (Number(form.noOfPrints) || 0) * (Number(form.printRate) || 0);
+              const charge = form.chargeMode === 'SITE'
+                ? lines.reduce((s, l) => s + (Number(l.printCharge) || 0), 0)
+                : (Number(form.noOfPrints) || 0) * (Number(form.printRate) || 0);
               const cost = Number(form.printCost) || 0;
               if (charge <= 0 && cost <= 0) return null;
               const margin = charge - cost;
@@ -659,7 +722,7 @@ export default function NewBooking() {
               <div>
                 <label className="label">Next billing date</label>
                 <input type="date" className="input" value={form.nextBillingDate} onChange={(e) => set('nextBillingDate', e.target.value)} />
-                <div className="text-[11px] text-slate-400 mt-1">A reminder fires when this date arrives.</div>
+                <div className="text-[11px] text-slate-400 mt-1">{form.billingCycle ? `One bill per ${form.billingCycle === "QUARTERLY" ? "quarter" : "month"}. Blank = the campaign start; moves forward automatically after each bill.` : "A reminder fires when this date arrives."}</div>
               </div>
             </div>
           </div>
@@ -726,7 +789,7 @@ export default function NewBooking() {
             ) : (
               <dl className="space-y-2 text-sm">
                 <Line k={`Rental (${lines.length} site${lines.length !== 1 ? 's' : ''})`} v={<Money value={quote.rentalSubtotal} />} />
-                {quote.printingTotal > 0 && <Line k={`Printing (${form.noOfPrints})`} v={<Money value={quote.printingTotal} />} />}
+                {quote.printingTotal > 0 && <Line k={form.chargeMode === 'SITE' ? 'Printing (per site)' : `Printing (${form.noOfPrints})`} v={<Money value={quote.printingTotal} />} />}
                 {quote.mountingTotal > 0 && <Line k="Mounting" v={<Money value={quote.mountingTotal} />} />}
                 {quote.addOnTotal > 0 && <Line k="Add-ons" v={<Money value={quote.addOnTotal} />} />}
                 {quote.discountAmount > 0 && <Line k={`Discount (${form.discountPct}%)`} v={<span className="text-red-600">−<Money value={quote.discountAmount} /></span>} />}
