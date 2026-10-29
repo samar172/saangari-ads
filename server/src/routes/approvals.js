@@ -200,7 +200,7 @@ async function execute(request, approver) {
       // Raise the invoice a Sales user requested. force:true — the reviewer has
       // decided; the proof-of-display gate was their call to make.
       const payload = request.payload || {};
-      await createInvoiceForOrder({ orderId: id, force: true, dueDate: payload.dueDate, periodIndex: payload.periodIndex, user: approver });
+      await createInvoiceForOrder({ orderId: id, force: true, dueDate: payload.dueDate, periodIndex: payload.periodIndex, start: payload.start, end: payload.end, user: approver });
       return;
     }
     case 'CANCEL_INVOICE': {

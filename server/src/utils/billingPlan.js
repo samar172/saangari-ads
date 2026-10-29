@@ -1,15 +1,16 @@
 const dayjs = require('dayjs');
 const { computeLine, applyOrderCharges } = require('./pricing');
 
-// Billing plan: how a campaign is split into bills.
-//   • One-time (no billing cycle) → a single bill for the whole run.
-//   • MONTHLY / QUARTERLY → one bill per cycle period, anchored on the
+// Billing plan: how a campaign is billed.
+//   • One-time (no billing cycle) → one suggested period: the whole run.
+//   • MONTHLY / QUARTERLY → one suggested period per cycle, anchored on the
 //     campaign's first start date (17 Jul → 16 Aug, 17 Aug → 16 Sep, …).
-// Each period bills only the days of each site that fall inside it. Printing,
-// mounting and add-ons go on the first bill; a % discount applies to every
-// bill, a flat discount to the first. The last bill absorbs any rounding (and
-// any re-pricing after earlier bills were issued) so the bills always add up to
-// the campaign's taxable value exactly.
+// Any bill can instead cover a custom From → To range. A bill charges only the
+// days of each site that fall inside its range, and no two live bills may
+// overlap. Printing, mounting and add-ons (and a flat discount) go on the first
+// bill raised; a % discount applies to every bill. The bill that completes the
+// campaign's coverage settles any rounding, so the bills always add up to the
+// campaign's taxable value exactly.
 
 const BILLABLE = ['TENTATIVE', 'CONFIRMED', 'LIVE', 'COMPLETED', 'STOPPED'];
 const CYCLE_MONTHS = { MONTHLY: 1, QUARTERLY: 3 };
@@ -18,6 +19,7 @@ const day = (d) => dayjs(d).startOf('day');
 // Stored dates follow the bookings' convention: UTC midnight of the calendar
 // day ('2027-01-01' → 2027-01-01T00:00Z), whatever the server's timezone.
 const asStored = (d) => new Date(d.format('YYYY-MM-DD'));
+const fmt = (d) => d.format('DD MMM YYYY');
 
 // "1 Month", "3 Months", "15 Days" — billing uses flat 30-day months.
 function durationLabel(days) {
@@ -32,20 +34,27 @@ function billableLines(order) {
   return live.length ? live : (order.status === 'CANCELLED' ? order.items || [] : []);
 }
 
-function periodsFor(order) {
+// The campaign's first and last day across its billable lines.
+function campaignSpan(order) {
   const lines = billableLines(order);
-  if (!lines.length) return [];
-  const anchor = lines.map((l) => day(l.startDate)).reduce((a, b) => (b.isBefore(a) ? b : a));
-  const last = lines.map((l) => day(l.endDate)).reduce((a, b) => (b.isAfter(a) ? b : a));
-  const step = CYCLE_MONTHS[order.billingCycle];
-  if (!step) return [{ index: 0, start: anchor, end: last }];
+  if (!lines.length) return null;
+  return {
+    start: lines.map((l) => day(l.startDate)).reduce((a, b) => (b.isBefore(a) ? b : a)),
+    end: lines.map((l) => day(l.endDate)).reduce((a, b) => (b.isAfter(a) ? b : a)),
+  };
+}
 
+function periodsFor(order) {
+  const span = campaignSpan(order);
+  if (!span) return [];
+  const step = CYCLE_MONTHS[order.billingCycle];
+  if (!step) return [{ index: 0, start: span.start, end: span.end }];
   const out = [];
   for (let i = 0; ; i++) {
-    const start = anchor.add(i * step, 'month');
-    if (start.isAfter(last)) break;
-    let end = anchor.add((i + 1) * step, 'month').subtract(1, 'day');
-    if (end.isAfter(last)) end = last;
+    const start = span.start.add(i * step, 'month');
+    if (start.isAfter(span.end)) break;
+    let end = span.start.add((i + 1) * step, 'month').subtract(1, 'day');
+    if (end.isAfter(span.end)) end = span.end;
     out.push({ index: i, start, end });
   }
   const unit = step === 3 ? 'Quarter' : 'Month';
@@ -53,11 +62,54 @@ function periodsFor(order) {
   return out;
 }
 
-// Rent for the part of a line that falls inside [pStart, pEnd]. Whole months
-// bill at the line's own monthly rate; loose (per-day) lines at their day rate.
-function overlapOf(line, p) {
-  const s = day(line.startDate).isAfter(p.start) ? day(line.startDate) : p.start;
-  const e = day(line.endDate).isBefore(p.end) ? day(line.endDate) : p.end;
+const liveInvoices = (order) => (order.invoices || []).filter((i) => i.status !== 'CANCELLED');
+
+// The date range each live invoice covers. An invoice from before billing
+// periods existed (no periodStart) covered the whole campaign.
+function invoiceRanges(order, invoices) {
+  const span = campaignSpan(order);
+  return invoices.map((inv) => ({
+    inv,
+    start: inv.periodStart ? day(inv.periodStart) : span?.start,
+    end: inv.periodStart ? day(inv.periodEnd || inv.periodStart) : span?.end,
+  })).filter((r) => r.start && r.end);
+}
+
+const overlaps = (a, b) => !a.start.isAfter(b.end) && !b.start.isAfter(a.end);
+
+// Does the union of `ranges` cover every day from s to e?
+function covered(ranges, s, e) {
+  if (s.isAfter(e)) return true;
+  let cursor = s;
+  const sorted = [...ranges].sort((a, b) => a.start.valueOf() - b.start.valueOf());
+  for (const r of sorted) {
+    if (r.end.isBefore(cursor)) continue;
+    if (r.start.isAfter(cursor)) return false;
+    cursor = r.end.add(1, 'day');
+    if (cursor.isAfter(e)) return true;
+  }
+  return cursor.isAfter(e);
+}
+
+// First day of the campaign not covered by any live invoice (null = all billed).
+function firstUncovered(order, ranges) {
+  const span = campaignSpan(order);
+  if (!span) return null;
+  let cursor = span.start;
+  const sorted = [...ranges].sort((a, b) => a.start.valueOf() - b.start.valueOf());
+  for (const r of sorted) {
+    if (r.end.isBefore(cursor)) continue;
+    if (r.start.isAfter(cursor)) return cursor;
+    cursor = r.end.add(1, 'day');
+  }
+  return cursor.isAfter(span.end) ? null : cursor;
+}
+
+// Rent for the part of a line that falls inside [range.start, range.end].
+// Whole months bill at the line's own monthly rate; loose lines per day.
+function overlapOf(line, range) {
+  const s = day(line.startDate).isAfter(range.start) ? day(line.startDate) : range.start;
+  const e = day(line.endDate).isBefore(range.end) ? day(line.endDate) : range.end;
   if (s.isAfter(e)) return null;
   const whole = s.isSame(day(line.startDate)) && e.isSame(day(line.endDate));
   if (whole) return { from: s, till: e, days: line.days, amount: Math.round(line.subtotal) };
@@ -69,32 +121,23 @@ function overlapOf(line, p) {
   return { from: s, till: e, days: priced.days, amount: priced.subtotal };
 }
 
-// Rental rows for every period, with each line's last slice taking the
-// remainder so a site's slices sum exactly to its subtotal.
-function rentalRowsByPeriod(order, periods) {
-  const rows = periods.map(() => []);
-  for (const line of billableLines(order)) {
-    const slices = periods.map((p) => overlapOf(line, p));
-    const lastIdx = slices.map((x, i) => (x ? i : -1)).filter((i) => i >= 0).pop();
-    if (lastIdx === undefined) continue;
-    const before = slices.reduce((s, x, i) => s + (x && i !== lastIdx ? x.amount : 0), 0);
-    slices[lastIdx].amount = Math.round(line.subtotal) - before;
-    slices.forEach((x, i) => {
-      if (!x) return;
-      rows[i].push({
-        kind: 'SITE', bookingId: line.id,
-        location: line.site?.location || line.site?.code || '', code: line.site?.code || '',
-        from: x.from.format('YYYY-MM-DD'), till: x.till.format('YYYY-MM-DD'),
-        duration: durationLabel(x.days), qty: 1, price: x.amount,
-      });
-    });
+// What has already been billed for a site line across the live invoices.
+function billedForLine(invoices, lineId) {
+  let sum = 0;
+  for (const inv of invoices) for (const r of (Array.isArray(inv.lines) ? inv.lines : [])) {
+    if (r.kind === 'SITE' && r.bookingId === lineId) sum += (r.qty || 1) * r.price;
   }
-  return rows;
+  return sum;
 }
 
-// Printing & mounting rows for the first bill. Per-site charges list per site
-// (collapsed to "Qty × Price" when every site costs the same); otherwise the
-// campaign's lump printing/mounting, as Qty × per-unit when it divides evenly.
+// Have the one-off charges (printing / mounting / add-ons / a flat discount)
+// already gone on a live bill?
+const extrasBilled = (invoices) => invoices.some((inv) => !inv.periodStart
+  || (Array.isArray(inv.lines) && inv.lines.some((r) => r.kind === 'PRINT' || r.kind === 'ADDON' || (r.kind === 'DISCOUNT' && r.flat))));
+
+// Printing & mounting rows. Per-site charges list per site (collapsed to
+// "Qty × Price" when every site costs the same); otherwise the campaign's lump
+// printing/mounting, as Qty × per-unit when it divides evenly.
 function printMountRows(order) {
   const pm = Math.round((order.printingTotal || 0) + (order.mountingCost || 0));
   if (!pm) return [];
@@ -111,79 +154,151 @@ function printMountRows(order) {
   return pm % qty === 0 ? [{ kind: 'PRINT', location: label, qty, price: pm / qty }] : [{ kind: 'PRINT', location: label, qty: 1, price: pm }];
 }
 
-// Build the bill for one period. `othersTaxable` = taxable already billed on
-// the campaign's other live invoices (used by the last bill to land exactly).
-function draftFor(order, periods, index, othersTaxable = 0) {
-  const p = periods[index];
-  const rows = [...rentalRowsByPeriod(order, periods)[index]];
-  if (index === 0) {
+// The suggested period label for a range, if it matches one exactly.
+function labelFor(order, start, end) {
+  const p = periodsFor(order).find((x) => x.start.isSame(start) && x.end.isSame(end));
+  if (p) return p.label || null;
+  return `Custom: ${fmt(start)} – ${fmt(end)}`;
+}
+
+// Build the bill for [start, end] given the OTHER live invoices.
+// `roundingOnly`: when re-drafting an issued bill (in-window edit), the bill
+// that completes coverage only absorbs rupee rounding — a campaign-wide change
+// (e.g. a new discount %) must change this bill's own figures, not dump the
+// whole campaign's difference onto it.
+function draftForRange(order, start, end, others, label, { roundingOnly = false } = {}) {
+  const span = campaignSpan(order);
+  const ranges = invoiceRanges(order, others);
+  const rows = [];
+  for (const line of billableLines(order)) {
+    const x = overlapOf(line, { start, end });
+    if (!x) continue;
+    // The slice that finishes a site (all its earlier days already billed)
+    // takes the remainder, so a site's slices sum exactly to its subtotal.
+    const ls = day(line.startDate), le = day(line.endDate);
+    if (x.till.isSame(le) && !x.from.isSame(ls) && covered(ranges, ls, x.from.subtract(1, 'day'))) {
+      x.amount = Math.round(line.subtotal) - billedForLine(others, line.id);
+    }
+    rows.push({
+      kind: 'SITE', bookingId: line.id,
+      location: line.site?.location || line.site?.code || '', code: line.site?.code || '',
+      from: x.from.format('YYYY-MM-DD'), till: x.till.format('YYYY-MM-DD'),
+      duration: durationLabel(x.days), qty: 1, price: x.amount,
+    });
+  }
+  const withExtras = !extrasBilled(others);
+  if (withExtras) {
     rows.push(...printMountRows(order));
     for (const a of order.addOns || []) {
       if (Number(a.amount)) rows.push({ kind: 'ADDON', location: a.label, qty: 1, price: Math.round(a.amount) });
     }
   }
   const pre = rows.reduce((s, r) => s + r.qty * r.price, 0);
-  const flat = index === 0 ? Math.round(order.discountFlat || 0) : 0;
   const charges = applyOrderCharges({
     rentalSubtotal: pre, addOnTotal: 0, printingTotal: 0, mountingTotal: 0,
-    discountPct: order.discountFlat > 0 ? 0 : order.discountPct, discountFlat: flat,
+    discountPct: order.discountFlat > 0 ? 0 : order.discountPct, discountFlat: withExtras ? Math.round(order.discountFlat || 0) : 0,
     taxCategory: order.taxCategory, interState: order.interState,
   });
   let discount = charges.discountAmount;
   let taxable = charges.taxableAmount;
 
-  // The last bill settles the campaign exactly.
-  if (index === periods.length - 1) {
-    const target = Math.round(order.taxableAmount) - Math.round(othersTaxable);
+  // The bill that completes the campaign's coverage settles it exactly.
+  if (span && covered([...ranges, { start, end }], span.start, span.end)) {
+    const target = Math.round(order.taxableAmount) - Math.round(others.reduce((s, i) => s + (i.amount || 0), 0));
     const diff = target - taxable;
-    if (diff && discount && Math.abs(diff) <= periods.length) { discount -= diff; taxable = target; }
-    else if (diff) { rows.push({ kind: 'ADJUST', location: 'Adjustment', qty: 1, price: diff }); taxable = target; }
+    const small = Math.abs(diff) <= others.length + 2;
+    if (diff && discount && small) { discount -= diff; taxable = target; }
+    else if (diff && (!roundingOnly || small)) { rows.push({ kind: 'ADJUST', location: 'Adjustment', qty: 1, price: diff }); taxable = target; }
   }
   if (discount) {
     const pct = order.discountFlat > 0 ? '' : ` (${order.discountPct}%)`;
-    rows.push({ kind: 'DISCOUNT', location: `Less: Discount${pct}`, qty: 1, price: -discount });
+    rows.push({ kind: 'DISCOUNT', location: `Less: Discount${pct}`, qty: 1, price: -discount, ...(order.discountFlat > 0 ? { flat: true } : {}) });
   }
   return {
-    index, label: p.label || null,
-    periodStart: asStored(p.start), periodEnd: asStored(p.end),
+    label: label !== undefined ? label : labelFor(order, start, end),
+    periodStart: asStored(start), periodEnd: asStored(end),
     rows, taxable,
   };
 }
 
-// Taxable of every OTHER period: the amount already invoiced where a period
-// has a live bill, else what its bill would be. The last period subtracts this
-// from the campaign's taxable so the bills always add up exactly.
-function othersTaxable(order, periods, index, liveInvoices) {
-  return periods.reduce((sum, p) => {
-    if (p.index === index) return sum;
-    const inv = invoiceForPeriod(liveInvoices, p);
-    if (inv) return sum + (inv.amount || 0);
-    if (p.index === periods.length - 1) return sum; // never needed: only the last period settles
-    return sum + draftFor(order, periods, p.index, 0).taxable;
-  }, 0);
+// Check a requested range and draft its bill. Returns { draft } or { error }.
+function draftForCustom(order, startIn, endIn) {
+  const span = campaignSpan(order);
+  if (!span) return { error: `${order.orderNo} has no billable sites.` };
+  let start = day(startIn), end = day(endIn);
+  if (!start.isValid() || !end.isValid()) return { error: 'Pick a valid From and To date.' };
+  if (start.isAfter(end)) return { error: 'From date must be on or before the To date.' };
+  if (end.isBefore(span.start) || start.isAfter(span.end)) {
+    return { error: `The campaign runs ${fmt(span.start)} – ${fmt(span.end)}; pick dates inside it.` };
+  }
+  // Clamp to the campaign so the bill's period reads true.
+  if (start.isBefore(span.start)) start = span.start;
+  if (end.isAfter(span.end)) end = span.end;
+  const live = liveInvoices(order);
+  const clash = invoiceRanges(order, live).find((r) => overlaps(r, { start, end }));
+  if (clash) {
+    return { error: `${fmt(start)} – ${fmt(end)} overlaps ${clash.inv.invoiceNo} (${fmt(clash.start)} – ${fmt(clash.end)}). Pick dates outside it, or cancel that invoice first.` };
+  }
+  return { draft: draftForRange(order, start, end, live) };
 }
 
-// Which live invoice (if any) covers each period. An invoice issued before
-// periods existed (no periodStart) covered the whole campaign.
-function invoiceForPeriod(invoices, p) {
-  return invoices.find((i) => i.periodStart && day(i.periodStart).isSame(p.start));
-}
-
-function billingPlan(order) {
+function billingPlan(order, custom) {
   const periods = periodsFor(order);
-  const live = (order.invoices || []).filter((i) => i.status !== 'CANCELLED');
-  const legacy = live.find((i) => !i.periodStart);
+  const live = liveInvoices(order);
+  const ranges = invoiceRanges(order, live);
+  // Previews assume the open periods are billed in order, so printing/extras
+  // show on the first one and the last one settles the total.
+  const simulated = [];
   const out = periods.map((p) => {
-    const invoice = legacy || invoiceForPeriod(live, p) || null;
+    const hits = ranges.filter((r) => overlaps(r, p));
+    const full = covered(ranges, p.start, p.end);
+    const exact = hits.find((r) => r.start.isSame(p.start) && r.end.isSame(p.end)) || (full && hits.length === 1 ? hits[0] : null);
+    const summary = (r) => ({ id: r.inv.id, invoiceNo: r.inv.invoiceNo, status: r.inv.status, total: r.inv.total, amount: r.inv.amount });
     return {
       index: p.index, label: p.label || null,
       periodStart: asStored(p.start), periodEnd: asStored(p.end),
-      invoice: invoice ? { id: invoice.id, invoiceNo: invoice.invoiceNo, status: invoice.status, total: invoice.total, amount: invoice.amount } : null,
-      // Preview of the bill that would be raised now for an open period.
-      draft: invoice ? null : draftFor(order, periods, p.index, othersTaxable(order, periods, p.index, live)),
+      status: full ? 'BILLED' : hits.length ? 'PARTLY' : 'OPEN',
+      invoice: exact ? summary(exact) : null,
+      invoices: hits.map(summary),
+      // `billNow`: the bill if this period is raised NOW (priced against the
+      // bills that exist). `draft`: the preview assuming open periods are
+      // billed in order — used for the plan table.
+      billNow: hits.length ? null : draftForRange(order, p.start, p.end, live, p.label || null),
+      draft: hits.length ? null : (() => {
+        const d = draftForRange(order, p.start, p.end, [...live, ...simulated], p.label || null);
+        simulated.push({ id: `sim${p.index}`, periodStart: d.periodStart, periodEnd: d.periodEnd, amount: d.taxable, lines: d.rows });
+        return d;
+      })(),
     };
   });
-  return { cycle: order.billingCycle || null, periods: out, next: out.find((p) => !p.invoice) || null };
+  const span = campaignSpan(order);
+  const gap = firstUncovered(order, ranges);
+  // That gap runs until the next bill starts (or the campaign ends).
+  const nextBilled = gap ? ranges.filter((r) => r.start.isAfter(gap)).sort((a, b) => a.start.valueOf() - b.start.valueOf())[0] : null;
+  const gapEnd = gap ? (nextBilled ? nextBilled.start.subtract(1, 'day') : span.end) : null;
+  return {
+    cycle: order.billingCycle || null,
+    campaignStart: span ? asStored(span.start) : null,
+    campaignEnd: span ? asStored(span.end) : null,
+    periods: out,
+    next: out.find((p) => p.status === 'OPEN') || null,
+    // First unbilled day (also catches gaps left between custom bills).
+    nextUnbilledDate: gap ? asStored(gap) : null,
+    nextUnbilledEnd: gapEnd ? asStored(gapEnd) : null,
+    fullyBilled: !gap,
+    custom: custom && custom.start && custom.end ? draftForCustom(order, custom.start, custom.end) : undefined,
+  };
 }
 
-module.exports = { billingPlan, periodsFor, draftFor, othersTaxable, invoiceForPeriod, durationLabel, BILLABLE };
+// Re-draft an existing invoice's own range from the campaign's current
+// commercials (in-window edit). An invoice from before billing periods
+// existed covered the whole run.
+function redraftFor(order, invoice) {
+  const span = campaignSpan(order);
+  const start = invoice.periodStart ? day(invoice.periodStart) : span.start;
+  const end = invoice.periodStart ? day(invoice.periodEnd || invoice.periodStart) : span.end;
+  const others = liveInvoices(order).filter((i) => i.id !== invoice.id);
+  return draftForRange(order, start, end, others, invoice.periodLabel || null, { roundingOnly: true });
+}
+
+module.exports = { billingPlan, periodsFor, draftForRange, draftForCustom, redraftFor, durationLabel, BILLABLE };

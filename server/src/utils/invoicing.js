@@ -3,7 +3,7 @@ const prisma = require('../db');
 const { nextInvoiceNo } = require('./counters');
 const { GST_RATE } = require('./pricing');
 const { logActivity } = require('./activity');
-const { billingPlan, periodsFor, draftFor, othersTaxable } = require('./billingPlan');
+const { billingPlan, redraftFor } = require('./billingPlan');
 
 // How long a freshly generated invoice stays editable. After this it locks;
 // a wrong bill is then cancelled (with a reason) and re-issued.
@@ -41,33 +41,45 @@ function lockState(invoice, now = new Date()) {
 
 const planInclude = { client: true, company: true, addOns: true, invoices: true, items: { include: { photos: true, site: true } } };
 
-// Roll the campaign's "next bill due" to the start of its next unbilled period
-// (cleared when everything is billed). One-time campaigns are left alone.
+// Roll the campaign's "next bill due" to its next unbilled period — or the
+// first unbilled day when custom bills left a gap — cleared when everything is
+// billed. One-time campaigns are left alone.
 async function rollNextBillingDate(orderId) {
   const order = await prisma.order.findUnique({ where: { id: orderId }, include: planInclude });
   if (!order?.billingCycle) return;
-  const next = billingPlan(order).next;
-  await prisma.order.update({ where: { id: orderId }, data: { nextBillingDate: next ? next.periodStart : null } });
+  const plan = billingPlan(order);
+  const next = plan.next ? plan.next.periodStart : plan.nextUnbilledDate;
+  await prisma.order.update({ where: { id: orderId }, data: { nextBillingDate: next || null } });
 }
 
-// Create the invoice for an order's next unbilled period (or `periodIndex`).
+// Create an invoice for a chosen billing period (`periodIndex`), a custom
+// `start`–`end` range, or — when neither is given — the next unbilled period.
 // Shared by Finance's direct POST and the approved GENERATE_INVOICE request.
 // Throws errors tagged with `.status` (and `.canForce` for the soft
 // proof-of-display gate).
-async function createInvoiceForOrder({ orderId, force = false, dueDate, user, periodIndex }) {
+async function createInvoiceForOrder({ orderId, force = false, dueDate, user, periodIndex, start, end }) {
   const order = await prisma.order.findUnique({ where: { id: Number(orderId) }, include: planInclude });
   if (!order) { const e = new Error('Order not found'); e.status = 404; throw e; }
+  const fail = (msg, status) => { const e = new Error(msg); e.status = status; throw e; };
 
-  const plan = billingPlan(order);
-  if (!plan.periods.length) { const e = new Error(`${order.orderNo} has no billable sites.`); e.status = 400; throw e; }
-  const target = periodIndex != null && periodIndex !== '' ? plan.periods[Number(periodIndex)] : plan.next;
-  if (!target) {
-    const e = new Error(plan.cycle
-      ? `${order.orderNo} is fully invoiced — every billing period already has a bill.`
-      : `${order.orderNo} already has an invoice. Cancel it before issuing a new one.`);
-    e.status = 409; throw e;
+  const plan = billingPlan(order, start && end ? { start, end } : undefined);
+  if (!plan.periods.length) fail(`${order.orderNo} has no billable sites.`, 400);
+  let draft;
+  if (start && end) {
+    if (plan.custom.error) fail(plan.custom.error, 409);
+    draft = plan.custom.draft;
+  } else {
+    const target = periodIndex != null && periodIndex !== '' ? plan.periods[Number(periodIndex)] : plan.next;
+    if (!target) {
+      fail(plan.fullyBilled
+        ? `${order.orderNo} is fully invoiced — every day of the campaign already has a bill.`
+        : `No full billing period is left unbilled on ${order.orderNo}. Use custom dates to bill the remaining days.`, 409);
+    }
+    if (target.status !== 'OPEN') {
+      fail(`${target.label || 'This period'} is already ${target.status === 'BILLED' ? 'invoiced' : 'partly invoiced'} (${target.invoices.map((i) => i.invoiceNo).join(', ')}). Use custom dates for the remaining days.`, 409);
+    }
+    draft = target.billNow;
   }
-  if (target.invoice) { const e = new Error(`${target.label || 'This period'} is already invoiced (${target.invoice.invoiceNo}).`); e.status = 409; throw e; }
 
   const hasRegularLine = order.items.some((it) => it.type === 'REGULAR');
   const photoCount = order.items.reduce((n, it) => n + it.photos.length, 0);
@@ -76,7 +88,6 @@ async function createInvoiceForOrder({ orderId, force = false, dueDate, user, pe
     e.status = 422; e.canForce = true; throw e;
   }
 
-  const draft = target.draft;
   const taxCategory = order.taxCategory;
   const interState = order.interState;
   const split = gstSplit(taxCategory, interState, draft.taxable);
@@ -114,12 +125,7 @@ async function createInvoiceForOrder({ orderId, force = false, dueDate, user, pe
 async function redraftInvoice(invoiceId) {
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   const order = await prisma.order.findUnique({ where: { id: invoice.orderId }, include: planInclude });
-  const others = order.invoices.filter((i) => i.status !== 'CANCELLED' && i.id !== invoice.id);
-  // An invoice from before billing periods existed covered the whole run.
-  const periods = invoice.periodStart ? periodsFor(order) : periodsFor({ ...order, billingCycle: null });
-  let index = invoice.periodStart ? periods.findIndex((p) => p.start.isSame(dayjs(invoice.periodStart).startOf('day'))) : 0;
-  if (index < 0) index = 0;
-  return draftFor(order, periods, index, othersTaxable(order, periods, index, others));
+  return redraftFor(order, invoice);
 }
 
 // Cancel a wrong bill. Never deletes: the invoice stays on record (number kept)

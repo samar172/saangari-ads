@@ -7,6 +7,7 @@ import { useAuth, can } from '../auth';
 import { Badge, Money, Spinner } from '../components/ui';
 import { tdsAmountOf } from '../lib/tds';
 import { lockInfo, LockBadge, CancelInvoiceForm } from '../components/InvoiceLock';
+import BillPeriodPicker from '../components/BillPeriodPicker';
 
 const PHASES = ['START', 'MID', 'END'];
 const KINDS = [['GPS', <><MapPin size={14} className="inline mr-1" /> GPS</>], ['NORMAL', <><ImageIcon size={14} className="inline mr-1" /> Normal</>], ['NEWSPAPER', <><Newspaper size={14} className="inline mr-1" /> Newspaper</>]];
@@ -858,6 +859,7 @@ function InvoicesPanel({ o, user, onChanged }) {
   const [note, setNote] = useState('');
   const [warn, setWarn] = useState(''); // soft photo-gate → offer "invoice anyway"
   const [cancelling, setCancelling] = useState(null); // invoice being cancelled
+  const [pick, setPick] = useState(null); // { periodIndex } | { start, end } from the picker
 
   useEffect(() => {
     if (!can(user, 'viewInvoices')) return;
@@ -880,7 +882,7 @@ function InvoicesPanel({ o, user, onChanged }) {
     setBusy(true); setErr(''); if (force) setWarn('');
     try {
       await api.post('/invoices', {
-        orderId: o.id, force: !!force, periodIndex: next?.index,
+        orderId: o.id, force: !!force, periodIndex: pick?.periodIndex, start: pick?.start, end: pick?.end,
         dueDate: dueDate || undefined,
       });
       setDueDate('');
@@ -899,8 +901,8 @@ function InvoicesPanel({ o, user, onChanged }) {
     try {
       await api.post('/approvals', {
         action: 'GENERATE_INVOICE', entityType: 'order', entityId: o.id,
-        label: `${o.orderNo} · ${o.client.company || o.client.name} · generate invoice${next?.label ? ` (${next.label})` : ''}`,
-        payload: { dueDate: dueDate || undefined, periodIndex: next?.index },
+        label: `${o.orderNo} · ${o.client.company || o.client.name} · generate invoice${pick?.draft?.label ? ` (${pick.draft.label})` : ''}`,
+        payload: { dueDate: dueDate || undefined, periodIndex: pick?.periodIndex, start: pick?.start, end: pick?.end },
       });
       onChanged();
     } catch (e) { setErr(e.response?.data?.error || 'Could not request invoice'); }
@@ -932,11 +934,15 @@ function InvoicesPanel({ o, user, onChanged }) {
                   <tr key={p.index} className={`border-t border-slate-100 ${next?.index === p.index ? 'bg-amber-50/60' : ''}`}>
                     <td className="px-3 py-2 font-medium text-slate-700">{p.label}</td>
                     <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{fmtD(p.periodStart)} → {fmtD(p.periodEnd)}</td>
-                    <td className="px-3 py-2 text-right"><Money value={p.invoice ? p.invoice.total : p.draft.taxable + gstOf(p.draft.taxable)} /></td>
+                    <td className="px-3 py-2 text-right">{p.draft ? <Money value={p.draft.taxable + gstOf(p.draft.taxable)} /> : <Money value={p.invoices.reduce((s, i) => s + (i.total || 0), 0)} />}</td>
                     <td className="px-3 py-2">
-                      {p.invoice ? <span className="text-slate-700">{p.invoice.invoiceNo} <Badge status={p.invoice.status} /></span>
-                        : next?.index === p.index ? <span className="badge bg-amber-100 text-amber-800">Next to bill</span>
-                          : <span className="text-slate-400 text-xs">Upcoming</span>}
+                      {p.invoices?.length ? (
+                        <span className="text-slate-700">
+                          {p.invoices.map((i) => i.invoiceNo).join(', ')}{' '}
+                          {p.status === 'PARTLY' ? <span className="badge bg-sky-100 text-sky-800">Partly billed</span> : p.invoice && <Badge status={p.invoice.status} />}
+                        </span>
+                      ) : next?.index === p.index ? <span className="badge bg-amber-100 text-amber-800">Next to bill</span>
+                        : <span className="text-slate-400 text-xs">Not billed</span>}
                     </td>
                   </tr>
                 ))}
@@ -1021,17 +1027,15 @@ function InvoicesPanel({ o, user, onChanged }) {
           <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700">
             {o.status === 'QUOTATION' ? 'Confirm this quotation before invoicing.' : 'This campaign is cancelled — nothing to invoice.'}
           </div>
-        ) : plan && !next ? (
+        ) : plan?.fullyBilled ? (
           <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2.5 text-xs text-slate-500">
             This campaign is fully invoiced. To correct a wrong bill, cancel it (reason required) and generate it again; to bill it in cash, settle the campaign in cash (Overview) before invoicing.
           </div>
-        ) : next ? (
+        ) : plan ? (
           <div className="rounded-xl border border-slate-200 p-5 bg-slate-50">
-            <div className="flex items-center gap-2 text-base font-semibold text-slate-800 mb-1"><Receipt size={18} /> Generate invoice for {o.orderNo}{next.label ? ` — ${next.label}` : ''}</div>
-            <div className="text-sm text-slate-600 mb-3">
-              {fmtD(next.periodStart)} → {fmtD(next.periodEnd)} · taxable <Money value={next.draft.taxable} />
-              {o.taxCategory === 'GST' && <> + GST <Money value={gstOf(next.draft.taxable)} /></>}
-              {' '}= <b><Money value={next.draft.taxable + gstOf(next.draft.taxable)} /></b>
+            <div className="flex items-center gap-2 text-base font-semibold text-slate-800 mb-3"><Receipt size={18} /> Generate invoice for {o.orderNo}</div>
+            <div className="sm:max-w-lg mb-3">
+              <BillPeriodPicker orderId={o.id} taxCategory={o.taxCategory} plan={plan} onChange={setPick} />
             </div>
             <div className="sm:max-w-xs">
               <label className="label">Due date</label>
@@ -1047,8 +1051,8 @@ function InvoicesPanel({ o, user, onChanged }) {
                 </div>
               </div>
             ) : (
-              <button className="btn-primary mt-3 flex items-center gap-1.5" disabled={busy} onClick={() => generate(false)}>
-                <Plus size={16} /> {busy ? 'Generating…' : `Generate invoice${next.label ? ` (${next.label})` : ''}`}
+              <button className="btn-primary mt-3 flex items-center gap-1.5" disabled={busy || !pick} onClick={() => generate(false)}>
+                <Plus size={16} /> {busy ? 'Generating…' : `Generate invoice${pick?.draft?.label ? ` (${pick.draft.label})` : ''}`}
               </button>
             )}
           </div>
@@ -1056,17 +1060,20 @@ function InvoicesPanel({ o, user, onChanged }) {
       )}
 
       {/* Sales path: request an invoice (Manager/Admin approves and raises it). */}
-      {!canGenerate && o.receivable && next && (
+      {!canGenerate && o.receivable && plan && !plan.fullyBilled && (
         o.pendingApprovals?.includes('GENERATE_INVOICE') ? (
           <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 text-sm text-amber-800">Invoice requested — awaiting Manager/Admin approval.</div>
         ) : (
           <div className="rounded-xl border border-slate-200 p-5 bg-slate-50">
-            <div className="flex items-center gap-2 text-base font-semibold text-slate-800 mb-3"><Receipt size={18} /> Request invoice for {o.orderNo}{next.label ? ` — ${next.label}` : ''}</div>
+            <div className="flex items-center gap-2 text-base font-semibold text-slate-800 mb-3"><Receipt size={18} /> Request invoice for {o.orderNo}</div>
+            <div className="sm:max-w-lg mb-3">
+              <BillPeriodPicker orderId={o.id} taxCategory={o.taxCategory} plan={plan} onChange={setPick} />
+            </div>
             <div className="sm:max-w-xs">
               <label className="label">Due date (optional)</label>
               <input type="date" className="input" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
             </div>
-            <button className="btn-primary mt-3 flex items-center gap-1.5" disabled={busy} onClick={requestInvoice}>
+            <button className="btn-primary mt-3 flex items-center gap-1.5" disabled={busy || !pick} onClick={requestInvoice}>
               <Receipt size={16} /> {busy ? 'Requesting…' : 'Request invoice (approval)'}
             </button>
           </div>

@@ -214,9 +214,9 @@ router.post('/:id/cancel', requireRole('MANAGER'), async (req, res) => {
 // photo exists on any line (proof-of-display gate) — but purely loose orders
 // are 1–2 day displays with no monitoring cycle, so they invoice straight away.
 router.post('/', requirePermission('invoices', 'add'), async (req, res) => {
-  const { orderId, force, dueDate, periodIndex } = req.body || {};
+  const { orderId, force, dueDate, periodIndex, start, end } = req.body || {};
   try {
-    const invoice = await createInvoiceForOrder({ orderId, force: !!force, dueDate, periodIndex, user: req.user });
+    const invoice = await createInvoiceForOrder({ orderId, force: !!force, dueDate, periodIndex, start, end, user: req.user });
     res.status(201).json(invoice);
   } catch (e) {
     const body = { error: e.message || 'Could not generate invoice' };

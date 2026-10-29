@@ -1012,13 +1012,14 @@ router.post('/:id/items/:lineId/stop', requirePermission('campaigns', 'edit'), a
   res.json(withDerived(full));
 });
 
-// The campaign's billing plan: its bill periods (one for a one-time campaign,
-// one per month/quarter on a cycle), which are invoiced, and a preview of the
-// next bill.
+// The campaign's billing plan: its suggested bill periods (one for a one-time
+// campaign, one per month/quarter on a cycle), which are invoiced, and a
+// preview of each open period's bill.
 router.get('/:id/billing-plan', requirePermission('invoices', 'view'), async (req, res) => {
   const order = await prisma.order.findUnique({ where: { id: Number(req.params.id) }, include: planInclude });
   if (!order) return res.status(404).json({ error: 'Order not found' });
-  res.json(billingPlan(order));
+  // ?start=&end= also previews (and validates) a custom-dates bill.
+  res.json(billingPlan(order, req.query.start && req.query.end ? { start: req.query.start, end: req.query.end } : undefined));
 });
 
 // Quotation letter as an editable Word file on the Saangari letterhead — the

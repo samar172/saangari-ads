@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import api from '../api';
+import BillPeriodPicker from '../components/BillPeriodPicker';
 
 // Full-page "Generate Invoice" flow (was a modal on the Invoices list). Pick a
 // confirmed/live order not yet invoiced, set a due date, and raise the bill.
@@ -15,12 +16,12 @@ export default function InvoiceGenerate() {
   const [warn, setWarn] = useState(''); // soft photo-gate → offer "invoice anyway"
   const [busy, setBusy] = useState(false);
   const [plan, setPlan] = useState(null);
+  const [pick, setPick] = useState(null); // { periodIndex } | { start, end } from the picker
 
   useEffect(() => {
-    // Confirmed/live orders with something left to bill: never invoiced, or on
-    // a monthly/quarterly cycle (the billing plan below says which period is next).
-    api.get('/orders').then((r) => setOrders(r.data.filter((o) => ['CONFIRMED', 'LIVE', 'COMPLETED'].includes(o.status)
-      && (o.billingCycle || !o.invoices.some((i) => i.status !== 'CANCELLED')))));
+    // Confirmed/live orders. Any of them may still have unbilled days (a cycle
+    // or custom-dates bill); the picker below shows what's left.
+    api.get('/orders').then((r) => setOrders(r.data.filter((o) => ['CONFIRMED', 'LIVE', 'COMPLETED'].includes(o.status))));
   }, []);
 
   useEffect(() => {
@@ -29,8 +30,6 @@ export default function InvoiceGenerate() {
   }, [orderId]);
 
   const selectedOrder = orders.find((o) => String(o.id) === String(orderId));
-  const next = plan?.next;
-  const gst = (t) => (selectedOrder?.taxCategory === 'GST' ? Math.round(t * 0.18) : 0);
 
   async function submit(force) {
     setBusy(true); setErr(''); if (force) setWarn('');
@@ -38,7 +37,8 @@ export default function InvoiceGenerate() {
       const { data } = await api.post('/invoices', {
         orderId: Number(orderId),
         force: !!force,
-        periodIndex: next?.index,
+        periodIndex: pick?.periodIndex,
+        start: pick?.start, end: pick?.end,
         dueDate: dueDate || undefined,
       });
       navigate(data?.id ? `/invoices/${data.id}` : '/invoices');
@@ -58,7 +58,7 @@ export default function InvoiceGenerate() {
 
       <div className="card p-5 max-w-xl">
         {err && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{err}</div>}
-        <label className="label">Order (confirmed/live, with an unbilled period)</label>
+        <label className="label">Order (confirmed / live)</label>
         <select className="input" value={orderId} onChange={(e) => { setOrderId(e.target.value); setWarn(''); }}>
           <option value="">Select order…</option>
           {orders.map((o) => {
@@ -68,13 +68,8 @@ export default function InvoiceGenerate() {
         </select>
 
         {plan && (
-          <div className={`mt-3 rounded-lg border px-3 py-2 text-sm ${next ? 'bg-slate-50 border-slate-200 text-slate-700' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
-            {next ? (
-              <>
-                <b>{next.label || 'Full campaign'}</b>: {new Date(next.periodStart).toLocaleDateString('en-IN')} → {new Date(next.periodEnd).toLocaleDateString('en-IN')}
-                {' · '}₹{(next.draft.taxable + gst(next.draft.taxable)).toLocaleString('en-IN')}{selectedOrder?.taxCategory === 'GST' ? ' incl. GST' : ''}
-              </>
-            ) : 'Every billing period of this campaign is already invoiced.'}
+          <div className="mt-3">
+            <BillPeriodPicker orderId={orderId} taxCategory={selectedOrder?.taxCategory} plan={plan} onChange={setPick} />
           </div>
         )}
 
@@ -95,7 +90,7 @@ export default function InvoiceGenerate() {
         ) : (
           <>
             <p className="text-xs text-slate-500 mt-3">A monitoring photo (proof-of-display) is recommended before invoicing — you'll be asked to confirm if it's missing.</p>
-            <button className="btn-primary w-full mt-3 flex items-center justify-center gap-1.5" disabled={busy || !orderId || (plan && !next)} onClick={() => submit(false)}><Plus size={16} /> {busy ? 'Generating…' : 'Generate'}</button>
+            <button className="btn-primary w-full mt-3 flex items-center justify-center gap-1.5" disabled={busy || !orderId || !pick} onClick={() => submit(false)}><Plus size={16} /> {busy ? 'Generating…' : 'Generate'}</button>
           </>
         )}
       </div>
