@@ -7,8 +7,8 @@ const { computeLine, applyOrderCharges } = require('./pricing');
 //     campaign's first start date (17 Jul → 16 Aug, 17 Aug → 16 Sep, …).
 // Any bill can instead cover a custom From → To range. A bill charges only the
 // days of each site that fall inside its range, and no two live bills may
-// overlap. Printing, mounting and add-ons (and a flat discount) go on the first
-// bill raised; a % discount applies to every bill. The bill that completes the
+// overlap. Printing, mounting and add-ons (and a flat discount) go on the bill
+// covering the campaign's first day; a % discount applies to every bill. The bill that completes the
 // campaign's coverage settles any rounding, so the bills always add up to the
 // campaign's taxable value exactly.
 
@@ -186,7 +186,10 @@ function draftForRange(order, start, end, others, label, { roundingOnly = false 
       duration: durationLabel(x.days), qty: 1, price: x.amount,
     });
   }
-  const withExtras = !extrasBilled(others);
+  // One-off charges (printing, mounting, add-ons, a flat discount) belong to
+  // the bill covering the campaign's first day — Month 1 — so every month's
+  // amount stays the same whichever order the bills are raised in.
+  const withExtras = !extrasBilled(others) && !!span && !start.isAfter(span.start);
   if (withExtras) {
     rows.push(...printMountRows(order));
     for (const a of order.addOns || []) {
