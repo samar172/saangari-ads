@@ -36,6 +36,7 @@ app.use('/api/orders', require('./routes/orders'));
 app.use('/api/quotations', require('./routes/quotations'));
 app.use('/api/printing-partners', require('./routes/printingPartners'));
 app.use('/api/recon', require('./routes/recon'));
+app.use('/api/reprints', require('./routes/reprints'));
 app.use('/api/reminders', require('./routes/reminders'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/photos', require('./routes/photos'));

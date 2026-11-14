@@ -18,6 +18,7 @@ const ACTION_LABEL = {
   OVERRIDE_WAITLIST: 'Override waitlisted sites',
   UNLOCK_INVOICE: 'Reopen invoice for editing',
   PRINT_CORRECTION: 'Printing correction (Recon)',
+  REPRINT_FREE: 'Free reprint (we bear the cost)',
   OTHER: 'Other',
 };
 

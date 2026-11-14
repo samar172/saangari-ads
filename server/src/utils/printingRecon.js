@@ -21,7 +21,7 @@ const include = {
   client: { select: { id: true, name: true, company: true } },
   company: { select: { id: true, name: true } },
   printingPartner: { select: { id: true, name: true, ratePerSqft: true, materials: { select: { name: true, costPerSqft: true, rate: true, active: true } } } },
-  items: { select: { id: true, status: true, site: { select: { id: true, code: true, location: true, type: true, sqft: true, width: true, height: true } } } },
+  items: { select: { id: true, status: true, prints: true, printMaterial: true, site: { select: { id: true, code: true, location: true, type: true, sqft: true, width: true, height: true } } } },
 };
 
 function issuesOf(o) {
@@ -116,7 +116,8 @@ async function prepareChange(raw) {
   if (after.material && partner && !partner.materials.some((m) => m.name === after.material)) {
     throw Object.assign(new Error(`${after.partner || 'This partner'} has no material "${after.material}"`), { status: 400 });
   }
-  after.cost = orderPrintCost({ ...o, printingPartnerId: after.partnerId, printMaterial: after.material, printCost: after.printCost }, partner).cost;
+  const items = after.material !== before.material ? o.items.map((i) => (i.printMaterial ? { ...i, printMaterial: after.material } : i)) : o.items;
+  after.cost = orderPrintCost({ ...o, items, printingPartnerId: after.partnerId, printMaterial: after.material, printCost: after.printCost }, partner).cost;
   const same = ['partnerId', 'material', 'printCost', 'ok'].every((k) => after[k] === before[k]);
   return { orderId: id, orderNo: o.orderNo, before, after, same };
 }
@@ -142,6 +143,10 @@ async function applyPrintCorrections({ changes, reason, user, requestedBy }) {
           printReconNote: ch.after.ok ? reason : null,
         },
       });
+      // Per-site campaigns: sites that carry their own material follow the change.
+      if (ch.after.material !== ch.before.material) {
+        await tx.booking.updateMany({ where: { orderId: ch.orderId, status: { not: 'CANCELLED' }, printMaterial: { not: null } }, data: { printMaterial: ch.after.material } });
+      }
     }
   });
   for (const ch of changes) {

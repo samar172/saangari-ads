@@ -99,7 +99,7 @@ export default function NewBooking() {
     // 'PRINT' = no. of prints × rate + mounting per print; 'SITE' = an own
     // printing + mounting charge on every site line; 'TYPE' = one printing +
     // mounting rate per media type (Unipole / Gantry …) applied to its sites.
-    chargeMode: 'PRINT',
+    chargeMode: 'SITE',
     typeRates: {}, // { UNIPOLE: { print, mount } } — 'TYPE' mode, blank = Inventory default
     mountings: 1,  // 'TYPE' mode: how many times each site is mounted (0 = no mounting)
     monitoring: true,
@@ -169,7 +169,7 @@ export default function NewBooking() {
         siteId: l.siteId, startDate: defStart,
         endDate: dayjs(defStart).add(Math.max(1, Number(l.months) || 1), 'month').subtract(1, 'day').format('YYYY-MM-DD'),
         monthlyRateOverride: l.rate ? String(l.rate) : '', dayRateOverride: '', displayNotes: '',
-        printCharge: String(l.pm || 0), mountCharge: '0',
+        printCharge: String(l.pm || 0), mountCharge: '0', prints: '1', printMaterial: '', pcTouched: true, mcTouched: true,
       })));
       setForm((f) => ({ ...f, chargeMode: booked.some((l) => l.pm) ? 'SITE' : f.chargeMode, paymentTerms: q.paymentTerms || f.paymentTerms, description: f.description || `From quotation ${q.quoteNo}` }));
     }).catch(() => setError('Could not load the quotation'));
@@ -223,7 +223,7 @@ export default function NewBooking() {
     if (!b) return;
     setForm((f) => ({
       ...f,
-      chargeMode: b.chargeMode || f.chargeMode,
+      chargeMode: b.chargeMode === 'TYPE' ? 'SITE' : (b.chargeMode || f.chargeMode),
       mountings: b.mountings ?? f.mountings,
       printingPartnerId: b.printingPartnerId ? String(b.printingPartnerId) : f.printingPartnerId,
       printMaterial: b.printingPartnerId ? (b.printMaterial || '') : f.printMaterial,
@@ -301,6 +301,7 @@ export default function NewBooking() {
     sites: lines.map((l) => siteById[l.siteId]).filter(Boolean),
     // Per print → the prints entered; per site / by media type → every site.
     prints: form?.chargeMode === 'PRINT' ? form?.noOfPrints : lines.filter((l) => siteById[l.siteId]).length,
+    perSite: form?.chargeMode === 'SITE' ? lines.filter((l) => siteById[l.siteId]).map((l) => ({ prints: l.prints ?? 1, material: l.printMaterial, sqft: siteById[l.siteId].sqft })) : undefined,
   });
   // Regular bookings may only pick sites free for the chosen dates (not merely
   // ones whose current status flag reads AVAILABLE); loose bookings can override
@@ -316,9 +317,10 @@ export default function NewBooking() {
       ...ls,
       ...ids.map((id) => {
         const s = siteById[Number(id)];
-        const perSite = form.chargeMode === 'SITE'
-          ? { printCharge: s?.printingCost ? String(s.printingCost) : '', mountCharge: s?.mountingCost ? String(s.mountingCost) : '' }
-          : {};
+        // Per-site rows start at 1 print in the default material; printing and
+        // mounting fill in from Business Setup / Inventory (see the sync below).
+        const perSite = form.chargeMode === 'SITE' ? { prints: '1', printMaterial: form.printMaterial || '', printCharge: '', mountCharge: '' } : {};
+        void s;
         return { siteId: Number(id), startDate: form.defaultStart, endDate: form.defaultEnd, dayRateOverride: '', displayNotes: '', ...perSite };
       }),
     ]);
@@ -345,15 +347,43 @@ export default function NewBooking() {
   function setChargeMode(mode) {
     set('chargeMode', mode);
     if (mode !== 'SITE') return;
-    setLines((ls) => ls.map((l) => {
-      const s = siteById[l.siteId];
-      return {
-        ...l,
-        printCharge: l.printCharge ?? (s?.printingCost ? String(s.printingCost) : ''),
-        mountCharge: l.mountCharge ?? (s?.mountingCost ? String(s.mountingCost) : ''),
-      };
-    }));
+    setLines((ls) => ls.map((l) => ({ ...l, prints: l.prints ?? '1', printMaterial: l.printMaterial ?? (form.printMaterial || '') })));
   }
+
+  // Per-site rows: printing = rate per print × prints, mounting = first mount +
+  // remount × (mountings − 1), from Business Setup's rate for the media type,
+  // else the site's Inventory rate. A field someone typed in keeps its value.
+  const siteAutoCharges = (l) => {
+    const s = siteById[l.siteId];
+    if (!s) return { print: 0, mount: 0 };
+    const st = setupRates[s.type] || {};
+    const perPrint = st.print > 0 ? st.print : (s.printingCost || 0);
+    const mount = st.mount > 0 ? st.mount : (s.mountingCost || 0);
+    const remount = st.remount > 0 ? st.remount : mount;
+    const n = Math.max(0, Number(form.mountings) || 0);
+    const prints = l.prints === '' || l.prints == null ? 1 : Math.max(0, Number(l.prints) || 0);
+    return { print: Math.round(perPrint * prints), mount: n === 0 ? 0 : Math.round(mount + remount * (n - 1)) };
+  };
+  useEffect(() => {
+    if (form.chargeMode !== 'SITE') return;
+    let changed = false;
+    const next = lines.map((l) => {
+      if (!siteById[l.siteId]) return l;
+      const a = siteAutoCharges(l);
+      const upd = { ...l };
+      if (!l.pcTouched && String(l.printCharge ?? '') !== String(a.print)) { upd.printCharge = String(a.print); changed = true; }
+      if (!l.mcTouched && String(l.mountCharge ?? '') !== String(a.mount)) { upd.mountCharge = String(a.mount); changed = true; }
+      return upd;
+    });
+    if (changed) setLines(next);
+  }, [form.chargeMode, form.mountings, lines, siteById, setupRates]); // eslint-disable-line
+
+  // Same value on every site of one media type (or all sites).
+  const applyToType = (field, value, type) => setLines((ls) => ls.map((l) => (
+    !type || siteById[l.siteId]?.type === type
+      ? { ...l, [field]: value, ...(field === 'printCharge' ? { pcTouched: true } : field === 'mountCharge' ? { mcTouched: true } : {}) }
+      : l)));
+  const typeLabel = (t) => (t ? t.charAt(0) + t.slice(1).toLowerCase() : '');
 
   // A saved charge from Business Setup → one "Other charges" line, sized by its
   // basis: one-time, × sites, or × campaign months (longest site, 30-day months).
@@ -446,7 +476,7 @@ export default function NewBooking() {
         description: form.description,
         printingPartnerId: form.printingPartnerId ? Number(form.printingPartnerId) : undefined,
         printMaterial: form.printMaterial || undefined,
-        noOfPrints: Number(form.noOfPrints) || 0,
+        noOfPrints: form.chargeMode === 'SITE' ? lines.reduce((s, l) => s + (l.prints === '' || l.prints == null ? 1 : Number(l.prints) || 0), 0) : Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
         // What we pay the printing partner (internal cost) — drives printing P&L,
         // never the customer's taxable amount.
@@ -477,6 +507,7 @@ export default function NewBooking() {
           dayRateOverride: l.dayRateOverride || undefined,
           displayNotes: l.displayNotes || undefined,
           ...chargeOf(l),
+          ...(form.chargeMode === 'SITE' ? { prints: l.prints === '' || l.prints == null ? 1 : Number(l.prints) || 0, printMaterial: l.printMaterial || form.printMaterial || null } : {}),
         })),
       });
       // A booking made from a quotation marks that quotation converted.
@@ -682,18 +713,60 @@ export default function NewBooking() {
                           }} />
                         </div>
                       </div>
-                      {form.chargeMode === 'SITE' && (
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
-                          {[['printCharge', 'Printing ₹'], ['mountCharge', 'Mounting ₹']].map(([k, label]) => (
-                            <div key={k}>
-                              <div className="text-[10px] text-slate-400 mb-0.5 flex items-center justify-between">{label}
-                                {lines.length > 1 && l[k] !== '' && l[k] != null && <button type="button" className="text-brand hover:underline" title="Apply to all sites" onClick={() => applyRateToAll(k, l[k])}>→ all</button>}
+                      {form.chargeMode === 'SITE' && (() => {
+                        const s = siteById[l.siteId];
+                        const partner = partners.find((p) => String(p.id) === String(form.printingPartnerId));
+                        const mats = (partner?.materials || []).filter((m) => m.active || m.name === l.printMaterial);
+                        const sameType = s ? lines.filter((x) => siteById[x.siteId]?.type === s.type).length : 0;
+                        const noPrint = String(l.prints) === '0';
+                        const mat = mats.find((m) => m.name === (l.printMaterial || form.printMaterial));
+                        const rate = mat?.costPerSqft > 0 ? mat.costPerSqft : partner?.ratePerSqft || 0;
+                        const prints = l.prints === '' || l.prints == null ? 1 : Number(l.prints) || 0;
+                        const shortcut = (k, v) => lines.length > 1 && v !== '' && v != null && (
+                          <span className="flex gap-1.5">
+                            {sameType > 1 && sameType < lines.length && <button type="button" className="text-brand hover:underline" title={`Same on every ${typeLabel(s?.type)} site`} onClick={() => applyToType(k, v, s?.type)}>→ {typeLabel(s?.type)}</button>}
+                            <button type="button" className="text-brand hover:underline" title="Same on every site" onClick={() => applyToType(k, v)}>→ all</button>
+                          </span>
+                        );
+                        return (
+                          <div className="mt-2 rounded-lg bg-slate-50 border border-slate-200 p-2">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                              <div>
+                                <div className="text-[10px] text-slate-400 mb-0.5 flex items-center justify-between">Prints{shortcut('prints', l.prints)}</div>
+                                <input type="number" min="0" className="input py-1 text-xs" value={l.prints ?? '1'} disabled={noPrint} onChange={(e) => updateLine(i, 'prints', e.target.value)} />
                               </div>
-                              <input type="number" min="0" className="input py-1 text-xs" value={l[k] ?? ''} onChange={(e) => updateLine(i, k, e.target.value)} />
+                              <div>
+                                <div className="text-[10px] text-slate-400 mb-0.5 flex items-center justify-between">Material{shortcut('printMaterial', l.printMaterial)}</div>
+                                <select className="input py-1 text-xs" value={l.printMaterial || ''} disabled={noPrint || !partner} onChange={(e) => updateLine(i, 'printMaterial', e.target.value)}>
+                                  <option value="">{partner ? (form.printMaterial ? `Default (${form.printMaterial})` : 'Pick…') : 'Pick a partner below'}</option>
+                                  {mats.map((m) => <option key={m.id} value={m.name}>{m.name}{m.costPerSqft ? ` · ₹${m.costPerSqft}/sqft` : ''}</option>)}
+                                </select>
+                              </div>
+                              <div>
+                                <div className="text-[10px] text-slate-400 mb-0.5 flex items-center justify-between">Printing ₹{shortcut('printCharge', l.printCharge)}</div>
+                                <input type="number" min="0" className="input py-1 text-xs" value={l.printCharge ?? ''} disabled={noPrint} onChange={(e) => setLines((ls) => ls.map((x, idx) => (idx === i ? { ...x, printCharge: e.target.value, pcTouched: true } : x)))} />
+                              </div>
+                              <div>
+                                <div className="text-[10px] text-slate-400 mb-0.5 flex items-center justify-between">Mounting ₹{shortcut('mountCharge', l.mountCharge)}</div>
+                                <input type="number" min="0" className="input py-1 text-xs" value={l.mountCharge ?? ''} onChange={(e) => setLines((ls) => ls.map((x, idx) => (idx === i ? { ...x, mountCharge: e.target.value, mcTouched: true } : x)))} />
+                              </div>
                             </div>
-                          ))}
-                        </div>
-                      )}
+                            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
+                              <label className="flex items-center gap-1.5">
+                                <input type="checkbox" checked={noPrint} onChange={(e) => setLines((ls) => ls.map((x, idx) => (idx === i ? { ...x, prints: e.target.checked ? '0' : '1', ...(e.target.checked ? { printCharge: '0', pcTouched: true } : { pcTouched: false }) } : x)))} />
+                                No printing (client gives the flex)
+                              </label>
+                              {s?.sqft > 0 && <span>{s.width && s.height ? `${s.width}×${s.height} · ` : ''}{s.sqft} sqft</span>}
+                              {partner && !noPrint && (rate > 0
+                                ? <span>Partner cost ≈ <b className="text-slate-700">₹{Math.round(prints * (s?.sqft || 0) * rate).toLocaleString('en-IN')}</b> ({prints} × {s?.sqft || 0} sqft × ₹{rate})</span>
+                                : <span className="text-amber-600">No ₹/sqft for this material</span>)}
+                              {(l.pcTouched || l.mcTouched) && !noPrint && (
+                                <button type="button" className="text-brand hover:underline" onClick={() => setLines((ls) => ls.map((x, idx) => (idx === i ? { ...x, pcTouched: false, mcTouched: false } : x)))}>Use setup rates</button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
                       <div className="mt-2">
                         <div className="text-[10px] text-slate-400 mb-0.5">Display notes <span className="text-slate-300">(prints on the billing plan)</span></div>
                         <input className="input py-1 text-xs" placeholder="e.g. Facing the highway exit — client wants it lit"
@@ -711,8 +784,8 @@ export default function NewBooking() {
             <div className="text-sm font-semibold text-slate-700">Printing partner (for invoicing)</div>
             <div>
               <label className="label">Charge printing &amp; mounting</label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                {[['PRINT', 'Per print', 'No. of prints × rate, mounting per print'], ['TYPE', 'By media type', 'One rate for Unipole, one for Gantry …'], ['SITE', 'Per site', 'Own printing + mounting amount on each site']].map(([v, l, d]) => (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {[['SITE', 'On each site', 'Prints, material, printing & mounting on every site row above'], ['PRINT', 'Per print', 'No. of prints × one rate, mounting per print']].map(([v, l, d]) => (
                   <button type="button" key={v} onClick={() => setChargeMode(v)}
                     className={`rounded-lg border p-3 text-left transition ${form.chargeMode === v ? 'border-brand bg-brand/5' : 'border-slate-200'}`}>
                     <div className="font-medium text-sm">{l}</div>
@@ -721,11 +794,19 @@ export default function NewBooking() {
                 ))}
               </div>
               {form.chargeMode === 'SITE' && (
-                <p className="text-[11px] text-slate-500 mt-1.5">
-                  Enter printing and mounting on each site above (pre-filled from Inventory).
-                  Total: ₹{lines.reduce((s, l) => s + (Number(l.printCharge) || 0), 0).toLocaleString('en-IN')} printing
-                  + ₹{lines.reduce((s, l) => s + (Number(l.mountCharge) || 0), 0).toLocaleString('en-IN')} mounting.
-                </p>
+                <div className="mt-2 space-y-1.5">
+                  <p className="text-[11px] text-slate-500">
+                    Set prints, material, printing and mounting on each site above — filled in from Business Setup (else Inventory); "→ Gantry / → all" copies a value.
+                    Total: <b>₹{lines.reduce((s, l) => s + (Number(l.printCharge) || 0), 0).toLocaleString('en-IN')}</b> printing
+                    + <b>₹{lines.reduce((s, l) => s + (Number(l.mountCharge) || 0), 0).toLocaleString('en-IN')}</b> mounting
+                    · {lines.reduce((s, l) => s + (l.prints === '' || l.prints == null ? 1 : Number(l.prints) || 0), 0)} prints.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                    <span>No. of mountings</span>
+                    <input type="number" min="0" className="input py-1 text-xs w-20" value={form.mountings} onChange={(e) => set('mountings', e.target.value)} />
+                    <span className="text-slate-400">1 = once at start · 2 = one remount · 0 = no mounting. Printing &amp; mounting go on the first bill.</span>
+                  </div>
+                </div>
               )}
               {form.chargeMode === 'TYPE' && (
                 <div className="mt-3 space-y-2">
@@ -772,7 +853,7 @@ export default function NewBooking() {
                 </select>
               </div>
               <div>
-                <label className="label">Material</label>
+                <label className="label">{form.chargeMode === 'SITE' ? 'Default material (all sites)' : 'Material'}</label>
                 {(() => {
                   const partner = partners.find((p) => String(p.id) === String(form.printingPartnerId));
                   const materials = (partner?.materials || []).filter((m) => m.active);
@@ -781,8 +862,11 @@ export default function NewBooking() {
                       disabled={!form.printingPartnerId || materials.length === 0}
                       onChange={(e) => {
                         const m = materials.find((x) => x.name === e.target.value);
+                        const prev = form.printMaterial;
                         // Picking a material auto-fills its rate.
                         setForm((f) => ({ ...f, printMaterial: e.target.value, printRate: m ? m.rate : f.printRate }));
+                        // Sites still on the old default follow the new one.
+                        if (form.chargeMode === 'SITE') setLines((ls) => ls.map((l) => (!l.printMaterial || l.printMaterial === prev ? { ...l, printMaterial: e.target.value } : l)));
                       }}>
                       <option value="">{form.printingPartnerId ? (materials.length ? 'Select material…' : 'No materials set') : 'Pick a partner first'}</option>
                       {materials.map((m) => <option key={m.id} value={m.name}>{m.name} (₹{m.rate})</option>)}

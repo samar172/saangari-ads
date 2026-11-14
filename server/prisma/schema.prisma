@@ -112,6 +112,7 @@ enum ApprovalAction {
   OVERRIDE_WAITLIST
   UNLOCK_INVOICE
   PRINT_CORRECTION
+  REPRINT_FREE
   OTHER
 }
 
@@ -320,6 +321,7 @@ model PrintingPartner {
 
   materials PrintingMaterial[]
   orders    Order[]
+  reprints  Reprint[]
   payments  PartnerPayment[]
   bills     PartnerBill[]
 }
@@ -411,6 +413,10 @@ model Order {
   // the info-only flags (prints ≠ sites, 0 prints) as correct.
   printReconOkAt    DateTime?
   printReconNote    String?
+  // Client-paid reprints (ex-GST, not discounted) — added to the campaign's
+  // taxable value after the discount. See model Reprint.
+  reprintTotal      Float            @default(0)
+  reprints          Reprint[]
 
   // Mounting (30-day mounting cycle)
   mountingCost Float @default(0)
@@ -487,6 +493,11 @@ model Booking {
   // per site — Order.chargesPerSite). Summed into the order's totals.
   printCharge Float @default(0)
   mountCharge Float @default(0)
+  // Per-site printing detail (new bookings): no. of flex prints for this site
+  // and the material. Partner cost = prints × site sqft × material ₹/sqft.
+  // Null on older campaigns → the order-level prints/material apply.
+  prints        Int?
+  printMaterial String?
 
   // Free-text note that prints on the billing plan (quotation + invoice)
   displayNotes String?
@@ -608,6 +619,9 @@ model Invoice {
   periodStart DateTime?
   periodEnd   DateTime?
   periodLabel String? // e.g. "Month 2 of 3"
+  // Set on a separate reprint bill — it covers a reprint's charges only and
+  // sits outside the campaign's period-by-period coverage.
+  reprintId   Int?
   // The bill rows exactly as issued (site, dates, qty, price…) so a reprinted
   // bill never drifts when the campaign is edited later.
   lines       Json?
@@ -778,4 +792,40 @@ model Quotation {
   updatedAt     DateTime  @updatedAt
 
   @@index([status])
+}
+
+// A reprint (and remount) on a running campaign: torn flex, design change…
+// Client-paid ones add their charge to the campaign (Order.reprintTotal) and go
+// on the next bill or a separate bill; free ones (we bear the cost) need
+// Manager/Admin approval. The partner cost counts in the partner's account.
+model Reprint {
+  id                Int              @id @default(autoincrement())
+  reprintNo         String           @unique // RP-0001
+  order             Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId           Int
+  reprintDate       DateTime         @default(now())
+  reason            String // STORM | DESIGN_CHANGE | CLIENT_REQUEST | DAMAGE | OTHER
+  note              String?
+  printingPartner   PrintingPartner? @relation(fields: [printingPartnerId], references: [id])
+  printingPartnerId Int?
+  chargeTo          String // CLIENT | FREE
+  billing           String? // NEXT_BILL | SEPARATE (client-paid only)
+  // REQUESTED (free, awaiting approval) → APPROVED → PRINTED → MOUNTED;
+  // REJECTED / CANCELLED end it.
+  status            String           @default("APPROVED")
+  // [{ bookingId, siteId, code, location, type, sqft, prints, material,
+  //    printCharge, mountCharge, cost }]
+  lines             Json
+  printTotal        Float            @default(0)
+  mountTotal        Float            @default(0)
+  charge            Float            @default(0) // billed to the client (0 when FREE)
+  cost              Float            @default(0) // paid to the partner
+  invoiceId         Int? // the separate bill, or the bill it went on
+  history           Json? // [{ at, status, by, note }]
+  createdById       Int
+  createdByName     String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([orderId])
 }

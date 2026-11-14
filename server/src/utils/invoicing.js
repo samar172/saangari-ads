@@ -61,7 +61,7 @@ async function defaultBankFor(order) {
   return accounts.find((a) => a.accountNo === last?.bankAccountNo) || accounts[0];
 }
 
-const planInclude = { client: true, company: true, addOns: true, invoices: true, items: { include: { photos: true, site: true } } };
+const planInclude = { client: true, company: true, addOns: true, invoices: true, reprints: true, items: { include: { photos: true, site: true } } };
 
 // Roll the campaign's "next bill due" to its next unbilled period — or the
 // first unbilled day when custom bills left a gap — cleared when everything is
@@ -152,6 +152,7 @@ async function createInvoiceForOrder({ orderId, force = false, dueDate, user, pe
 // by the in-window edit). Keeps its own period; other bills are untouched.
 async function redraftInvoice(invoiceId) {
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  if (invoice.reprintId) { const e = new Error(`${invoice.invoiceNo} is a reprint bill — cancel it and bill the reprint again to correct it.`); e.status = 409; throw e; }
   const order = await prisma.order.findUnique({ where: { id: invoice.orderId }, include: planInclude });
   return redraftFor(order, invoice);
 }
@@ -167,6 +168,7 @@ async function unlockInvoice({ invoiceId, reason, user, requestedBy }) {
   if (invoice.status === 'CANCELLED') { const e = new Error(`${invoice.invoiceNo} is cancelled — generate a fresh invoice instead.`); e.status = 409; throw e; }
   if (invoice.status === 'PAID') { const e = new Error(`${invoice.invoiceNo} is paid — cancel and re-issue it to correct it.`); e.status = 409; throw e; }
   if (lockState(invoice).editable) { const e = new Error(`${invoice.invoiceNo} is already editable.`); e.status = 409; throw e; }
+  if (invoice.reprintId) { const e = new Error(`${invoice.invoiceNo} is a reprint bill — cancel it and bill the reprint again to correct it.`); e.status = 409; throw e; }
   const editableUntil = dayjs().add(EDIT_WINDOW_HOURS, 'hour').toDate();
   const updated = await prisma.invoice.update({ where: { id: invoice.id }, data: { editableUntil } });
   logActivity({
@@ -192,6 +194,8 @@ async function cancelInvoice({ invoiceId, reason, user }) {
       where: { id: invoice.id },
       data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: why, cancelledById: user?.id || null, cancelledByName: user?.name || null, editableUntil: null },
     });
+    // A cancelled reprint bill leaves its reprint unbilled again.
+    if (invoice.reprintId) await tx.reprint.updateMany({ where: { id: invoice.reprintId, invoiceId: invoice.id }, data: { invoiceId: null } });
     await tx.ledgerEntry.create({
       data: {
         clientId: invoice.clientId, companyId: invoice.companyId, invoiceId: invoice.id, type: 'CREDIT', amount: invoice.total,
@@ -210,7 +214,50 @@ async function cancelInvoice({ invoiceId, reason, user }) {
   return updated;
 }
 
+// A separate bill for one client-paid reprint (its sites' printing + mounting).
+// Locked from the start (no in-window edit — cancel and re-bill to correct);
+// kept outside the campaign's period coverage.
+async function createReprintInvoice({ reprintId, user, dueDate }) {
+  const rp = await prisma.reprint.findUnique({ where: { id: Number(reprintId) } });
+  if (!rp) { const e = new Error('Reprint not found'); e.status = 404; throw e; }
+  if (rp.chargeTo !== 'CLIENT') { const e = new Error(`${rp.reprintNo} is free — nothing to bill.`); e.status = 400; throw e; }
+  const order = await prisma.order.findUnique({ where: { id: rp.orderId }, include: planInclude });
+  const live = order.invoices.filter((i) => i.status !== 'CANCELLED');
+  if (live.some((i) => i.reprintId === rp.id || (Array.isArray(i.lines) && i.lines.some((r) => r.kind === 'REPRINT' && r.reprintId === rp.id)))) {
+    const e = new Error(`${rp.reprintNo} is already billed.`); e.status = 409; throw e;
+  }
+  const rows = (Array.isArray(rp.lines) ? rp.lines : []).map((l) => {
+    const amt = Math.round((Number(l.printCharge) || 0) + (Number(l.mountCharge) || 0));
+    const what = l.prints ? `${l.prints} print${l.prints === 1 ? '' : 's'}${l.material ? `, ${l.material}` : ''}` : 'remount';
+    return { kind: 'REPRINT', reprintId: rp.id, location: `Reprint ${rp.reprintNo} — ${l.location || l.code || ''} (${what})`, code: l.code || '', qty: 1, price: amt };
+  }).filter((r) => r.price);
+  const taxable = rows.reduce((s, r) => s + r.price, 0);
+  if (!taxable) { const e = new Error(`${rp.reprintNo} has no charge to bill.`); e.status = 400; throw e; }
+  const split = gstSplit(order.taxCategory, order.interState, taxable);
+  const bank = await defaultBankFor(order);
+  const invoiceNo = await nextInvoiceNo(order.taxCategory);
+  const invoice = await prisma.invoice.create({
+    data: {
+      invoiceNo, orderId: order.id, clientId: order.clientId, companyId: order.companyId, taxCategory: order.taxCategory,
+      interState: order.interState, amount: taxable, gstRate: split.gstApplicable ? GST_RATE : 0,
+      cgst: split.cgst, sgst: split.sgst, igst: split.igst, gstAmount: split.gstAmount, total: split.total,
+      status: 'SENT', generatedById: user?.id,
+      dueDate: dueDate ? new Date(dueDate) : lastWorkingDayOfMonth(new Date()),
+      periodLabel: `Reprint ${rp.reprintNo}`, reprintId: rp.id, lines: rows, editableUntil: null,
+      bankName: bank?.bankName || null, bankAccountNo: bank?.accountNo || null, bankBranchIfsc: bank?.branchIfsc || null,
+    },
+  });
+  await prisma.ledgerEntry.create({ data: { clientId: order.clientId, companyId: order.companyId, invoiceId: invoice.id, type: 'DEBIT', amount: split.total, narration: `Invoice ${invoiceNo} (reprint ${rp.reprintNo})` } });
+  await prisma.reprint.update({ where: { id: rp.id }, data: { invoiceId: invoice.id } });
+  logActivity({
+    type: 'INVOICE', user, orderId: order.id, orderNo: order.orderNo, invoiceId: invoice.id,
+    summary: `Reprint bill raised · ${invoiceNo} · ${rp.reprintNo}`,
+    detail: `${order.client?.company?.trim() || order.client?.name || ''} · ₹${Number(split.total).toLocaleString('en-IN')}`,
+  });
+  return invoice;
+}
+
 module.exports = {
-  createInvoiceForOrder, redraftInvoice, cancelInvoice, unlockInvoice, lockState, bankAccountsOf, defaultBankFor, rollNextBillingDate,
+  createReprintInvoice, createInvoiceForOrder, redraftInvoice, cancelInvoice, unlockInvoice, lockState, bankAccountsOf, defaultBankFor, rollNextBillingDate,
   lastWorkingDayOfMonth, gstSplit, EDIT_WINDOW_HOURS, planInclude,
 };

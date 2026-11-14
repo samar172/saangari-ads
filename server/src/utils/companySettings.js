@@ -27,7 +27,7 @@ function sanitizeSettings(raw) {
   })).filter((c) => c.label);
   const b = r.booking || {};
   const booking = {
-    chargeMode: CHARGE_MODES.includes(b.chargeMode) ? b.chargeMode : 'PRINT',
+    chargeMode: b.chargeMode === 'PRINT' ? 'PRINT' : 'SITE', // 'TYPE' (retired) → per site
     mountings: Math.min(20, Math.max(0, Math.round(Number(b.mountings ?? 1)) || 0)),
     printingPartnerId: Number(b.printingPartnerId) > 0 ? Number(b.printingPartnerId) : null,
     printMaterial: str(b.printMaterial, 80) || null,

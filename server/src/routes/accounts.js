@@ -167,7 +167,7 @@ router.get('/financials', requirePermission('accounts', 'view'), async (req, res
       payments: { select: { amount: true } },
       invoices: { select: { total: true, status: true } },
       printingPartner: { select: { ratePerSqft: true, materials: { select: { name: true, costPerSqft: true } } } },
-      items: { where: { status: { notIn: ['CANCELLED'] } }, select: { status: true, site: { select: { sqft: true } } } },
+      items: { where: { status: { notIn: ['CANCELLED'] } }, select: { status: true, prints: true, printMaterial: true, site: { select: { sqft: true } } } },
     },
   });
 

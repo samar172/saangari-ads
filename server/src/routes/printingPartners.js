@@ -3,7 +3,8 @@ const PDFDocument = require('pdfkit');
 const prisma = require('../db');
 const { requireRole, requirePermission } = require('../middleware/auth');
 const { logActivity } = require('../utils/activity');
-const { printedArea } = require('../utils/printingCost');
+const { printedArea, orderPrintCost } = require('../utils/printingCost');
+const { partnerReprintJobs } = require('../utils/reprints');
 
 const INR = (n) => 'Rs ' + Math.round(Number(n || 0)).toLocaleString('en-IN');
 
@@ -42,7 +43,7 @@ async function loadPartnerAccount(id) {
       company: { select: { name: true } },
       items: {
         select: {
-          id: true, status: true, startDate: true, endDate: true,
+          id: true, status: true, startDate: true, endDate: true, prints: true, printMaterial: true,
           site: { select: { code: true, location: true, sqft: true, width: true, height: true } },
         },
       },
@@ -87,7 +88,9 @@ async function loadPartnerAccount(id) {
     const bySqftMaterial = Math.round(totalSqft * materialCostPerSqft);
     const bySqftPartner = Math.round(totalSqft * (partner.ratePerSqft || 0));
     let effectiveCost, costSource, costNote;
+    const perSite = area.perSite && !(o.printCost > 0) ? orderPrintCost(o, partner) : null;
     if (o.printCost > 0) { effectiveCost = Math.round(o.printCost); costSource = 'entered'; costNote = 'entered'; }
+    else if (perSite && perSite.cost > 0) { effectiveCost = perSite.cost; costSource = 'site_material'; costNote = `${area.prints} print${area.prints === 1 ? '' : 's'} · ${area.sqft} sqft · each site at its own material`; }
     else if (bySqftMaterial > 0) { effectiveCost = bySqftMaterial; costSource = 'material_sqft'; costNote = `${area.prints} print${area.prints === 1 ? '' : 's'} × ${area.avgSqft} sqft × ₹${materialCostPerSqft}${mat ? ` (${mat.name})` : ''}`; }
     else if (bySqftPartner > 0) { effectiveCost = bySqftPartner; costSource = 'sqft'; costNote = `${area.prints} print${area.prints === 1 ? '' : 's'} × ${area.avgSqft} sqft × ₹${partner.ratePerSqft}`; }
     else { effectiveCost = 0; costSource = 'none'; costNote = ''; }
@@ -125,6 +128,8 @@ async function loadPartnerAccount(id) {
     };
   });
 
+  // Reprints printed by this partner are jobs too (cost side).
+  jobs.push(...await partnerReprintJobs(id));
   const counted = jobs.filter((j) => COUNTED.includes(j.status));
   const totalPrintingValue = Math.round(counted.reduce((s, j) => s + (j.printingTotal || 0), 0));
   const totalPrintCost = Math.round(counted.reduce((s, j) => s + (j.printCost || 0), 0));

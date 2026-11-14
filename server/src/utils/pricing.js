@@ -52,14 +52,15 @@ function computeLine({ monthlyRate, startDate, endDate, dayRateOverride, monthly
 // the discount and the GST split. Shared by computeOrder (which prices lines
 // from scratch) and recomputeOrderTotals (which re-prices a saved order from
 // its existing line subtotals, after a stop or a shift changed the dates).
-function applyOrderCharges({ rentalSubtotal, addOnTotal, printingTotal, mountingTotal, discountPct, discountFlat, taxCategory, interState }) {
+// `reprintTotal`: client-paid reprints — added after the discount (never discounted).
+function applyOrderCharges({ rentalSubtotal, addOnTotal, printingTotal, mountingTotal, discountPct, discountFlat, taxCategory, interState, reprintTotal = 0 }) {
   const preDiscount = rentalSubtotal + addOnTotal + printingTotal + mountingTotal;
   // A flat ₹ discount (when > 0) overrides the percentage; capped at the pre-discount total.
   const flat = Math.round(Number(discountFlat) || 0);
   const discountAmount = flat > 0
     ? Math.min(flat, preDiscount)
     : Math.round(preDiscount * (Number(discountPct) || 0) / 100);
-  const taxableAmount = preDiscount - discountAmount;
+  const taxableAmount = preDiscount - discountAmount + Math.round(Number(reprintTotal) || 0);
 
   const gstApplicable = taxCategory === 'GST';
   const gstAmount = gstApplicable ? Math.round(taxableAmount * GST_RATE / 100) : 0;
@@ -76,7 +77,7 @@ function applyOrderCharges({ rentalSubtotal, addOnTotal, printingTotal, mounting
 
   return {
     rentalSubtotal, addOnTotal, printingTotal, mountingTotal,
-    discountAmount, taxableAmount,
+    discountAmount, taxableAmount, reprintTotal: Math.round(Number(reprintTotal) || 0),
     cgst, sgst, igst, gstAmount,
     grandTotal: taxableAmount + gstAmount,
     gstRate: gstApplicable ? GST_RATE : 0,
@@ -101,6 +102,7 @@ function recomputeOrderTotals(order, lines) {
     discountFlat: order.discountFlat || 0,
     taxCategory: order.taxCategory,
     interState: order.interState,
+    reprintTotal: order.reprintTotal || 0,
   });
 }
 
@@ -119,6 +121,7 @@ function computeOrder({
   // Per-site mode: each item carries its own printCharge / mountCharge and the
   // order's printing & mounting are their sums (noOfPrints/printRate ignored).
   chargesPerSite = false,
+  reprintTotal = 0,      // existing client-paid reprints (edit keeps them)
 }) {
   const lines = items.map((it) => ({
     ...computeLine(it), siteId: it.siteId,
@@ -135,7 +138,7 @@ function computeOrder({
     mountingTotal: chargesPerSite
       ? lines.reduce((s, l) => s + l.mountCharge, 0)
       : Math.round(Number(mountingCost) || 0),
-    discountPct, discountFlat, taxCategory, interState,
+    discountPct, discountFlat, taxCategory, interState, reprintTotal,
   });
 
   return { lines, ...totals };

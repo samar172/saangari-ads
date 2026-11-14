@@ -76,6 +76,7 @@ const orderInclude = {
   payments: { include: { recordedBy: { select: { name: true } } }, orderBy: { receivedAt: 'desc' } },
   reminders: { orderBy: { dueDate: 'asc' } },
   invoices: true,
+  reprints: { orderBy: { id: 'desc' }, include: { printingPartner: { select: { id: true, name: true } } } },
   items: {
     include: {
       site: true,
@@ -217,11 +218,19 @@ router.post('/quote', async (req, res) => {
 });
 
 // Shared: load sites for the requested lines and price the whole order.
+// Per-site printing detail saved on each line (per-site charging only):
+// no. of prints and material. Null when not given → order-level values apply.
+function sitePrintFields(src, chargesPerSite) {
+  if (!chargesPerSite) return { prints: null, printMaterial: null };
+  const n = src.prints === '' || src.prints == null ? null : Math.max(0, Math.round(Number(src.prints) || 0));
+  return { prints: n, printMaterial: src.printMaterial ? String(src.printMaterial).slice(0, 80) : null };
+}
+
 async function priceFromBody(body) {
   const {
     items = [], addOns = [], noOfPrints = 0, printRate = 0, mountingCost = 0,
     discountPct = 0, discountFlat = 0, taxCategory = 'NON_GST', interState = false, type = 'REGULAR',
-    chargesPerSite = false,
+    chargesPerSite = false, reprintTotal = 0,
   } = body;
   if (!Array.isArray(items) || items.length === 0) throw new Error('Add at least one site');
 
@@ -247,7 +256,7 @@ async function priceFromBody(body) {
   const result = computeOrder({
     items: pricedItems, addOns, noOfPrints, printRate, mountingCost,
     discountPct: discPct, discountFlat: Math.max(0, Number(discountFlat) || 0), taxCategory, interState,
-    chargesPerSite: !!chargesPerSite,
+    chargesPerSite: !!chargesPerSite, reprintTotal,
   });
   return { result, sites: byId };
 }
@@ -402,6 +411,7 @@ router.post('/', requirePermission('campaigns', 'add'), async (req, res) => {
           endDate: new Date(src.endDate),
           days: line.days, dayRate: line.dayRate, subtotal: line.subtotal,
           printCharge: line.printCharge, mountCharge: line.mountCharge,
+          ...sitePrintFields(src, chargesPerSite),
           displayNotes: src.displayNotes || null,
         },
       });
@@ -503,7 +513,7 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
   }
 
   let priced;
-  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, discountFlat, taxCategory, interState, type, chargesPerSite }); }
+  try { priced = await priceFromBody({ items, addOns, noOfPrints, printRate, mountingCost, discountPct, discountFlat, taxCategory, interState, type, chargesPerSite, reprintTotal: existing.reprintTotal || 0 }); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   // Same self-overlap guard as create: two lines on one site with overlapping
@@ -575,6 +585,7 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
           startDate: new Date(src.startDate), endDate: new Date(src.endDate),
           days: line.days, dayRate: line.dayRate, subtotal: line.subtotal,
           printCharge: line.printCharge, mountCharge: line.mountCharge,
+          ...sitePrintFields(src, chargesPerSite),
           displayNotes: src.displayNotes || null,
         };
         const matchId = Number(src.id) || null;

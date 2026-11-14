@@ -68,7 +68,8 @@ const liveInvoices = (order) => (order.invoices || []).filter((i) => i.status !=
 // periods existed (no periodStart) covered the whole campaign.
 function invoiceRanges(order, invoices) {
   const span = campaignSpan(order);
-  return invoices.map((inv) => ({
+  // A separate reprint bill covers a reprint, not campaign days.
+  return invoices.filter((inv) => !inv.reprintId).map((inv) => ({
     inv,
     start: inv.periodStart ? day(inv.periodStart) : span?.start,
     end: inv.periodStart ? day(inv.periodEnd || inv.periodStart) : span?.end,
@@ -132,8 +133,30 @@ function billedForLine(invoices, lineId) {
 
 // Have the one-off charges (printing / mounting / add-ons / a flat discount)
 // already gone on a live bill?
-const extrasBilled = (invoices) => invoices.some((inv) => !inv.periodStart
+const extrasBilled = (invoices) => invoices.some((inv) => (!inv.reprintId && !inv.periodStart)
   || (Array.isArray(inv.lines) && inv.lines.some((r) => r.kind === 'PRINT' || r.kind === 'ADDON' || (r.kind === 'DISCOUNT' && r.flat))));
+
+// Client-paid reprints set to go on "the next bill" that no live bill carries
+// yet — one row per reprinted site. They sit outside the discount.
+const ACTIVE_REPRINT = ['APPROVED', 'PRINTED', 'MOUNTED'];
+function reprintRows(order, invoices) {
+  const billed = new Set();
+  for (const inv of invoices) {
+    if (inv.reprintId) billed.add(inv.reprintId);
+    for (const r of (Array.isArray(inv.lines) ? inv.lines : [])) if (r.kind === 'REPRINT' && r.reprintId) billed.add(r.reprintId);
+  }
+  const rows = [];
+  for (const rp of order.reprints || []) {
+    if (rp.chargeTo !== 'CLIENT' || rp.billing !== 'NEXT_BILL' || !ACTIVE_REPRINT.includes(rp.status) || billed.has(rp.id)) continue;
+    for (const l of Array.isArray(rp.lines) ? rp.lines : []) {
+      const amt = Math.round((Number(l.printCharge) || 0) + (Number(l.mountCharge) || 0));
+      if (!amt) continue;
+      const what = l.prints ? `${l.prints} print${l.prints === 1 ? '' : 's'}${l.material ? `, ${l.material}` : ''}` : 'remount';
+      rows.push({ kind: 'REPRINT', reprintId: rp.id, location: `Reprint ${rp.reprintNo} — ${l.location || l.code || ''} (${what})`, code: l.code || '', qty: 1, price: amt });
+    }
+  }
+  return rows;
+}
 
 // Printing & mounting rows. Per-site charges list per site (collapsed to
 // "Qty × Price" when every site costs the same); otherwise the campaign's lump
@@ -200,13 +223,16 @@ function draftForRange(order, start, end, others, label, { roundingOnly = false 
     }
   }
   const pre = rows.reduce((s, r) => s + r.qty * r.price, 0);
+  // Reprints waiting for "the next bill" go on whichever bill is raised next.
+  const reprints = reprintRows(order, others);
   const charges = applyOrderCharges({
     rentalSubtotal: pre, addOnTotal: 0, printingTotal: 0, mountingTotal: 0,
     discountPct: order.discountFlat > 0 ? 0 : order.discountPct, discountFlat: withExtras ? Math.round(order.discountFlat || 0) : 0,
     taxCategory: order.taxCategory, interState: order.interState,
   });
   let discount = charges.discountAmount;
-  let taxable = charges.taxableAmount;
+  let taxable = charges.taxableAmount + reprints.reduce((s, r) => s + r.price, 0);
+  rows.push(...reprints);
 
   // The bill that completes the campaign's coverage settles it exactly.
   if (span && covered([...ranges, { start, end }], span.start, span.end)) {
@@ -307,4 +333,4 @@ function redraftFor(order, invoice) {
   return draftForRange(order, start, end, others, invoice.periodLabel || null, { roundingOnly: true });
 }
 
-module.exports = { billingPlan, periodsFor, draftForRange, draftForCustom, redraftFor, durationLabel, BILLABLE };
+module.exports = { reprintRows, billingPlan, periodsFor, draftForRange, draftForCustom, redraftFor, durationLabel, BILLABLE };

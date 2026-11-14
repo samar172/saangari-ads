@@ -52,7 +52,7 @@ async function computeProfitability({ companyId, from, to }) {
       company: { select: { name: true } },
       client: { select: { id: true, name: true, company: true } },
       printingPartner: { select: { id: true, name: true, ratePerSqft: true, materials: { select: { name: true, costPerSqft: true } } } },
-      items: { select: { status: true, site: { select: { sqft: true } } } },
+      items: { select: { status: true, prints: true, printMaterial: true, site: { select: { sqft: true } } } },
     },
     orderBy: { bookingDate: 'desc' },
   });

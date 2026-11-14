@@ -8,8 +8,25 @@
 // one flex). In per-site / by-media-type charging every site is one print.
 // When nothing is typed the order stores 0 and the server keeps using the same
 // auto figure, so it follows the sites if they change later.
-export function autoPartnerCost({ partner, materialName, sites, prints }) {
+export function autoPartnerCost({ partner, materialName, sites, prints, perSite }) {
   if (!partner) return { cost: 0, note: '', missing: '' };
+  // Per-site rows: Σ prints × that site's sqft × its own material's ₹/sqft.
+  if (Array.isArray(perSite)) {
+    const rate = (name) => {
+      const m = (partner.materials || []).find((x) => x.name === name);
+      return m?.costPerSqft > 0 ? m.costPerSqft : partner.ratePerSqft > 0 ? partner.ratePerSqft : 0;
+    };
+    let cost = 0, n = 0, sqft = 0, noRate = 0;
+    for (const r of perSite) {
+      const p = Math.max(0, Number(r.prints) || 0);
+      if (!p) continue;
+      const k = rate(r.material || materialName);
+      n += p; sqft += p * (r.sqft || 0);
+      if (k > 0) cost += p * (r.sqft || 0) * k; else noRate += 1;
+    }
+    if (cost > 0) return { cost: Math.round(cost), note: `${n} print${n === 1 ? '' : 's'} · ${Math.round(sqft)} sqft, each site at its own material${noRate ? ` (${noRate} site${noRate === 1 ? '' : 's'} without a ₹/sqft)` : ''}` };
+    return { cost: 0, note: '', missing: !perSite.length ? 'Add sites to work out the partner cost.' : !n ? 'No prints on any site.' : 'Pick a material (with a ₹/sqft) on the sites to work out the partner cost.' };
+  }
   const avg = sites.length ? sites.reduce((s, x) => s + (Number(x?.sqft) || 0), 0) / sites.length : 0;
   const n = Math.max(0, Number(prints) || 0);
   const sqft = Math.round(n * avg * 100) / 100;

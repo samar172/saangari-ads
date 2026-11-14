@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Tag, Download, Receipt, FileText, StopCircle, ArrowRightLeft, Camera, MapPin, Image as ImageIcon, Newspaper, Banknote, Check, Plus, Trash2, Pencil, ChevronRight, Send } from 'lucide-react';
+import { Printer, Tag, Download, Receipt, FileText, StopCircle, ArrowRightLeft, Camera, MapPin, Image as ImageIcon, Newspaper, Banknote, Check, Plus, Trash2, Pencil, ChevronRight, Send } from 'lucide-react';
 import dayjs from 'dayjs';
 import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
@@ -9,6 +9,7 @@ import { tdsAmountOf } from '../lib/tds';
 import { lockInfo, LockBadge, CancelInvoiceForm } from '../components/InvoiceLock';
 import BillPeriodPicker from '../components/BillPeriodPicker';
 import BillExtras from '../components/BillExtras';
+import { ReprintsTab } from '../components/Reprints';
 
 const PHASES = ['START', 'MID', 'END'];
 const KINDS = [['GPS', <><MapPin size={14} className="inline mr-1" /> GPS</>], ['NORMAL', <><ImageIcon size={14} className="inline mr-1" /> Normal</>], ['NEWSPAPER', <><Newspaper size={14} className="inline mr-1" /> Newspaper</>]];
@@ -22,6 +23,7 @@ export default function OrderDetail() {
   const { user } = useAuth();
   const [o, setO] = useState(null);
   const [tab, setTab] = useState('overview');
+  const [reprintOpen, setReprintOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [request, setRequest] = useState(null); // { action, label } → approval request modal
@@ -83,6 +85,9 @@ export default function OrderDetail() {
             <Banknote size={16} /> Settle in cash
           </button>
         )}
+        {can(user, 'editBooking') && !['QUOTATION', 'CANCELLED'].includes(o.status) && (
+          <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => { setTab('reprints'); setReprintOpen(true); }}><Printer size={16} /> Reprint</button>
+        )}
         {can(user, 'editCampaign') && (
           <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => navigate(`/orders/${id}/edit`)}><Pencil size={16} /> Edit</button>
         )}
@@ -106,7 +111,7 @@ export default function OrderDetail() {
       <WaitlistBanner o={o} isReviewer={isReviewer} onChanged={load} />
 
       <div className="card">
-        <OrderTabs o={o} user={user} busy={busy} changeStatus={changeStatus} onChanged={load} tab={tab} setTab={setTab} />
+        <OrderTabs o={o} user={user} busy={busy} changeStatus={changeStatus} onChanged={load} tab={tab} setTab={setTab} reprintOpen={reprintOpen} setReprintOpen={setReprintOpen} />
       </div>
 
       {confirmDelete && (
@@ -295,11 +300,11 @@ function DeleteOrderModal({ order, onClose, onDeleted }) {
 
 // The tabbed body of an order. Exported so the orders list can expand a row into
 // the exact same panel — one implementation, so the two can never drift apart.
-export function OrderTabs({ o, user, busy, changeStatus, onChanged, tab, setTab, compact }) {
+export function OrderTabs({ o, user, busy, changeStatus, onChanged, tab, setTab, compact, reprintOpen, setReprintOpen }) {
   return (
     <>
       <div className={`flex gap-1 overflow-x-auto border-b border-slate-200 px-2 pt-2 bg-slate-50/50 ${compact ? '' : 'rounded-t-xl'}`}>
-        {[['overview', 'Overview'], ['sites', `Sites (${o.items.length})`], ['monitoring', `Monitoring (${o.items.reduce((a, it) => a + it.photos.length, 0)})`], ['invoices', `Invoices (${o.invoices?.length || 0})`], ['payments', 'Payments'], ['timeline', 'Timeline']].map(([k, l]) => (
+        {[['overview', 'Overview'], ['sites', `Sites (${o.items.length})`], ['monitoring', `Monitoring (${o.items.reduce((a, it) => a + it.photos.length, 0)})`], ['invoices', `Invoices (${o.invoices?.length || 0})`], ['payments', 'Payments'], ['reprints', `Reprints${o.reprints?.length ? ` (${o.reprints.length})` : ''}`], ['timeline', 'Timeline']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`shrink-0 px-4 ${compact ? 'py-2 text-xs' : 'py-3 text-sm'} font-medium border-b-2 -mb-px transition ${tab === k ? 'border-brand text-brand bg-white rounded-t-lg' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{l}</button>
         ))}
@@ -315,6 +320,7 @@ export function OrderTabs({ o, user, busy, changeStatus, onChanged, tab, setTab,
         {tab === 'monitoring' && <MonitoringTab o={o} onChanged={onChanged} />}
         {tab === 'invoices' && <InvoicesPanel o={o} user={user} onChanged={onChanged} />}
         {tab === 'payments' && <Payments o={o} user={user} onChanged={onChanged} />}
+        {tab === 'reprints' && <ReprintsTab o={o} onChanged={onChanged} openNew={reprintOpen} setOpenNew={setReprintOpen} />}
         {tab === 'timeline' && <TimelineTab o={o} />}
       </div>
     </>

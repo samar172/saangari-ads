@@ -1,4 +1,5 @@
 const { executePrintCorrection } = require('../utils/printingRecon');
+const { approveFreeReprint, rejectFreeReprint } = require('../utils/reprints');
 const router = require('express').Router();
 const prisma = require('../db');
 const { requireRole, requirePermission } = require('../middleware/auth');
@@ -9,7 +10,7 @@ const { applyWaitlistOverride } = require('../utils/waitlist');
 const { advanceCampaignLifecycle } = require('../utils/lifecycle');
 const { logActivity } = require('../utils/activity');
 
-const ACTIONS = ['DELETE_ORDER', 'CANCEL_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'EDIT_PAYMENT', 'CONFIRM_ORDER', 'GENERATE_INVOICE', 'CANCEL_INVOICE', 'OVERRIDE_WAITLIST', 'UNLOCK_INVOICE', 'PRINT_CORRECTION', 'OTHER'];
+const ACTIONS = ['DELETE_ORDER', 'CANCEL_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'EDIT_PAYMENT', 'CONFIRM_ORDER', 'GENERATE_INVOICE', 'CANCEL_INVOICE', 'OVERRIDE_WAITLIST', 'UNLOCK_INVOICE', 'PRINT_CORRECTION', 'REPRINT_FREE', 'OTHER'];
 const ACTIVE = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
 
 // Release a site back to AVAILABLE unless another live booking still holds it.
@@ -227,6 +228,11 @@ async function execute(request, approver) {
       await cancelInvoice({ invoiceId: id, reason: request.reason || request.payload?.reason, user: approver });
       return;
     }
+    case 'REPRINT_FREE': {
+      // A free reprint (we bear the partner cost) cleared to print.
+      await approveFreeReprint(request, approver);
+      return;
+    }
     case 'PRINT_CORRECTION': {
       // Recon → printing cost-side correction (partner / material / partner cost).
       await executePrintCorrection(request, approver);
@@ -278,7 +284,7 @@ router.post('/:id/approve', requirePermission('approvals', 'edit'), async (req, 
 
   // Record the approved action in the activity feed (a cancellation, a payment
   // edit, a cash settlement, …). orderId only when the request was about an order.
-  const ACTIVITY_TYPE = { CANCEL_ORDER: 'CANCEL', EDIT_PAYMENT: 'PAYMENT_EDIT', DELETE_ORDER: 'CANCEL', CONFIRM_ORDER: 'BOOKING', GENERATE_INVOICE: 'INVOICE', CANCEL_INVOICE: 'INVOICE_CANCEL', OVERRIDE_WAITLIST: 'CAMPAIGN_EDIT', UNLOCK_INVOICE: 'INVOICE_UNLOCK', PRINT_CORRECTION: 'CAMPAIGN_EDIT' };
+  const ACTIVITY_TYPE = { CANCEL_ORDER: 'CANCEL', EDIT_PAYMENT: 'PAYMENT_EDIT', DELETE_ORDER: 'CANCEL', CONFIRM_ORDER: 'BOOKING', GENERATE_INVOICE: 'INVOICE', CANCEL_INVOICE: 'INVOICE_CANCEL', OVERRIDE_WAITLIST: 'CAMPAIGN_EDIT', UNLOCK_INVOICE: 'INVOICE_UNLOCK', PRINT_CORRECTION: 'CAMPAIGN_EDIT', REPRINT_FREE: 'CAMPAIGN_EDIT' };
   logActivity({
     type: ACTIVITY_TYPE[request.action] || 'CAMPAIGN_EDIT', user: req.user,
     orderId: request.entityType === 'order' ? request.entityId : undefined,
@@ -298,6 +304,7 @@ router.post('/:id/reject', requirePermission('approvals', 'edit'), async (req, r
     data: { status: 'REJECTED', reviewedById: req.user.id, reviewedAt: new Date(), reviewNote: req.body?.reviewNote || null },
     include: requestInclude,
   });
+  if (request.action === 'REPRINT_FREE') await rejectFreeReprint(request, req.user, req.body?.reviewNote).catch(() => {});
   res.json(updated);
 });
 

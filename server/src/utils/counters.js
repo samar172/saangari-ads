@@ -41,4 +41,9 @@ async function nextQuoteNo(date = new Date()) {
   return `BKN/${fy}/PR/${n}`;
 }
 
-module.exports = { nextOrderNo, nextBookingNo, nextInvoiceNo, nextQuoteNo, financialYear };
+async function nextReprintNo() {
+  const n = await nextNumber('REPRINT');
+  return `RP-${String(n).padStart(4, '0')}`;
+}
+
+module.exports = { nextOrderNo, nextBookingNo, nextInvoiceNo, nextQuoteNo, nextReprintNo, financialYear };

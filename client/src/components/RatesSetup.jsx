@@ -11,7 +11,7 @@ import api from '../api';
 export const EMPTY_SETTINGS = {
   mediaRates: {},
   charges: [],
-  booking: { chargeMode: 'PRINT', mountings: 1, printingPartnerId: null, printMaterial: null, paymentTerms: 'ADVANCE', billingCycle: '', monitoring: true, taxCategory: null },
+  booking: { chargeMode: 'SITE', mountings: 1, printingPartnerId: null, printMaterial: null, paymentTerms: 'ADVANCE', billingCycle: '', monitoring: true, taxCategory: null },
   quotation: { validityDays: 0, signatory: '', signatoryTitle: '', phone: '', paymentTerms: null },
 };
 
@@ -20,7 +20,7 @@ export function withSettingDefaults(s) {
   return {
     mediaRates: x.mediaRates || {},
     charges: Array.isArray(x.charges) ? x.charges : [],
-    booking: { ...EMPTY_SETTINGS.booking, ...(x.booking || {}) },
+    booking: { ...EMPTY_SETTINGS.booking, ...(x.booking || {}), ...(x.booking?.chargeMode === 'TYPE' ? { chargeMode: 'SITE' } : {}) },
     quotation: { ...EMPTY_SETTINGS.quotation, ...(x.quotation || {}) },
   };
 }
@@ -105,7 +105,7 @@ export default function RatesSetup({ value, onChange, gstLocked }) {
         <div className="grid sm:grid-cols-2 gap-3">
           <label className="block"><span className="label">Charge printing &amp; mounting</span>
             <select className="input" value={s.booking.chargeMode} onChange={(e) => setB('chargeMode', e.target.value)}>
-              <option value="PRINT">Per print</option><option value="TYPE">By media type</option><option value="SITE">Per site</option>
+              <option value="SITE">On each site (prints, material, rates per site)</option><option value="PRINT">Per print</option>
             </select>
           </label>
           <label className="block"><span className="label">No. of mountings</span>

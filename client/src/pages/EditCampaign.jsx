@@ -78,6 +78,8 @@ export default function EditCampaign() {
           displayNotes: b.displayNotes || '',
           printCharge: o.chargesPerSite ? String(b.printCharge || 0) : undefined,
           mountCharge: o.chargesPerSite ? String(b.mountCharge || 0) : undefined,
+          prints: o.chargesPerSite ? (b.prints == null ? '' : String(b.prints)) : undefined,
+          printMaterial: o.chargesPerSite ? (b.printMaterial || '') : undefined,
         };
       }));
       setAddOns((o.addOns || []).map((a) => ({ label: a.label, amount: a.amount })));
@@ -92,6 +94,9 @@ export default function EditCampaign() {
     sites: lines.map((l) => siteById[l.siteId]).filter(Boolean),
     // Per print → the prints entered; per site / by media type → every site.
     prints: form?.chargeMode === 'PRINT' ? form?.noOfPrints : lines.filter((l) => siteById[l.siteId]).length,
+    perSite: form?.chargeMode === 'SITE' && lines.some((l) => (l.prints !== '' && l.prints != null) || l.printMaterial)
+      ? lines.filter((l) => siteById[l.siteId]).map((l) => ({ prints: l.prints === '' || l.prints == null ? 1 : l.prints, material: l.printMaterial, sqft: siteById[l.siteId].sqft }))
+      : undefined,
   });
 
   // Dates to seed newly-added lines with: reuse the first existing line, else today+30.
@@ -201,6 +206,7 @@ export default function EditCampaign() {
           displayNotes: l.displayNotes || undefined,
           printCharge: form.chargeMode === 'SITE' ? Number(l.printCharge) || 0 : undefined,
           mountCharge: form.chargeMode === 'SITE' ? Number(l.mountCharge) || 0 : undefined,
+          ...(form.chargeMode === 'SITE' ? { prints: l.prints === '' || l.prints == null ? null : Number(l.prints) || 0, printMaterial: l.printMaterial || null } : {}),
         })),
       });
       navigate(`/orders/${data.id}`);
@@ -290,16 +296,31 @@ export default function EditCampaign() {
                         )}
                         <div><div className="text-[10px] text-slate-400 mb-0.5">Days</div><input type="text" className="input py-1 text-xs bg-slate-50" value={days > 0 ? days : ''} readOnly /></div>
                       </div>
-                      {form.chargeMode === 'SITE' && (
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
-                          {[['printCharge', 'Printing ₹'], ['mountCharge', 'Mounting ₹']].map(([k, label]) => (
-                            <div key={k}>
-                              <div className="text-[10px] text-slate-400 mb-0.5">{label}</div>
-                              <input type="number" min="0" className="input py-1 text-xs" value={l[k] ?? ''} onChange={(e) => updateLine(i, k, e.target.value)} />
+                      {form.chargeMode === 'SITE' && (() => {
+                        const partner = partners.find((p) => String(p.id) === String(form.printingPartnerId));
+                        const mats = (partner?.materials || []).filter((m) => m.active || m.name === l.printMaterial);
+                        return (
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+                            <div>
+                              <div className="text-[10px] text-slate-400 mb-0.5">Prints</div>
+                              <input type="number" min="0" className="input py-1 text-xs" placeholder="1" value={l.prints ?? ''} onChange={(e) => updateLine(i, 'prints', e.target.value)} />
                             </div>
-                          ))}
-                        </div>
-                      )}
+                            <div>
+                              <div className="text-[10px] text-slate-400 mb-0.5">Material</div>
+                              <select className="input py-1 text-xs" value={l.printMaterial || ''} disabled={!partner} onChange={(e) => updateLine(i, 'printMaterial', e.target.value)}>
+                                <option value="">{form.printMaterial ? `Default (${form.printMaterial})` : 'Pick…'}</option>
+                                {mats.map((m) => <option key={m.id} value={m.name}>{m.name}{m.costPerSqft ? ` · ₹${m.costPerSqft}/sqft` : ''}</option>)}
+                              </select>
+                            </div>
+                            {[['printCharge', 'Printing ₹'], ['mountCharge', 'Mounting ₹']].map(([k, label]) => (
+                              <div key={k}>
+                                <div className="text-[10px] text-slate-400 mb-0.5">{label}</div>
+                                <input type="number" min="0" className="input py-1 text-xs" value={l[k] ?? ''} onChange={(e) => updateLine(i, k, e.target.value)} />
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                       <div className="mt-2">
                         <div className="text-[10px] text-slate-400 mb-0.5">Display notes <span className="text-slate-300">(prints on the billing plan)</span></div>
                         <input className="input py-1 text-xs" value={l.displayNotes || ''} onChange={(e) => updateLine(i, 'displayNotes', e.target.value)} />

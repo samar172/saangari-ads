@@ -34,6 +34,7 @@ function totalsAfterOverride(order, lines) {
   return applyOrderCharges({
     rentalSubtotal, addOnTotal: order.addOnTotal || 0, printingTotal: order.printingTotal || 0, mountingTotal: order.mountingCost || 0,
     discountPct: order.discountPct || 0, discountFlat: order.discountFlat || 0, taxCategory: order.taxCategory, interState: order.interState,
+    reprintTotal: order.reprintTotal || 0,
   });
 }
 
