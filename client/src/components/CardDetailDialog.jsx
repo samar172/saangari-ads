@@ -1,128 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import dayjs from 'dayjs';
-import { Search, ArrowUp, ArrowDown, ExternalLink } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
 import api from '../api';
 import DetailDialog, { DETAIL_GRID } from './DetailDialog';
 import { Badge, Money, Spinner } from './ui';
+import { Section, Breakdown, DataTable, Figure, orderLink, fmtDate } from './detailKit';
+import { REPORT_CARDS } from './reportCardBodies';
+import { SITE_CARDS } from './siteCardBodies';
+import { BA_CARDS } from './bookingAnalysisCardBodies';
 
-// Dashboard card drill-downs: one dialog per stat tile, fed by
-// /reports/card-detail with the same company/period as the tile, so the
-// headline here always equals the figure on the card.
-
-const fmtDate = (d) => (d ? dayjs(d).format('D MMM YY') : '—');
-const fmtMonth = (k) => dayjs(`${k}-01`).format('MMM YY');
-const orderLink = (id, no) => (id ? <Link to={`/orders/${id}`} className="font-medium text-brand hover:underline">{no}</Link> : (no || '—'));
-
-function Section({ title, note, className = '', children }) {
-  return (
-    <div className={`card min-w-0 p-4 ${className}`}>
-      <div className="mb-2 text-sm font-semibold text-slate-800">{title}</div>
-      {note && <div className="-mt-1 mb-2 text-xs text-slate-500">{note}</div>}
-      {children}
-    </div>
-  );
-}
-
-// label | value | share bar — for the by-business / by-month style splits.
-function Breakdown({ rows, money = true, month = false, countLabel }) {
-  if (!rows?.length) return <div className="py-4 text-center text-sm text-slate-400">Nothing in this period.</div>;
-  const total = rows.reduce((s, r) => s + r.value, 0) || 1;
-  return (
-    <div className="space-y-2">
-      {rows.map((r) => (
-        <div key={r.key}>
-          <div className="flex items-baseline justify-between gap-2 text-sm">
-            <span className="truncate text-slate-700">{month ? fmtMonth(r.label) : r.label}</span>
-            <span className="whitespace-nowrap font-medium text-slate-800">
-              {money ? <Money value={r.value} /> : r.value}
-              {countLabel && <span className="ml-1.5 text-xs font-normal text-slate-400">{r.count} {countLabel}</span>}
-            </span>
-          </div>
-          <div className="mt-0.5 h-1.5 rounded-full bg-slate-100">
-            <div className="h-1.5 rounded-full bg-brand/70" style={{ width: `${Math.max(0, (r.value / total) * 100)}%` }} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Searchable, sortable table. columns: [{ key, label, money?, num?, date?, render? }]
-function DataTable({ rows, columns, defaultSort, total, empty = 'No records.' }) {
-  const [q, setQ] = useState('');
-  const [sort, setSort] = useState(defaultSort || { key: columns[0].key, dir: 'asc' });
-  const shown = useMemo(() => {
-    const term = q.trim().toLowerCase();
-    const filtered = term
-      ? rows.filter((r) => columns.some((c) => String(r[c.key] ?? '').toLowerCase().includes(term)))
-      : rows;
-    const col = columns.find((c) => c.key === sort.key);
-    const val = (r) => (col?.date ? new Date(r[sort.key] || 0).getTime() : r[sort.key] ?? '');
-    return [...filtered].sort((a, b) => {
-      const x = val(a), y = val(b);
-      const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y));
-      return sort.dir === 'asc' ? c : -c;
-    });
-  }, [rows, columns, q, sort]);
-  const toggle = (key) => setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }));
-  const right = (c) => c.money || c.num;
-
-  return (
-    <div>
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <div className="relative w-full sm:w-64">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input className="input py-1.5 pl-8" placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
-        </div>
-        <span className="text-xs text-slate-500">
-          {shown.length} shown{total != null && total > rows.length ? ` · first ${rows.length} of ${total}` : ''}
-        </span>
-      </div>
-      {shown.length === 0 ? (
-        <div className="py-6 text-center text-sm text-slate-400">{empty}</div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-                {columns.map((c) => (
-                  <th key={c.key} className={`whitespace-nowrap px-2 py-2 font-semibold ${right(c) ? 'text-right' : ''}`}>
-                    <button onClick={() => toggle(c.key)} className="inline-flex items-center gap-0.5 hover:text-slate-800">
-                      {c.label}
-                      {sort.key === c.key && (sort.dir === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />)}
-                    </button>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {shown.map((r, i) => (
-                <tr key={r.id ?? i} className="hover:bg-slate-50">
-                  {columns.map((c) => (
-                    <td key={c.key} className={`whitespace-nowrap px-2 py-1.5 ${right(c) ? 'text-right tabular-nums' : 'text-slate-700'}`}>
-                      {c.render ? c.render(r) : c.money ? <Money value={r[c.key]} /> : c.date ? fmtDate(r[c.key]) : (r[c.key] ?? '—')}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Figure({ label, value, accent = 'text-slate-800', sub }) {
-  return (
-    <div className="card min-w-0 p-3">
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
-      <div className={`mt-0.5 text-lg font-bold ${accent}`}>{value}</div>
-      {sub && <div className="text-xs text-slate-500">{sub}</div>}
-    </div>
-  );
-}
+// Stat-card drill-downs: one dialog per tile, fed by a detail endpoint with the
+// same filters as the tile, so the headline here always equals the figure on
+// the card. Dashboard cards are below; Reports, Site-wise and Booking Analysis
+// cards are registered from their own body files.
 
 // ── Booked value ──────────────────────────────────────────────────────────────
 function BookedBody({ d }) {
@@ -344,6 +234,9 @@ function OrdersBody({ d }) {
 }
 
 const CARDS = {
+  ...REPORT_CARDS,
+  ...SITE_CARDS,
+  ...BA_CARDS,
   booked: {
     title: 'Booked Value', to: '/orders', Body: BookedBody, fmt: (v) => <Money value={v} />,
     explain: 'Campaigns booked in the period (by booking date), incl. GST — rent, printing, mounting and extras, less discount. Quotations and cancelled excluded.',
@@ -374,26 +267,30 @@ export default function CardDetailDialog({ card, onClose, params }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const cfg = CARDS[card];
+  const paramKey = JSON.stringify(params || {});
 
   useEffect(() => {
-    if (!card) return;
+    if (!card || !cfg) return undefined;
+    let alive = true;
     setData(null); setError(null);
-    api.get('/reports/card-detail', { params: { ...params, card } })
-      .then((r) => setData(r.data))
-      .catch((e) => setError(e.response?.data?.error || 'Could not load the details.'));
-  }, [card, params.companyId, params.from, params.to]); // eslint-disable-line react-hooks/exhaustive-deps
+    api.get(cfg.endpoint || '/reports/card-detail', { params: { ...params, card } })
+      .then((r) => { if (alive) setData(r.data); })
+      .catch((e) => { if (alive) setError(e.response?.data?.error || 'Could not load the details.'); });
+    return () => { alive = false; };
+  }, [card, paramKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!cfg) return null;
   const { Body } = cfg;
+  const period = cfg.asOfNow ? 'as of today' : cfg.allTime || (!params.from && !params.to) ? 'all time' : `${fmtDate(params.from)} – ${fmtDate(params.to)}`;
   return (
     <DetailDialog
       open={!!card} onClose={onClose} title={cfg.title}
       headline={data && data.card === card ? cfg.fmt(data.headline) : null}
-      explain={<>{cfg.explain} <span className="whitespace-nowrap text-slate-400">({cfg.asOfNow ? 'as of today' : `${fmtDate(params.from)} – ${fmtDate(params.to)}`})</span></>}
-      footer={<Link to={cfg.to} className="btn-ghost text-sm">View all <ExternalLink size={14} /></Link>}
+      explain={<>{cfg.explain} <span className="whitespace-nowrap text-slate-400">({period}{cfg.filterNote ? cfg.filterNote(params) : ''})</span></>}
+      footer={cfg.to ? <Link to={typeof cfg.to === 'function' ? cfg.to(data) : cfg.to} className="btn-ghost text-sm">{cfg.toLabel || 'View all'} <ExternalLink size={14} /></Link> : null}
     >
       {error ? <div className="py-10 text-center text-sm text-red-600">{error}</div>
-        : !data || data.card !== card ? <Spinner /> : <Body d={data} />}
+        : !data || data.card !== card ? <Spinner /> : <Body d={data} card={card} params={params} />}
     </DetailDialog>
   );
 }

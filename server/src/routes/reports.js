@@ -1,18 +1,12 @@
 const router = require('express').Router();
 const prisma = require('../db');
-const { requireRole, requirePermission } = require('../middleware/auth');
-const { orderPrintCost } = require('../utils/printingCost');
+const { requirePermission } = require('../middleware/auth');
 const { computeBookingAnalysis } = require('../utils/bookingAnalysis');
-
-const NON_CANCELLED = { notIn: ['CANCELLED'] };
-
-// Parse ?from&to into a Prisma date filter (inclusive of the whole `to` day).
-function dateRange(from, to) {
-  const r = {};
-  if (from) r.gte = new Date(from);
-  if (to) { const d = new Date(to); d.setHours(23, 59, 59, 999); r.lte = d; }
-  return Object.keys(r).length ? r : null;
-}
+const {
+  NON_CANCELLED, dateRange, monthKey, clientName, bucketAdd, bucketRows,
+  computeProfitability, computeReceivables, computeSiteWise,
+} = require('../utils/reportMetrics');
+const { reportCardDetail, siteCardDetail, bookingAnalysisCardDetail } = require('../utils/reportCards');
 
 // Super Admin analytics: occupancy, revenue, category profitability, GST, repeat clients
 router.get('/overview', requirePermission('reports', 'view'), async (req, res) => {
@@ -216,118 +210,20 @@ router.get('/top-clients', requirePermission('reports', 'view'), async (req, res
 // Profitability: revenue (ex-GST) vs the costs we actually track (printing paid
 // to partners) and discounts given. Rental/mounting have no vendor cost recorded,
 // so we surface printing margin + discount leakage + a contribution proxy, broken
-// down by category and month. Booking-date scoped.
+// down by category and month. Booking-date scoped. (utils/reportMetrics.js)
 router.get('/profitability', requirePermission('reports', 'view'), async (req, res) => {
   const { companyId, from, to } = req.query;
-  const where = { status: { in: ['CONFIRMED', 'LIVE', 'COMPLETED'] } };
-  if (companyId) where.companyId = Number(companyId);
-  const range = dateRange(from, to);
-  if (range) where.bookingDate = range;
-
-  const orders = await prisma.order.findMany({
-    where,
-    select: {
-      grandTotal: true, taxableAmount: true, printingTotal: true, printCost: true,
-      discountAmount: true, mountingCost: true, bookingDate: true, printMaterial: true, noOfPrints: true, chargesPerSite: true,
-      category: { select: { name: true } },
-      printingPartner: { select: { ratePerSqft: true, materials: { select: { name: true, costPerSqft: true } } } },
-      items: { select: { status: true, site: { select: { sqft: true } } } },
-    },
-  });
-
-  let revenueExGst = 0, grossBooked = 0, printingCharged = 0, printingCost = 0, discounts = 0, mountingCharged = 0;
-  const byCat = {}; // { cat: { revenue, printingMargin } }
-  const byMonth = {}; // { 'YYYY-MM': { revenue, printingMargin } }
-  for (const o of orders) {
-    const { cost } = orderPrintCost(o, o.printingPartner);
-    const pMargin = Math.round((o.printingTotal || 0) - cost);
-    revenueExGst += o.taxableAmount || 0;
-    grossBooked += o.grandTotal || 0;
-    printingCharged += o.printingTotal || 0;
-    printingCost += cost;
-    discounts += o.discountAmount || 0;
-    mountingCharged += o.mountingCost || 0;
-    const cat = o.category?.name || 'Uncategorised';
-    byCat[cat] = byCat[cat] || { category: cat, revenue: 0, printingMargin: 0 };
-    byCat[cat].revenue += o.taxableAmount || 0;
-    byCat[cat].printingMargin += pMargin;
-    const mk = `${new Date(o.bookingDate).getFullYear()}-${String(new Date(o.bookingDate).getMonth() + 1).padStart(2, '0')}`;
-    byMonth[mk] = byMonth[mk] || { period: mk, revenue: 0, printingMargin: 0 };
-    byMonth[mk].revenue += o.taxableAmount || 0;
-    byMonth[mk].printingMargin += pMargin;
-  }
-
-  res.json({
-    revenueExGst: Math.round(revenueExGst),
-    grossBooked: Math.round(grossBooked),
-    printingCharged: Math.round(printingCharged),
-    printingCost: Math.round(printingCost),
-    printingMargin: Math.round(printingCharged - printingCost),
-    discounts: Math.round(discounts),
-    mountingCharged: Math.round(mountingCharged),
-    // Contribution after the costs we can see (printing paid out). Rental &
-    // mounting vendor costs are not tracked, so this is an upper bound, not net profit.
-    contribution: Math.round(revenueExGst - printingCost),
-    orders: orders.length,
-    byCategory: Object.values(byCat).map((c) => ({ ...c, revenue: Math.round(c.revenue), printingMargin: Math.round(c.printingMargin) })).sort((a, b) => b.revenue - a.revenue),
-    byMonth: Object.values(byMonth).map((m) => ({ ...m, revenue: Math.round(m.revenue), printingMargin: Math.round(m.printingMargin) })).sort((a, b) => a.period.localeCompare(b.period)),
-  });
+  const { rows, ...summary } = await computeProfitability({ companyId, from, to }); // eslint-disable-line no-unused-vars
+  res.json(summary);
 });
 
 // Accounts-receivable aging + DSO. Aging is always "as of now": each receivable
 // order (invoiced more than paid) is aged by its earliest live invoice's due date.
 router.get('/receivables', requirePermission('reports', 'view'), async (req, res) => {
-  const { companyId } = req.query;
-  const where = { status: { in: ['CONFIRMED', 'LIVE', 'COMPLETED'] } };
-  if (companyId) where.companyId = Number(companyId);
-
-  const orders = await prisma.order.findMany({
-    where,
-    select: {
-      id: true, orderNo: true,
-      client: { select: { name: true, company: true } },
-      payments: { select: { amount: true } },
-      invoices: { select: { total: true, status: true, issuedAt: true, dueDate: true } },
-    },
-  });
-
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const DAY = 86400000;
-  const buckets = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
-  let totalOutstanding = 0;
-  const overdue = [];
-  // For DSO: total invoiced in the last 365 days (credit sales denominator).
-  let invoicedLast365 = 0;
-  const yearAgo = new Date(today.getTime() - 365 * DAY);
-
-  for (const o of orders) {
-    const live = o.invoices.filter((i) => i.status !== 'CANCELLED');
-    const invoiced = live.reduce((s, i) => s + (i.total || 0), 0);
-    for (const i of live) if (i.issuedAt && new Date(i.issuedAt) >= yearAgo) invoicedLast365 += i.total || 0;
-    const paid = o.payments.reduce((s, p) => s + p.amount, 0);
-    const outstanding = Math.round(invoiced - paid);
-    if (outstanding <= 0) continue;
-    // Age by the oldest live invoice's due date (fallback to issue date).
-    const dates = live.map((i) => new Date(i.dueDate || i.issuedAt)).filter((d) => !Number.isNaN(d.getTime()));
-    const ageDate = dates.length ? new Date(Math.min(...dates.map((d) => +d))) : today;
-    const daysPast = Math.floor((today - ageDate) / DAY);
-    if (daysPast <= 0) buckets.current += outstanding;
-    else if (daysPast <= 30) buckets.d1_30 += outstanding;
-    else if (daysPast <= 60) buckets.d31_60 += outstanding;
-    else if (daysPast <= 90) buckets.d61_90 += outstanding;
-    else buckets.d90plus += outstanding;
-    totalOutstanding += outstanding;
-    if (daysPast > 0) overdue.push({ orderId: o.id, orderNo: o.orderNo, client: o.client.company?.trim() || o.client.name, outstanding, daysPast });
-  }
-
-  const dso = invoicedLast365 > 0 ? Math.round(totalOutstanding / (invoicedLast365 / 365)) : 0;
-  overdue.sort((a, b) => b.outstanding - a.outstanding);
+  const r = await computeReceivables({ companyId: req.query.companyId });
   res.json({
-    buckets: Object.fromEntries(Object.entries(buckets).map(([k, v]) => [k, Math.round(v)])),
-    totalOutstanding: Math.round(totalOutstanding),
-    dso,
-    overdue: overdue.slice(0, 25),
-    overdueCount: overdue.length,
+    buckets: r.buckets, totalOutstanding: r.totalOutstanding, dso: r.dso,
+    overdue: r.overdue.slice(0, 25), overdueCount: r.overdueCount,
   });
 });
 
@@ -336,108 +232,15 @@ router.get('/receivables', requirePermission('reports', 'view'), async (req, res
 // and free text. Returns every active site (so unbooked inventory is visible too)
 // plus zone/type rollups and filter option lists for the UI.
 router.get('/site-wise', requirePermission('reports', 'view'), async (req, res) => {
-  const { companyId, from, to, zone, type, q, bookedOnly } = req.query;
-  const range = dateRange(from, to);
+  const { bookings, mediaLabel, ...data } = await computeSiteWise(req.query); // eslint-disable-line no-unused-vars
+  res.json(data);
+});
 
-  const siteWhere = { active: true };
-  if (zone) siteWhere.zone = zone;
-  if (type) siteWhere.type = type;
-  if (q && q.trim()) {
-    const term = q.trim();
-    siteWhere.OR = [
-      { code: { contains: term, mode: 'insensitive' } },
-      { location: { contains: term, mode: 'insensitive' } },
-      { city: { contains: term, mode: 'insensitive' } },
-    ];
-  }
-
-  const bookingWhere = {
-    status: NON_CANCELLED,
-    order: {
-      status: NON_CANCELLED,
-      ...(companyId ? { companyId: Number(companyId) } : {}),
-      ...(range ? { bookingDate: range } : {}),
-    },
-  };
-
-  const [sites, bookings, mediaTypes] = await Promise.all([
-    prisma.site.findMany({
-      where: siteWhere,
-      select: { id: true, code: true, location: true, city: true, zone: true, type: true, imageUrl: true, monthlyRate: true, status: true },
-      orderBy: { code: 'asc' },
-    }),
-    prisma.booking.findMany({ where: bookingWhere, select: { siteId: true, subtotal: true, days: true, startDate: true } }),
-    prisma.mediaType.findMany({ select: { code: true, label: true } }),
-  ]);
-
-  const mediaLabel = Object.fromEntries(mediaTypes.map((m) => [m.code, m.label]));
-
-  // Aggregate bookings by site.
-  const agg = {};
-  for (const b of bookings) {
-    const a = (agg[b.siteId] = agg[b.siteId] || { revenue: 0, bookings: 0, days: 0 });
-    a.revenue += b.subtotal || 0;
-    a.bookings += 1;
-    a.days += b.days || 0;
-  }
-
-  let rows = sites.map((s) => ({
-    siteId: s.id, code: s.code, location: s.location, city: s.city, zone: s.zone,
-    type: s.type, typeLabel: mediaLabel[s.type] || s.type, imageUrl: s.imageUrl,
-    monthlyRate: s.monthlyRate, status: s.status,
-    revenue: Math.round(agg[s.id]?.revenue || 0),
-    bookings: agg[s.id]?.bookings || 0,
-    days: agg[s.id]?.days || 0,
-  }));
-  if (bookedOnly === 'true' || bookedOnly === '1') rows = rows.filter((r) => r.bookings > 0);
-
-  // Zone / type rollups for the charts.
-  const zoneMap = {}, typeMap = {};
-  for (const r of rows) {
-    const z = (zoneMap[r.zone || '—'] = zoneMap[r.zone || '—'] || { zone: r.zone || '—', revenue: 0, bookings: 0 });
-    z.revenue += r.revenue; z.bookings += r.bookings;
-    const t = (typeMap[r.type] = typeMap[r.type] || { type: r.type, label: r.typeLabel, revenue: 0, bookings: 0 });
-    t.revenue += r.revenue; t.bookings += r.bookings;
-  }
-
-  // Month-wise comparison: revenue / bookings / days per calendar month (by the
-  // booking's display start), scoped to the sites matching the current filters.
-  const siteIds = new Set(sites.map((s) => s.id));
-  const monthMap = {};
-  for (const b of bookings) {
-    if (!siteIds.has(b.siteId) || !b.startDate) continue;
-    const d = new Date(b.startDate);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    const m = (monthMap[key] = monthMap[key] || { month: key, revenue: 0, bookings: 0, days: 0 });
-    m.revenue += b.subtotal || 0;
-    m.bookings += 1;
-    m.days += b.days || 0;
-  }
-  const byMonth = Object.values(monthMap)
-    .map((m) => ({ ...m, revenue: Math.round(m.revenue) }))
-    .sort((a, b) => a.month.localeCompare(b.month));
-
-  const summary = {
-    siteCount: rows.length,
-    bookedSites: rows.filter((r) => r.bookings > 0).length,
-    totalRevenue: rows.reduce((s, r) => s + r.revenue, 0),
-    totalBookings: rows.reduce((s, r) => s + r.bookings, 0),
-    totalDays: rows.reduce((s, r) => s + r.days, 0),
-  };
-
-  // Filter option lists (from all active sites, unaffected by current filters).
-  const allSites = await prisma.site.findMany({ where: { active: true }, select: { zone: true, type: true } });
-  const zones = [...new Set(allSites.map((s) => s.zone).filter(Boolean))].sort();
-  const types = [...new Set(allSites.map((s) => s.type))].sort().map((code) => ({ code, label: mediaLabel[code] || code }));
-
-  res.json({
-    sites: rows,
-    summary,
-    byZone: Object.values(zoneMap).sort((a, b) => b.revenue - a.revenue),
-    byType: Object.values(typeMap).sort((a, b) => b.revenue - a.revenue),
-    byMonth,
-    filters: { zones, types },
-  });
+// Site-wise report tile drill-down (same filters as /site-wise).
+router.get('/site-wise/detail', requirePermission('reports', 'view'), async (req, res) => {
+  const out = await siteCardDetail(req.query.card, req.query);
+  if (!out) return res.status(400).json({ error: 'Unknown card' });
+  res.json(out);
 });
 
 // Dashboard card drill-down: the records behind one /overview card, scoped by the
@@ -446,19 +249,6 @@ router.get('/site-wise', requirePermission('reports', 'view'), async (req, res) 
 // of now), so the dialog's headline always equals the card. Long lists are capped.
 const DETAIL_CAP = 300;
 const BILLABLE_LINES = ['TENTATIVE', 'CONFIRMED', 'LIVE', 'COMPLETED', 'STOPPED'];
-const monthKey = (d) => `${new Date(d).getFullYear()}-${String(new Date(d).getMonth() + 1).padStart(2, '0')}`;
-const clientName = (c) => c?.company?.trim() || c?.name || 'Unknown';
-
-// Add `amount` to a keyed bucket, counting rows too; returns sorted rows.
-function bucketAdd(map, key, label, amount) {
-  const b = (map[key] = map[key] || { key, label, value: 0, count: 0 });
-  b.value += amount || 0;
-  b.count += 1;
-}
-const bucketRows = (map, byKey) => Object.values(map)
-  .map((b) => ({ ...b, value: Math.round(b.value) }))
-  .sort(byKey ? (a, b) => a.key.localeCompare(b.key) : (a, b) => b.value - a.value);
-
 router.get('/card-detail', requirePermission('reports', 'view'), async (req, res) => {
   const { card, companyId, from, to } = req.query;
   const range = dateRange(from, to);
@@ -467,6 +257,11 @@ router.get('/card-detail', requirePermission('reports', 'view'), async (req, res
   if (companyId) { orderWhere.companyId = Number(companyId); paymentWhere.companyId = Number(companyId); }
   if (range) { orderWhere.bookingDate = range; paymentWhere.receivedAt = range; }
   const confirmedWhere = { ...orderWhere, status: { notIn: ['CANCELLED', 'QUOTATION'] } };
+
+  // Reports-page cards (components of booked value, profitability, receivables
+  // aging, GST/TDS, clients, top media type) live in utils/reportCards.js.
+  const more = await reportCardDetail(card, { companyId, from, to, orderWhere, confirmedWhere, paymentWhere });
+  if (more) return res.json(more);
 
   if (card === 'booked') {
     const orders = await prisma.order.findMany({
@@ -707,6 +502,14 @@ router.get('/booking-analysis', requirePermission('bookingAnalysis', 'view'), as
   const data = await computeBookingAnalysis({ companyId, from, to, category, customer, zone, mediaType, paymentStatus, paymentTerms });
   delete data.lines; // raw lines are for the Excel export only
   res.json(data);
+});
+
+// Booking Analysis tile drill-down: same filters and the same computation as the
+// page, so each dialog's headline equals its tile.
+router.get('/booking-analysis/detail', requirePermission('bookingAnalysis', 'view'), async (req, res) => {
+  const out = await bookingAnalysisCardDetail(req.query.card, req.query);
+  if (!out) return res.status(400).json({ error: 'Unknown card' });
+  res.json(out);
 });
 
 module.exports = router;

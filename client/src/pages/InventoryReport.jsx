@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Download, X, ExternalLink, ArrowUp, ArrowDown, ArrowUpDown, ImageOff, MapPin } from 'lucide-react';
 import dayjs from 'dayjs';
 import api, { downloadFile } from '../api';
 import { useCompany } from '../CompanyContext';
 import { Money, Spinner, Badge } from '../components/ui';
+import CardDetailDialog from '../components/CardDetailDialog';
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   ComposedChart, Line, Legend,
@@ -37,6 +38,11 @@ export default function InventoryReport() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null); // site row opened in the drawer
+  const [detail, setDetail] = useState(null); // stat tile whose drill-down is open
+  const closeDetail = useCallback(() => setDetail(null), []);
+  // The filters the loaded data reflects (search applies on Enter / blur), so a
+  // tile's drill-down always matches the figure on the tile.
+  const [loadedParams, setLoadedParams] = useState({});
 
   useEffect(() => { setCompanyId(activeCompany?.id ? String(activeCompany.id) : ''); }, [activeCompany]);
 
@@ -47,13 +53,13 @@ export default function InventoryReport() {
 
   function load() {
     setLoading(true);
-    api.get('/reports/site-wise', {
-      params: {
-        companyId: companyId || undefined, from: from || undefined, to: to || undefined,
-        zone: zone || undefined, type: type || undefined, q: q.trim() || undefined,
-        bookedOnly: bookedOnly || undefined,
-      },
-    }).then((r) => setData(r.data)).finally(() => setLoading(false));
+    const params = {
+      companyId: companyId || undefined, from: from || undefined, to: to || undefined,
+      zone: zone || undefined, type: type || undefined, q: q.trim() || undefined,
+      bookedOnly: bookedOnly || undefined,
+    };
+    api.get('/reports/site-wise', { params })
+      .then((r) => { setData(r.data); setLoadedParams(params); }).finally(() => setLoading(false));
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [companyId, rangeKey, zone, type, bookedOnly]);
@@ -167,11 +173,11 @@ export default function InventoryReport() {
         <>
           {/* Summary */}
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
-            <Tile label="Sites" value={`${s?.bookedSites ?? 0}/${s?.siteCount ?? 0}`} sub="booked / shown" />
-            <Tile label="Revenue (ex-GST)" value={<Money value={s?.totalRevenue} />} accent="text-emerald-600" />
-            <Tile label="Bookings" value={s?.totalBookings ?? 0} />
-            <Tile label="Days booked" value={(s?.totalDays ?? 0).toLocaleString('en-IN')} />
-            <Tile label="Avg / booked site" value={<Money value={s?.bookedSites ? Math.round(s.totalRevenue / s.bookedSites) : 0} />} />
+            <Tile onClick={() => setDetail('sitesCount')} label="Sites" value={`${s?.bookedSites ?? 0}/${s?.siteCount ?? 0}`} sub="booked / shown" />
+            <Tile onClick={() => setDetail('siteRevenue')} label="Revenue (ex-GST)" value={<Money value={s?.totalRevenue} />} accent="text-emerald-600" />
+            <Tile onClick={() => setDetail('siteBookings')} label="Bookings" value={s?.totalBookings ?? 0} />
+            <Tile onClick={() => setDetail('siteDays')} label="Days booked" value={(s?.totalDays ?? 0).toLocaleString('en-IN')} />
+            <Tile onClick={() => setDetail('siteAvg')} label="Avg / booked site" value={<Money value={s?.bookedSites ? Math.round(s.totalRevenue / s.bookedSites) : 0} />} />
           </div>
 
           {/* Charts */}
@@ -306,15 +312,19 @@ export default function InventoryReport() {
         </>
       )}
 
+      <CardDetailDialog card={detail} onClose={closeDetail} params={loadedParams} />
       {selected && <SiteDrawer site={selected} onClose={() => setSelected(null)} onOpen={() => navigate(`/inventory/${selected.siteId}`)} />}
     </div>
   );
 }
 
-function Tile({ label, value, sub, accent = 'text-slate-800' }) {
+function Tile({ label, value, sub, accent = 'text-slate-800', onClick }) {
   return (
-    <div className="card p-4">
-      <div className="text-xs text-slate-500 mb-1">{label}</div>
+    <div
+      className={`card p-4${onClick ? ' cursor-pointer transition hover:border-brand/40 hover:shadow-md' : ''}`}
+      {...(onClick ? { onClick, role: 'button', tabIndex: 0, onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e); } } } : {})}
+    >
+      <div className="text-xs text-slate-500 mb-1 flex items-center justify-between">{label}{onClick && <span className="text-slate-300">→</span>}</div>
       <div className={`text-lg font-bold ${accent}`}>{value}</div>
       {sub && <div className="text-[11px] text-slate-400 mt-0.5">{sub}</div>}
     </div>

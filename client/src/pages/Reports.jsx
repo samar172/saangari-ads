@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Download, ChevronRight, TrendingUp, TrendingDown } from 'lucide-react';
 import dayjs from 'dayjs';
 import api, { downloadFile } from '../api';
 import { useCompany } from '../CompanyContext';
 import { Money, Spinner, StatTile } from '../components/ui';
+import CardDetailDialog from '../components/CardDetailDialog';
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
@@ -48,6 +49,8 @@ export default function Reports() {
   const [rangeKey, setRangeKey] = useState('FY_2026');
   const [profit, setProfit] = useState(null);
   const [receivables, setReceivables] = useState(null);
+  const [detail, setDetail] = useState(null); // stat card whose drill-down is open
+  const closeDetail = useCallback(() => setDetail(null), []);
 
   // If localCid is 'ALL', we don't send companyId to the API
   const cid = localCid === 'ALL' ? undefined : localCid;
@@ -102,24 +105,24 @@ export default function Reports() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4">
-        <StatTile label="Occupancy" value={`${overview.occupancy}%`} accent="text-brand" sub={`${overview.siteStatus.BOOKED || 0}/${overview.siteCount} booked`} />
-        <StatTile label="Booked Value" value={<Money value={overview.bookedValue} />} accent="text-emerald-600" sub={<span className="flex items-center gap-1.5">incl. GST <Delta curr={overview.bookedValue} prev={overview.prev?.bookedValue} /></span>} />
-        <StatTile label="Collected" value={<Money value={overview.paidRevenue} />} accent="text-emerald-600" sub={<Delta curr={overview.paidRevenue} prev={overview.prev?.paidRevenue} />} />
-        <StatTile label="Outstanding" value={<Money value={overview.outstanding} />} accent="text-red-600" />
+        <StatTile onClick={() => setDetail('occupancy')} label="Occupancy" value={`${overview.occupancy}%`} accent="text-brand" sub={`${overview.siteStatus.BOOKED || 0}/${overview.siteCount} booked`} />
+        <StatTile onClick={() => setDetail('booked')} label="Booked Value" value={<Money value={overview.bookedValue} />} accent="text-emerald-600" sub={<span className="flex items-center gap-1.5">incl. GST <Delta curr={overview.bookedValue} prev={overview.prev?.bookedValue} /></span>} />
+        <StatTile onClick={() => setDetail('collected')} label="Collected" value={<Money value={overview.paidRevenue} />} accent="text-emerald-600" sub={<Delta curr={overview.paidRevenue} prev={overview.prev?.paidRevenue} />} />
+        <StatTile onClick={() => setDetail('outstanding')} label="Outstanding" value={<Money value={overview.outstanding} />} accent="text-red-600" />
         {/* Quotations are pipeline, deliberately kept out of booked value. */}
-        <StatTile label="Quotation Pipeline" value={<Money value={overview.quotationValue || 0} />} accent="text-amber-600" sub={`${overview.quotationCount || 0} open`} />
-        <StatTile label="Orders" value={overview.totalOrders} sub={<span className="flex items-center gap-1.5">{overview.totalBookings} bookings <Delta curr={overview.totalOrders} prev={overview.prev?.totalOrders} /></span>} />
-        <StatTile label="Clients" value={overview.totalClients} sub={`${overview.repeatClients} repeat`} />
+        <StatTile onClick={() => setDetail('quotations')} label="Quotation Pipeline" value={<Money value={overview.quotationValue || 0} />} accent="text-amber-600" sub={`${overview.quotationCount || 0} open`} />
+        <StatTile onClick={() => setDetail('orders')} label="Orders" value={overview.totalOrders} sub={<span className="flex items-center gap-1.5">{overview.totalBookings} bookings <Delta curr={overview.totalOrders} prev={overview.prev?.totalOrders} /></span>} />
+        <StatTile onClick={() => setDetail('clients')} label="Clients" value={overview.totalClients} sub={`${overview.repeatClients} repeat`} />
       </div>
 
       <div className="card p-4 mb-4">
         <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">Booked value breakdown</div>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <StatTile label="Total Booked" value={<Money value={overview.bookedValue} />} accent="text-emerald-600" sub="incl. GST" />
-          <StatTile label="Excluding GST" value={<Money value={overview.bookedExclGst || 0} />} accent="text-slate-700" sub="taxable value" />
-          <StatTile label="Rental" value={<Money value={overview.rentalValue || 0} />} accent="text-brand" />
-          <StatTile label="Printing" value={<Money value={overview.printingValue || 0} />} accent="text-purple-600" />
-          <StatTile label="Mounting" value={<Money value={overview.mountingValue || 0} />} accent="text-amber-600" />
+          <StatTile onClick={() => setDetail('booked')} label="Total Booked" value={<Money value={overview.bookedValue} />} accent="text-emerald-600" sub="incl. GST" />
+          <StatTile onClick={() => setDetail('bookedExGst')} label="Excluding GST" value={<Money value={overview.bookedExclGst || 0} />} accent="text-slate-700" sub="taxable value" />
+          <StatTile onClick={() => setDetail('rental')} label="Rental" value={<Money value={overview.rentalValue || 0} />} accent="text-brand" />
+          <StatTile onClick={() => setDetail('printing')} label="Printing" value={<Money value={overview.printingValue || 0} />} accent="text-purple-600" />
+          <StatTile onClick={() => setDetail('mounting')} label="Mounting" value={<Money value={overview.mountingValue || 0} />} accent="text-amber-600" />
         </div>
       </div>
 
@@ -128,11 +131,11 @@ export default function Reports() {
         <div className="card p-4 mb-4">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">Profitability (ex-GST)</div>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            <StatTile label="Revenue (ex-GST)" value={<Money value={profit.revenueExGst} />} accent="text-slate-700" />
-            <StatTile label="Printing charged" value={<Money value={profit.printingCharged} />} accent="text-purple-600" />
-            <StatTile label="Printing cost" value={<Money value={profit.printingCost} />} accent="text-slate-600" sub="paid to partners" />
-            <StatTile label="Printing margin" value={<Money value={profit.printingMargin} />} accent={profit.printingMargin >= 0 ? 'text-emerald-600' : 'text-red-600'} />
-            <StatTile label="Discounts given" value={<Money value={profit.discounts} />} accent="text-amber-600" />
+            <StatTile onClick={() => setDetail('profitRevenue')} label="Revenue (ex-GST)" value={<Money value={profit.revenueExGst} />} accent="text-slate-700" />
+            <StatTile onClick={() => setDetail('printCharged')} label="Printing charged" value={<Money value={profit.printingCharged} />} accent="text-purple-600" />
+            <StatTile onClick={() => setDetail('printCost')} label="Printing cost" value={<Money value={profit.printingCost} />} accent="text-slate-600" sub="paid to partners" />
+            <StatTile onClick={() => setDetail('printMargin')} label="Printing margin" value={<Money value={profit.printingMargin} />} accent={profit.printingMargin >= 0 ? 'text-emerald-600' : 'text-red-600'} />
+            <StatTile onClick={() => setDetail('discounts')} label="Discounts given" value={<Money value={profit.discounts} />} accent="text-amber-600" />
           </div>
           <p className="text-[11px] text-slate-400 mt-2">Contribution (revenue − printing cost): <b className="text-slate-600"><Money value={profit.contribution} /></b>. Rental &amp; mounting vendor costs aren't tracked, so this is an upper bound, not net profit.</p>
           {profit.byCategory?.length > 0 && (
@@ -162,12 +165,12 @@ export default function Reports() {
             <div className="text-xs text-slate-500">DSO <span className="font-semibold text-slate-700">{receivables.dso} days</span></div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-            <StatTile label="Outstanding" value={<Money value={receivables.totalOutstanding} />} accent="text-red-600" sub={`${receivables.overdueCount} overdue`} />
-            <StatTile label="Not due" value={<Money value={receivables.buckets.current} />} accent="text-slate-600" />
-            <StatTile label="1–30 d" value={<Money value={receivables.buckets.d1_30} />} accent="text-amber-600" />
-            <StatTile label="31–60 d" value={<Money value={receivables.buckets.d31_60} />} accent="text-orange-600" />
-            <StatTile label="61–90 d" value={<Money value={receivables.buckets.d61_90} />} accent="text-red-500" />
-            <StatTile label="90+ d" value={<Money value={receivables.buckets.d90plus} />} accent="text-red-700" />
+            <StatTile onClick={() => setDetail('recvTotal')} label="Outstanding" value={<Money value={receivables.totalOutstanding} />} accent="text-red-600" sub={`${receivables.overdueCount} overdue`} />
+            <StatTile onClick={() => setDetail('recvCurrent')} label="Not due" value={<Money value={receivables.buckets.current} />} accent="text-slate-600" />
+            <StatTile onClick={() => setDetail('recv1_30')} label="1–30 d" value={<Money value={receivables.buckets.d1_30} />} accent="text-amber-600" />
+            <StatTile onClick={() => setDetail('recv31_60')} label="31–60 d" value={<Money value={receivables.buckets.d31_60} />} accent="text-orange-600" />
+            <StatTile onClick={() => setDetail('recv61_90')} label="61–90 d" value={<Money value={receivables.buckets.d61_90} />} accent="text-red-500" />
+            <StatTile onClick={() => setDetail('recv90plus')} label="90+ d" value={<Money value={receivables.buckets.d90plus} />} accent="text-red-700" />
           </div>
           {receivables.overdue?.length > 0 && (
             <div className="overflow-x-auto mt-3">
@@ -190,11 +193,11 @@ export default function Reports() {
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-        <StatTile label="Top Media Type" value={overview.topCategory || '—'} accent="text-brand" />
-        <StatTile label="GST Collected" value={<Money value={overview.gstCollected} />} />
-        <StatTile label="CGST + SGST" value={<Money value={overview.cgst + overview.sgst} />} sub="intra-state" />
-        <StatTile label="IGST" value={<Money value={overview.igst} />} sub="inter-state" />
-        <StatTile label="TDS Deducted" value={<Money value={overview.tdsDeducted || 0} />} accent="text-indigo-600" sub={`${'₹' + Number(overview.netReceived || 0).toLocaleString('en-IN')} net in bank`} />
+        <StatTile onClick={() => setDetail('topMedia')} label="Top Media Type" value={overview.topCategory || '—'} accent="text-brand" />
+        <StatTile onClick={() => setDetail('gst')} label="GST Collected" value={<Money value={overview.gstCollected} />} />
+        <StatTile onClick={() => setDetail('cgstSgst')} label="CGST + SGST" value={<Money value={overview.cgst + overview.sgst} />} sub="intra-state" />
+        <StatTile onClick={() => setDetail('igst')} label="IGST" value={<Money value={overview.igst} />} sub="inter-state" />
+        <StatTile onClick={() => setDetail('tds')} label="TDS Deducted" value={<Money value={overview.tdsDeducted || 0} />} accent="text-indigo-600" sub={`${'₹' + Number(overview.netReceived || 0).toLocaleString('en-IN')} net in bank`} />
       </div>
 
       <div className="card p-5 mb-5">
@@ -307,6 +310,8 @@ export default function Reports() {
           </table>
         </div>
       </div>
+
+      <CardDetailDialog card={detail} onClose={closeDetail} params={rangeParams} />
     </div>
   );
 }

@@ -37,7 +37,7 @@ async function computeBookingAnalysis(params = {}) {
       payments: { select: { amount: true } },
       items: {
         where: { status: { notIn: ['CANCELLED'] } },
-        select: { id: true, startDate: true, endDate: true, days: true, subtotal: true, site: { select: { zone: true, code: true, type: true } } },
+        select: { id: true, startDate: true, endDate: true, days: true, subtotal: true, site: { select: { id: true, zone: true, code: true, type: true, location: true } } },
       },
     },
   });
@@ -64,6 +64,8 @@ async function computeBookingAnalysis(params = {}) {
       mediaSet.add(mediaName);
       lines.push({
         orderId: o.id, orderNo: o.orderNo, month: monthKey(it.startDate),
+        bookingId: it.id, siteId: it.site?.id, siteCode: it.site?.code || '—', siteLocation: it.site?.location || '',
+        startDate: it.startDate, endDate: it.endDate, days: it.days || 0, bookingDate: o.bookingDate,
         category: catName, customer: custName, clientId: o.client.id,
         contact: o.client.name, phone: o.client.phone, zone: zoneName, mediaType: mediaName,
         siteMonths: Math.round(((it.days || 0) / 30) * 100) / 100,

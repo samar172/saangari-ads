@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Download } from 'lucide-react';
 import dayjs from 'dayjs';
 import api, { downloadFile } from '../api';
 import { useCompany } from '../CompanyContext';
 import { Money, Spinner, StatTile } from '../components/ui';
+import CardDetailDialog from '../components/CardDetailDialog';
 
 // Financial-year start (1 Apr).
 const fyStart = () => (dayjs().month() >= 3 ? dayjs().month(3) : dayjs().subtract(1, 'year').month(3)).date(1);
@@ -32,6 +33,8 @@ export default function BookingAnalysis() {
   const [paymentTerms, setPaymentTerms] = useState('');
   const [data, setData] = useState(null);
   const [tab, setTab] = useState('Month-wise');
+  const [detail, setDetail] = useState(null); // stat card whose drill-down is open
+  const closeDetail = useCallback(() => setDetail(null), []);
 
   const cid = localCid === 'ALL' ? undefined : localCid;
   const r = RANGES[rangeKey];
@@ -109,22 +112,22 @@ export default function BookingAnalysis() {
         <>
           {/* Dashboard KPIs */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-            <StatTile label="Bookings" value={num(data.dashboard.bookings)} sub="site bookings" />
-            <StatTile label="Customers" value={num(data.dashboard.customers)} sub="with ≥1 booking" />
-            <StatTile label="Site-Months" value={num(data.dashboard.siteMonths)} accent="text-brand" />
-            <StatTile label="Billing ex-GST" value={<Money value={data.dashboard.billingExGst} />} accent="text-slate-700" sub="taxable value" />
-            <StatTile label="GST" value={<Money value={data.dashboard.gst} />} />
-            <StatTile label="Total Billing" value={<Money value={data.dashboard.totalBilling} />} accent="text-emerald-600" sub="incl. GST" />
-            <StatTile label="Received" value={<Money value={data.dashboard.received} />} accent="text-emerald-600" />
-            <StatTile label="Outstanding" value={<Money value={data.dashboard.outstanding} />} accent="text-red-600" />
+            <StatTile onClick={() => setDetail('baBookings')} label="Bookings" value={num(data.dashboard.bookings)} sub="site bookings" />
+            <StatTile onClick={() => setDetail('baCustomers')} label="Customers" value={num(data.dashboard.customers)} sub="with ≥1 booking" />
+            <StatTile onClick={() => setDetail('baSiteMonths')} label="Site-Months" value={num(data.dashboard.siteMonths)} accent="text-brand" />
+            <StatTile onClick={() => setDetail('baBilling')} label="Billing ex-GST" value={<Money value={data.dashboard.billingExGst} />} accent="text-slate-700" sub="taxable value" />
+            <StatTile onClick={() => setDetail('baGst')} label="GST" value={<Money value={data.dashboard.gst} />} />
+            <StatTile onClick={() => setDetail('baTotal')} label="Total Billing" value={<Money value={data.dashboard.totalBilling} />} accent="text-emerald-600" sub="incl. GST" />
+            <StatTile onClick={() => setDetail('baReceived')} label="Received" value={<Money value={data.dashboard.received} />} accent="text-emerald-600" />
+            <StatTile onClick={() => setDetail('baOutstanding')} label="Outstanding" value={<Money value={data.dashboard.outstanding} />} accent="text-red-600" />
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-5">
-            <StatTile label="Collection %" value={pct(data.dashboard.collectionPct)} accent="text-brand" />
-            <StatTile label="Avg Billing / Booking" value={<Money value={data.dashboard.avgBillingPerBooking} />} sub="ex-GST" />
-            <StatTile label="Avg Rate / Site-Month" value={<Money value={data.dashboard.avgRatePerSiteMonth} />} sub="ex-GST" />
-            <StatTile label="Advance Bookings %" value={pct(data.dashboard.advancePct)} />
-            <StatTile label="Top Category" value={data.dashboard.topCategory || '—'} accent="text-brand" sub="by billing" />
-            <StatTile label="Best Month" value={data.dashboard.bestMonth || '—'} sub="by billing" />
+            <StatTile onClick={() => setDetail('baCollection')} label="Collection %" value={pct(data.dashboard.collectionPct)} accent="text-brand" />
+            <StatTile onClick={() => setDetail('baAvgBooking')} label="Avg Billing / Booking" value={<Money value={data.dashboard.avgBillingPerBooking} />} sub="ex-GST" />
+            <StatTile onClick={() => setDetail('baAvgRate')} label="Avg Rate / Site-Month" value={<Money value={data.dashboard.avgRatePerSiteMonth} />} sub="ex-GST" />
+            <StatTile onClick={() => setDetail('baAdvance')} label="Advance Bookings %" value={pct(data.dashboard.advancePct)} />
+            <StatTile onClick={() => setDetail('baTopCategory')} label="Top Category" value={data.dashboard.topCategory || '—'} accent="text-brand" sub="by billing" />
+            <StatTile onClick={() => setDetail('baBestMonth')} label="Best Month" value={data.dashboard.bestMonth || '—'} sub="by billing" />
           </div>
 
           {/* Tabs */}
@@ -179,6 +182,8 @@ export default function BookingAnalysis() {
           </div>
         </>
       )}
+
+      <CardDetailDialog card={detail} onClose={closeDetail} params={params} />
     </div>
   );
 }
