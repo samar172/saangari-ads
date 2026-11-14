@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
-import { Camera, ChevronRight, ChevronDown, ExternalLink, Download, SlidersHorizontal, Plus, Eye, Pencil, FileSpreadsheet, FileText, Lock } from 'lucide-react';
+import { Camera, ChevronRight, ChevronDown, ExternalLink, Download, SlidersHorizontal, Plus, Eye, Pencil, FileSpreadsheet, Lock } from 'lucide-react';
 import api, { downloadFile } from '../api';
 import { useAuth, usePerms } from '../auth';
 import { lockInfo } from '../components/InvoiceLock';
@@ -115,27 +115,22 @@ const COLUMNS = [
         </div>
       );
     } },
-  // Quotation letter (.docx on the Saangari letterhead), straight from the row.
-  { key: 'quotation', label: 'Quotation', align: 'left',
-    cell: (o, ctx) => ctx.canQuote
-      ? <RowAction icon={FileText} label="Download" title="Download the quotation (Word)"
-          onClick={() => downloadFile(`/orders/${o.id}/quotation.docx`, `Quotation-${o.orderNo}.docx`)} />
-      : <span className="text-slate-300">—</span> },
   // Grand Total kept as the last column so it reads as the row's bottom-line figure.
   { key: 'total', label: 'Grand Total', align: 'right', cell: (o) => <span className="font-semibold text-slate-700"><Money value={o.grandTotal} /></span> },
 ];
 
-const DEFAULT_VISIBLE = ['order', 'client', 'sites', 'start', 'end', 'invoiced', 'outstanding', 'balance', 'lastInvoice', 'terms', 'status', 'photos', 'invoice', 'quotation', 'total'];
+const DEFAULT_VISIBLE = ['order', 'client', 'sites', 'start', 'end', 'invoiced', 'outstanding', 'balance', 'lastInvoice', 'terms', 'status', 'photos', 'invoice', 'total'];
 const STORAGE_KEY = 'orders.columns.v4';
 const PREV_STORAGE_KEY = 'orders.columns.v3';
 
 function loadVisible() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (Array.isArray(saved) && saved.length) return saved;
-    // Carry a v3 column choice forward, switching on the new Invoice/Quotation columns.
+    // A running campaign doesn't need a quotation — that column is gone.
+    if (Array.isArray(saved) && saved.length) return saved.filter((k) => k !== 'quotation');
+    // Carry a v3 column choice forward, switching on the new Invoice column.
     const prev = JSON.parse(localStorage.getItem(PREV_STORAGE_KEY));
-    if (Array.isArray(prev) && prev.length) return [...new Set([...prev, 'invoice', 'quotation'])];
+    if (Array.isArray(prev) && prev.length) return [...new Set([...prev, 'invoice'])];
   } catch (e) { /* ignore */ }
   return DEFAULT_VISIBLE;
 }
@@ -174,9 +169,8 @@ export default function Orders() {
   const [visible, setVisible] = useState(loadVisible);
   useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(visible)); }, [visible]);
   const cols = COLUMNS.filter((c) => c.always || visible.includes(c.key));
-  // Passed to cells that need permissions or navigation. Quotation letters are
-  // served to Sales/Manager/Finance (and Super Admin), not Ops.
-  const cellCtx = { canDo, navigate, canQuote: user?.role !== 'OPS' };
+  // Passed to cells that need permissions or navigation.
+  const cellCtx = { canDo, navigate };
 
   function exportExcel() {
     const p = new URLSearchParams();

@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const prisma = require('../db');
 const { requireRole, requirePermission } = require('../middleware/auth');
-const { computePrintCost } = require('../utils/printingCost');
+const { orderPrintCost } = require('../utils/printingCost');
 const { computeBookingAnalysis } = require('../utils/bookingAnalysis');
 
 const NON_CANCELLED = { notIn: ['CANCELLED'] };
@@ -228,7 +228,7 @@ router.get('/profitability', requirePermission('reports', 'view'), async (req, r
     where,
     select: {
       grandTotal: true, taxableAmount: true, printingTotal: true, printCost: true,
-      discountAmount: true, mountingCost: true, bookingDate: true, printMaterial: true,
+      discountAmount: true, mountingCost: true, bookingDate: true, printMaterial: true, noOfPrints: true, chargesPerSite: true,
       category: { select: { name: true } },
       printingPartner: { select: { ratePerSqft: true, materials: { select: { name: true, costPerSqft: true } } } },
       items: { select: { status: true, site: { select: { sqft: true } } } },
@@ -239,8 +239,7 @@ router.get('/profitability', requirePermission('reports', 'view'), async (req, r
   const byCat = {}; // { cat: { revenue, printingMargin } }
   const byMonth = {}; // { 'YYYY-MM': { revenue, printingMargin } }
   for (const o of orders) {
-    const totalSqft = (o.items || []).filter((i) => i.status !== 'CANCELLED').reduce((s, i) => s + (i.site?.sqft || 0), 0);
-    const { cost } = computePrintCost({ printCost: o.printCost, printMaterial: o.printMaterial, totalSqft }, o.printingPartner);
+    const { cost } = orderPrintCost(o, o.printingPartner);
     const pMargin = Math.round((o.printingTotal || 0) - cost);
     revenueExGst += o.taxableAmount || 0;
     grossBooked += o.grandTotal || 0;

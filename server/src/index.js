@@ -33,6 +33,7 @@ app.use('/api/clients', require('./routes/clients'));
 app.use('/api/categories', require('./routes/categories'));
 app.use('/api/media-types', require('./routes/mediaTypes'));
 app.use('/api/orders', require('./routes/orders'));
+app.use('/api/quotations', require('./routes/quotations'));
 app.use('/api/printing-partners', require('./routes/printingPartners'));
 app.use('/api/reminders', require('./routes/reminders'));
 app.use('/api/notifications', require('./routes/notifications'));

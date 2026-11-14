@@ -3,6 +3,7 @@ const PDFDocument = require('pdfkit');
 const prisma = require('../db');
 const { requireRole, requirePermission } = require('../middleware/auth');
 const { logActivity } = require('../utils/activity');
+const { printedArea } = require('../utils/printingCost');
 
 const INR = (n) => 'Rs ' + Math.round(Number(n || 0)).toLocaleString('en-IN');
 
@@ -71,7 +72,9 @@ async function loadPartnerAccount(id) {
   const jobs = orders.map((o) => {
     // Cancelled line-items were never printed, so they don't add to the area.
     const live = o.items.filter((it) => it.status !== 'CANCELLED');
-    const totalSqft = Math.round(live.reduce((s, it) => s + (it.site?.sqft || 0), 0) * 100) / 100;
+    // Printed area = no. of prints × average site sqft (utils/printingCost.js).
+    const area = printedArea(o, o.items);
+    const totalSqft = area.sqft;
     const mat = o.printMaterial ? materialByName[o.printMaterial] : null;
     const materialRate = mat?.rate || 0;            // customer charge (for reference)
     const materialCostPerSqft = mat?.costPerSqft || 0; // partner cost per sqft
@@ -85,8 +88,8 @@ async function loadPartnerAccount(id) {
     const bySqftPartner = Math.round(totalSqft * (partner.ratePerSqft || 0));
     let effectiveCost, costSource, costNote;
     if (o.printCost > 0) { effectiveCost = Math.round(o.printCost); costSource = 'entered'; costNote = 'entered'; }
-    else if (bySqftMaterial > 0) { effectiveCost = bySqftMaterial; costSource = 'material_sqft'; costNote = `${totalSqft} sqft × ₹${materialCostPerSqft}${mat ? ` (${mat.name})` : ''}`; }
-    else if (bySqftPartner > 0) { effectiveCost = bySqftPartner; costSource = 'sqft'; costNote = `${totalSqft} sqft × ₹${partner.ratePerSqft}`; }
+    else if (bySqftMaterial > 0) { effectiveCost = bySqftMaterial; costSource = 'material_sqft'; costNote = `${area.prints} print${area.prints === 1 ? '' : 's'} × ${area.avgSqft} sqft × ₹${materialCostPerSqft}${mat ? ` (${mat.name})` : ''}`; }
+    else if (bySqftPartner > 0) { effectiveCost = bySqftPartner; costSource = 'sqft'; costNote = `${area.prints} print${area.prints === 1 ? '' : 's'} × ${area.avgSqft} sqft × ₹${partner.ratePerSqft}`; }
     else { effectiveCost = 0; costSource = 'none'; costNote = ''; }
 
     return {

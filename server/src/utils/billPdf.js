@@ -25,7 +25,15 @@ function buildBillPdf(invoice, { header } = {}) {
   const band = add(130.5), head = add(38.25), parties = add(96.75), gridHead = add(15);
   const gridN = Math.max(GRID_ROWS, m.rows.length);
   const grid = [];
-  for (let i = 0; i < gridN; i++) grid.push(add(15 * Math.max(1, Math.ceil(String(m.rows[i]?.location || '').length / 31))));
+  // Size each grid row by measuring its location with the font it prints in
+  // (10pt Helvetica in the Location column, less side padding).
+  const meter = new PDFDocument({ autoFirstPage: false }).font('Helvetica').fontSize(10);
+  const locW = colChars[1] * CHAR_PT - 8;
+  for (let i = 0; i < gridN; i++) {
+    const loc = m.rows[i]?.location;
+    const n = loc ? Math.round(meter.heightOfString(String(loc), { width: locW }) / meter.currentLineHeight(true)) : 1;
+    grid.push(add(n > 1 ? 12 * n + 6 : 15));
+  }
   const tTotal = add(15);
   const tGst = m.gst ? add(15) : null;
   const tGrand = add(15);

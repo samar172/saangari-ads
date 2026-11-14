@@ -145,6 +145,7 @@ model User {
 
   approvalsRequested ApprovalRequest[] @relation("ApprovalRequestedBy")
   approvalsReviewed  ApprovalRequest[] @relation("ApprovalReviewedBy")
+  quotations         Quotation[]       @relation("QuotationBy")
 }
 
 // Per-role RBAC overrides. One row per configurable role (SALES/MANAGER/OPS/
@@ -187,8 +188,9 @@ model Company {
   active             Boolean  @default(true)
   createdAt          DateTime @default(now())
 
-  orders   Order[]
-  invoices Invoice[]
+  orders     Order[]
+  invoices   Invoice[]
+  quotations Quotation[]
   payments Payment[]
   ledger   LedgerEntry[]
 }
@@ -234,8 +236,9 @@ model Client {
   category   Category? @relation(fields: [categoryId], references: [id])
   categoryId Int?
 
-  orders   Order[]
-  invoices Invoice[]
+  orders     Order[]
+  invoices   Invoice[]
+  quotations Quotation[]
   ledger   LedgerEntry[]
   payments Payment[]
   contacts ClientContact[]
@@ -735,4 +738,34 @@ model WhatsAppLog {
   sentAt     DateTime @default(now())
 
   @@index([kind, entityId])
+}
+
+// A price quotation sent to a client — the Word letter on the Saangari
+// letterhead. It holds no sites (inventory is untouched) until it is converted
+// into a booking. Lines: [{ siteId?, code?, name, type?, months, rate, pm }]
+// (rate = per site per month; pm = printing + mounting per site).
+model Quotation {
+  id            Int       @id @default(autoincrement())
+  quoteNo       String    @unique // BKN/2026-27/PR/12
+  company       Company   @relation(fields: [companyId], references: [id])
+  companyId     Int
+  client        Client?   @relation(fields: [clientId], references: [id])
+  clientId      Int?
+  // Addressee as printed on the letter (copied from the client, editable).
+  clientName    String
+  clientCompany String?
+  address       String?
+  contact       String?
+  quoteDate     DateTime  @default(now())
+  lines         Json
+  notes         String?
+  paymentTerms  String    @default("ADVANCE") // ADVANCE → "Advance basis", POSTPAID → "Monthly basis"
+  status        String    @default("OPEN") // OPEN | CONVERTED | LOST
+  orderId       Int? // the booking it was converted into
+  createdBy     User      @relation("QuotationBy", fields: [createdById], references: [id])
+  createdById   Int
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status])
 }

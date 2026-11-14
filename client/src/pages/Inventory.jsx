@@ -379,7 +379,9 @@ function HoverCard({ hover, detail }) {
         ) : active ? (
           <div className="mt-2 rounded-lg bg-brand/5 border border-brand/20 p-2">
             <div className="text-[10px] font-semibold uppercase text-brand">Active Booking</div>
-            <div className="text-xs font-medium text-slate-800">{active.order?.client?.name}</div>
+            {/* Organisation first; the contact person under it when there is one. */}
+            <div className="text-xs font-medium text-slate-800">{active.order?.client?.company?.trim() || active.order?.client?.name}</div>
+            {active.order?.client?.company?.trim() && <div className="text-[11px] text-slate-500">{active.order.client.name}</div>}
             <div className="text-[11px] text-slate-500">{active.order?.orderNo} · {new Date(active.startDate).toLocaleDateString('en-IN')}–{new Date(active.endDate).toLocaleDateString('en-IN')}</div>
           </div>
         ) : (

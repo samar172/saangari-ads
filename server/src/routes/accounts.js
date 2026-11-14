@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const prisma = require('../db');
 const { requireRole, requirePermission } = require('../middleware/auth');
-const { computePrintCost } = require('../utils/printingCost');
+const { orderPrintCost } = require('../utils/printingCost');
 
 // Parse ?from&to into a Prisma date filter (inclusive of the whole `to` day).
 function dateRange(from, to) {
@@ -163,11 +163,11 @@ router.get('/financials', requirePermission('accounts', 'view'), async (req, res
     select: {
       grandTotal: true, taxableAmount: true, gstAmount: true,
       rentalSubtotal: true, printingTotal: true, mountingCost: true, addOnTotal: true, discountAmount: true,
-      printCost: true, printMaterial: true, taxCategory: true,
+      printCost: true, printMaterial: true, noOfPrints: true, chargesPerSite: true, taxCategory: true,
       payments: { select: { amount: true } },
       invoices: { select: { total: true, status: true } },
       printingPartner: { select: { ratePerSqft: true, materials: { select: { name: true, costPerSqft: true } } } },
-      items: { where: { status: { notIn: ['CANCELLED'] } }, select: { site: { select: { sqft: true } } } },
+      items: { where: { status: { notIn: ['CANCELLED'] } }, select: { status: true, site: { select: { sqft: true } } } },
     },
   });
 
@@ -177,8 +177,7 @@ router.get('/financials', requirePermission('accounts', 'view'), async (req, res
     rental += o.rentalSubtotal || 0; printing += o.printingTotal || 0;
     mounting += o.mountingCost || 0; addons += o.addOnTotal || 0;
     discounts += o.discountAmount || 0; netRevenue += o.taxableAmount || 0; gstCollected += o.gstAmount || 0;
-    const totalSqft = (o.items || []).reduce((s, i) => s + (i.site?.sqft || 0), 0);
-    printingCost += computePrintCost({ printCost: o.printCost, printMaterial: o.printMaterial, totalSqft }, o.printingPartner).cost;
+    printingCost += orderPrintCost(o, o.printingPartner).cost;
     invoiced += (o.invoices || []).filter((i) => i.status !== 'CANCELLED').reduce((s, i) => s + (i.total || 0), 0);
     received += (o.payments || []).reduce((s, p) => s + p.amount, 0);
   }

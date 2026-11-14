@@ -376,7 +376,7 @@ function SiteDrawer({ site, onClose, onOpen }) {
                 {bookings.slice(0, 20).map((b) => (
                   <div key={b.id} className="rounded-lg border border-slate-200 p-2.5 text-sm">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium text-slate-700 truncate">{b.order?.client?.name || '—'}</span>
+                      <span className="font-medium text-slate-700 truncate">{b.order?.client?.company?.trim() || b.order?.client?.name || '—'}</span>
                       <Badge status={b.status} />
                     </div>
                     <div className="text-[11px] text-slate-400 mt-0.5">

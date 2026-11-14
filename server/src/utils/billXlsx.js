@@ -1,6 +1,6 @@
 const path = require('path');
 const ExcelJS = require('exceljs');
-const { billModel, amountInWords } = require('./billModel');
+const { billModel, amountInWords, wrappedLines } = require('./billModel');
 
 // Tax invoice as an editable Excel bill, laid out exactly like the accounts
 // team's own bill.xlsx: Calibri, a blank letterhead band, Bill To / Bill From,
@@ -90,8 +90,10 @@ async function buildBillXlsx(invoice, { header } = {}) {
   for (let i = 0; i < gridRows; i++) {
     const r = first + i;
     const l = m.rows[i];
-    // Column B fits ~31 characters a line; grow the row for longer locations.
-    ws.getRow(r).height = 15 * Math.max(1, Math.ceil(String(l?.location || '').length / 31));
+    // Grow the row for long locations (column B ≈ 31 average characters) and
+    // leave a little air above and below the text.
+    const n = l ? wrappedLines(l.location, 31) : 1;
+    ws.getRow(r).height = n > 1 ? 15 * n + 3 : 15;
     for (let c = 1; c <= 8; c++) ws.getCell(r, c).border = box;
     if (!l) continue;
     const center = { horizontal: 'center', vertical: 'middle' };

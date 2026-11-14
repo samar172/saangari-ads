@@ -37,7 +37,8 @@ import Companies from './pages/Companies';
 import Users from './pages/Users';
 import Permissions from './pages/Permissions';
 import Approvals from './pages/Approvals';
-import SimpleQuotation from './pages/SimpleQuotation';
+import Quotations from './pages/Quotations';
+import QuotationForm from './pages/QuotationForm';
 
 function Protected({ children }) {
   const { user } = useAuth();
@@ -59,8 +60,9 @@ export default function App() {
             <Route path="/inventory/new" element={<Protected><SiteForm /></Protected>} />
             <Route path="/inventory/:id" element={<Protected><SiteDetail /></Protected>} />
             <Route path="/orders" element={<Protected><Orders /></Protected>} />
-            <Route path="/quotations" element={<Protected><Orders /></Protected>} />
-            <Route path="/quotations/new" element={<Protected><SimpleQuotation /></Protected>} />
+            <Route path="/quotations" element={<Protected><Quotations /></Protected>} />
+            <Route path="/quotations/new" element={<Protected><QuotationForm /></Protected>} />
+            <Route path="/quotations/:id" element={<Protected><QuotationForm /></Protected>} />
             <Route path="/orders/:id" element={<Protected><OrderDetail /></Protected>} />
             <Route path="/orders/:id/edit" element={<Protected><EditCampaign /></Protected>} />
             <Route path="/reminders" element={<Protected><Reminders /></Protected>} />

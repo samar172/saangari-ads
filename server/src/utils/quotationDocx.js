@@ -83,17 +83,19 @@ function rateTable(order, gst) {
   if (shared) {
     const d = durations[0];
     costHead = perMonth
-      ? ['Cost Per Site Per Month', d && d !== '01 Month' ? `(${d})` : '']
-      : ['Cost Per Site', d ? `(${d})` : ''];
+      ? ['Cost Per Site Per Month', ...(d && d !== '01 Month' ? [`(${d})`] : [])]
+      : ['Cost Per Site', ...(d ? [`(${d})`] : [])];
   } else {
-    costHead = ['Cost Per Site', ''];
+    costHead = ['Cost Per Site'];
   }
-  const cols = shared ? [534, 4110, 1701] : [534, 3600, 1300, 1701];
+  // Wider than the original letter's table (which left long site names
+  // cramped) — still well inside the 11199-twip text width.
+  const cols = shared ? [620, 5300, 2300] : [620, 4300, 1500, 2100];
   const width = cols.reduce((a, b) => a + b, 0);
 
   const cellRPr = `${B}<w:sz w:val="20"/><w:szCs w:val="18"/>`;
-  const cell = (w, lines, extraRPr = '') => `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/></w:tcPr>${
-    (Array.isArray(lines) ? lines : [lines]).map((t) => para(`<w:jc w:val="center"/><w:rPr>${cellRPr}</w:rPr>`, t ? run(t, extraRPr + cellRPr) : '')).join('')
+  const cell = (w, lines, extraRPr = '') => `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>${
+    (Array.isArray(lines) ? lines : [lines]).map((t) => para(`<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/><w:jc w:val="center"/><w:rPr>${cellRPr}</w:rPr>`, t ? run(t, extraRPr + cellRPr) : '')).join('')
   }</w:tc>`;
 
   const head = shared
@@ -111,7 +113,7 @@ function rateTable(order, gst) {
     return `<w:tr><w:trPr><w:trHeight w:val="276"/></w:trPr>${cells.join('')}</w:tr>`;
   });
 
-  return `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="${width}" w:type="dxa"/><w:jc w:val="center"/><w:tblLayout w:type="fixed"/><w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr>`
+  return `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="${width}" w:type="dxa"/><w:jc w:val="center"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="60" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr>`
     + `<w:tblGrid>${cols.map((w) => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>`
     + `<w:tr><w:trPr><w:trHeight w:val="247"/></w:trPr>${head.join('')}</w:tr>${body.join('')}</w:tbl>`;
 }
@@ -135,10 +137,11 @@ function printMountRates(order) {
   return [...byType.entries()].map(([code, amt]) => ({ code, amt }));
 }
 
-function buildBody(order, { mediaLabels = {} } = {}) {
+// `ref` overrides the S No. (saved quotations carry their own number).
+function buildBody(order, { mediaLabels = {}, ref: refIn } = {}) {
   const gst = order.taxCategory === 'GST';
   const fy = financialYear(new Date(order.bookingDate || order.createdAt || Date.now()));
-  const ref = `BKN/${fy}/PR/${Number(String(order.orderNo).replace(/\D/g, '')) || order.id}`;
+  const ref = refIn || `BKN/${fy}/PR/${Number(String(order.orderNo).replace(/\D/g, '')) || order.id}`;
   const out = [];
 
   // S No. … Date:- (date pushed to the right margin with a right tab stop)

@@ -48,7 +48,9 @@ function gridRows(invoice) {
   if (Array.isArray(invoice.lines)) {
     return invoice.lines.map((r) => {
       const amount = (r.qty || 1) * r.price;
-      const showRate = r.rate && Math.round(r.rate) !== Math.round(r.price);
+      // Part-month row (monthly rate above the prorated amount, e.g. 21000 →
+      // 4900): Price shows the monthly rate. Loose day rows show their amount.
+      const showRate = r.rate && Math.round(r.rate) > Math.round(r.price);
       return {
         location: r.location, from: r.from ? dmy(r.from) : '', till: r.till ? dmy(r.till) : '',
         duration: r.duration || '', qty: r.qty, price: showRate ? Math.round(r.rate) : r.price, total: amount,
@@ -137,4 +139,20 @@ function billModel(invoice) {
   };
 }
 
-module.exports = { billModel, amountInWords, dmy };
+// Lines a cell of `capacity` (≈ average characters) needs for `text`, wrapping
+// on spaces. Capitals and digits run wider than the average character, which
+// is why counting characters alone under-sized rows of upper-case locations.
+function wrappedLines(text, capacity) {
+  // Calibri widths relative to the average character Excel sizes columns by.
+  const w = (ch) => (/[WM@]/.test(ch) ? 1.45 : /[A-Z&%#]/.test(ch) ? 1.1 : /[ilj.,:;'|!()\-]/.test(ch) ? 0.5 : 1);
+  let lines = 1, cur = 0;
+  for (const word of String(text || '').split(/\s+/)) {
+    const ww = [...word].reduce((s, ch) => s + w(ch), 0);
+    if (cur && cur + 0.55 + ww > capacity) { lines += 1; cur = ww; }
+    else cur += (cur ? 0.55 : 0) + ww;
+    while (cur > capacity) { lines += 1; cur -= capacity; }
+  }
+  return lines;
+}
+
+module.exports = { billModel, amountInWords, dmy, wrappedLines };

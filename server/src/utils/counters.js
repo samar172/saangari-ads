@@ -34,4 +34,11 @@ async function nextInvoiceNo(taxCategory) {
   return `${prefix}/${fy}/${String(n).padStart(4, '0')}`;
 }
 
-module.exports = { nextOrderNo, nextBookingNo, nextInvoiceNo, financialYear };
+// Quotation letters: BKN/<FY>/PR/<n>, a fresh sequence each financial year.
+async function nextQuoteNo(date = new Date()) {
+  const fy = financialYear(date);
+  const n = await nextNumber(`QUOTE-${fy}`);
+  return `BKN/${fy}/PR/${n}`;
+}
+
+module.exports = { nextOrderNo, nextBookingNo, nextInvoiceNo, nextQuoteNo, financialYear };

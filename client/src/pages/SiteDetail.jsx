@@ -155,7 +155,7 @@ export default function SiteDetail() {
                 {active && (
                   <div className="mt-4 rounded-lg bg-slate-50 border border-slate-200 p-3 text-sm">
                     <div className="font-semibold text-slate-700">Current Booking</div>
-                    <div>{active.order?.client?.name} · {active.order?.orderNo}</div>
+                    <div>{active.order?.client?.company?.trim() || active.order?.client?.name}{active.order?.client?.company?.trim() ? ` (${active.order.client.name})` : ''} · {active.order?.orderNo}</div>
                     <div className="text-slate-500 text-xs">
                       {new Date(active.startDate).toLocaleDateString('en-IN')} – {new Date(active.endDate).toLocaleDateString('en-IN')}
                     </div>

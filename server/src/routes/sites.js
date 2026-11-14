@@ -52,7 +52,7 @@ router.get('/', async (req, res) => {
       bookings: {
         where: { status: { in: ['TENTATIVE', 'CONFIRMED', 'LIVE', 'WAITLIST'] } },
         orderBy: { startDate: 'asc' },
-        include: { order: { select: { id: true, orderNo: true, client: { select: { id: true, name: true, phone: true } } } } },
+        include: { order: { select: { id: true, orderNo: true, client: { select: { id: true, name: true, company: true, phone: true } } } } },
       },
     },
   });
@@ -104,7 +104,7 @@ router.get('/:id', async (req, res) => {
       bookings: {
         orderBy: { startDate: 'desc' },
         include: {
-          order: { select: { id: true, orderNo: true, status: true, client: { select: { id: true, name: true, phone: true } } } },
+          order: { select: { id: true, orderNo: true, status: true, client: { select: { id: true, name: true, company: true, phone: true } } } },
           photos: true,
         },
       },

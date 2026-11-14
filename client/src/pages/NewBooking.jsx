@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { Save, CheckCircle, Plus, Check, X } from 'lucide-react';
 import api from '../api';
+import { autoPartnerCost, PartnerCostField } from '../components/PartnerCost';
 import { useCompany } from '../CompanyContext';
 import { Money, Badge } from '../components/ui';
 
@@ -96,8 +97,11 @@ export default function NewBooking() {
     printRemarks: '',
     mountingCost: 0,
     // 'PRINT' = no. of prints × rate + mounting per print; 'SITE' = an own
-    // printing + mounting charge on every site line.
+    // printing + mounting charge on every site line; 'TYPE' = one printing +
+    // mounting rate per media type (Unipole / Gantry …) applied to its sites.
     chargeMode: 'PRINT',
+    typeRates: {}, // { UNIPOLE: { print, mount } } — 'TYPE' mode, blank = Inventory default
+    mountings: 1,  // 'TYPE' mode: how many times each site is mounted (0 = no mounting)
     monitoring: true,
     monitorStart: true,
     monitorMid: true,
@@ -146,6 +150,31 @@ export default function NewBooking() {
     api.get('/sites').then((r) => setSites(r.data));
   }, []);
 
+  // Converting a saved quotation (?fromQuote=ID): pre-fill the client, its
+  // inventory sites (rate, months, printing + mounting per site) and terms.
+  // Free-text lines have no site, so they can't be booked — listed instead.
+  const fromQuote = params.get('fromQuote');
+  const [sourceQuote, setSourceQuote] = useState(null);
+  useEffect(() => {
+    if (!fromQuote) return;
+    api.get(`/quotations/${fromQuote}`).then(({ data: q }) => {
+      setSourceQuote(q);
+      if (q.clientId) set('clientId', String(q.clientId));
+      else {
+        setNewClient(true);
+        setClientForm((c) => ({ ...c, name: q.clientName || '', company: q.clientCompany || '', address: q.address || '', phone: q.contact || '' }));
+      }
+      const booked = (q.lines || []).filter((l) => l.siteId);
+      setLines(booked.map((l) => ({
+        siteId: l.siteId, startDate: defStart,
+        endDate: dayjs(defStart).add(Math.max(1, Number(l.months) || 1), 'month').subtract(1, 'day').format('YYYY-MM-DD'),
+        monthlyRateOverride: l.rate ? String(l.rate) : '', dayRateOverride: '', displayNotes: '',
+        printCharge: String(l.pm || 0), mountCharge: '0',
+      })));
+      setForm((f) => ({ ...f, chargeMode: booked.some((l) => l.pm) ? 'SITE' : f.chargeMode, paymentTerms: q.paymentTerms || f.paymentTerms, description: f.description || `From quotation ${q.quoteNo}` }));
+    }).catch(() => setError('Could not load the quotation'));
+  }, [fromQuote]); // eslint-disable-line
+
   // Seed lines from ?siteId= (single, from the site modal) or ?siteIds= (grid multi-select)
   useEffect(() => {
     const ids = (params.get('siteIds') || params.get('siteId') || '')
@@ -179,6 +208,41 @@ export default function NewBooking() {
   const clientCategory = categories.find((c) => c.id === Number(form.categoryId)) || null;
 
   const siteById = useMemo(() => Object.fromEntries(sites.map((s) => [s.id, s])), [sites]);
+  // Partner cost auto-worked from the partner's material ₹/sqft × the sites' area.
+  // 'TYPE' mode rows: each media type in the booking with its site count and
+  // the rate used (typed, else the most common Inventory rate for those sites).
+  const typeRows = useMemo(() => {
+    const by = {};
+    for (const l of lines) { const s = siteById[l.siteId]; if (!s) continue; (by[s.type] ||= []).push(s); }
+    const common = (arr, k) => { const c = {}; for (const x of arr) c[x[k] || 0] = (c[x[k] || 0] || 0) + 1; return Number(Object.entries(c).sort((a, b) => b[1] - a[1])[0]?.[0] || 0); };
+    return Object.entries(by).map(([type, arr]) => {
+      const t = form.typeRates?.[type] || {};
+      return { type, count: arr.length, defPrint: common(arr, 'printingCost'), defMount: common(arr, 'mountingCost'), print: t.print, mount: t.mount };
+    });
+  }, [lines, siteById, form.typeRates]);
+  const typeRateOf = (type) => {
+    const r = typeRows.find((x) => x.type === type);
+    if (!r) return { print: 0, mount: 0 };
+    return { print: r.print !== undefined && r.print !== '' ? Number(r.print) || 0 : r.defPrint, mount: r.mount !== undefined && r.mount !== '' ? Number(r.mount) || 0 : r.defMount };
+  };
+  const perSiteMode = form.chargeMode === 'SITE' || form.chargeMode === 'TYPE';
+  // Printing / mounting charged on one site line under the current mode.
+  const chargeOf = (l) => {
+    if (form.chargeMode === 'TYPE') {
+      const r = typeRateOf(siteById[l.siteId]?.type);
+      return { printCharge: r.print, mountCharge: r.mount * (Math.max(0, Number(form.mountings) || 0)) };
+    }
+    if (form.chargeMode === 'SITE') return { printCharge: Number(l.printCharge) || 0, mountCharge: Number(l.mountCharge) || 0 };
+    return { printCharge: undefined, mountCharge: undefined };
+  };
+  const setTypeRate = (type, k, v) => setForm((f) => ({ ...f, typeRates: { ...f.typeRates, [type]: { ...(f.typeRates?.[type] || {}), [k]: v } } }));
+  const partnerAuto = autoPartnerCost({
+    partner: partners.find((p) => String(p.id) === String(form?.printingPartnerId)),
+    materialName: form?.printMaterial,
+    sites: lines.map((l) => siteById[l.siteId]).filter(Boolean),
+    // Per print → the prints entered; per site / by media type → every site.
+    prints: form?.chargeMode === 'PRINT' ? form?.noOfPrints : lines.filter((l) => siteById[l.siteId]).length,
+  });
   // Regular bookings may only pick sites free for the chosen dates (not merely
   // ones whose current status flag reads AVAILABLE); loose bookings can override
   // onto any site.
@@ -237,13 +301,13 @@ export default function NewBooking() {
   // Live order quote
   useEffect(() => {
     const items = lines.filter((l) => l.siteId && l.startDate && l.endDate)
-      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, monthlyRateOverride: l.monthlyRateOverride || undefined, dayRateOverride: l.dayRateOverride || undefined, printCharge: l.printCharge, mountCharge: l.mountCharge }));
+      .map((l) => ({ siteId: l.siteId, startDate: l.startDate, endDate: l.endDate, monthlyRateOverride: l.monthlyRateOverride || undefined, dayRateOverride: l.dayRateOverride || undefined, ...chargeOf(l) }));
     if (items.length === 0) { setQuote(null); return; }
     const t = setTimeout(() => {
       api.post('/orders/quote', {
         items,
         type: form.bookingType,
-        chargesPerSite: form.chargeMode === 'SITE',
+        chargesPerSite: perSiteMode,
         addOns: addOns.filter((a) => a.label),
         noOfPrints: Number(form.noOfPrints) || 0,
         printRate: Number(form.printRate) || 0,
@@ -257,7 +321,7 @@ export default function NewBooking() {
       }).then((r) => setQuote(r.data)).catch(() => setQuote(null));
     }, 250);
     return () => clearTimeout(t);
-  }, [lines, addOns, form.bookingType, form.noOfPrints, form.printRate, form.mountingCost, form.chargeMode, form.discountPct, form.taxCategory, form.interState]);
+  }, [lines, addOns, form.bookingType, form.noOfPrints, form.printRate, form.mountingCost, form.chargeMode, form.typeRates, form.mountings, siteById, form.discountPct, form.taxCategory, form.interState]);
 
   // Validate the essentials, then open the review modal instead of posting
   // straight away — the client asked for a fill → review → confirm flow.
@@ -316,7 +380,7 @@ export default function NewBooking() {
         // Mounting is charged per print (one mount per flex), not per site. Fall
         // back to the site count when no print quantity is entered.
         mountingCost: (Number(form.mountingCost) || 0) * (Number(form.noOfPrints) > 0 ? Number(form.noOfPrints) : lines.length),
-        chargesPerSite: form.chargeMode === 'SITE',
+        chargesPerSite: perSiteMode,
         monitoring: form.monitoring,
         monitorStart: form.monitoring && form.monitorStart,
         monitorMid: form.monitoring && form.monitorMid,
@@ -337,10 +401,11 @@ export default function NewBooking() {
           monthlyRateOverride: l.monthlyRateOverride || undefined,
           dayRateOverride: l.dayRateOverride || undefined,
           displayNotes: l.displayNotes || undefined,
-          printCharge: form.chargeMode === 'SITE' ? Number(l.printCharge) || 0 : undefined,
-          mountCharge: form.chargeMode === 'SITE' ? Number(l.mountCharge) || 0 : undefined,
+          ...chargeOf(l),
         })),
       });
+      // A booking made from a quotation marks that quotation converted.
+      if (sourceQuote) await api.post(`/quotations/${sourceQuote.id}/status`, { status: 'CONVERTED', orderId: data.id }).catch(() => {});
       navigate(`/orders?highlight=${data.id}`);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to save order');
@@ -359,6 +424,12 @@ export default function NewBooking() {
       </p>
 
       {error && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</div>}
+      {sourceQuote && (
+        <div className="mb-4 rounded-lg bg-sky-50 border border-sky-200 px-3 py-2 text-sm text-sky-900">
+          Booking from quotation <b>{sourceQuote.quoteNo}</b> — sites, rates and printing & mounting are pre-filled; check the dates, then confirm.
+          {(sourceQuote.lines || []).some((l) => !l.siteId) && <div className="text-xs mt-1">Free-text lines can't be booked and were left out: {(sourceQuote.lines || []).filter((l) => !l.siteId).map((l) => l.name).join(', ')}.</div>}
+        </div>
+      )}
 
       <div className="grid lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-4">
@@ -565,8 +636,8 @@ export default function NewBooking() {
             <div className="text-sm font-semibold text-slate-700">Printing partner (for invoicing)</div>
             <div>
               <label className="label">Charge printing &amp; mounting</label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {[['PRINT', 'Per print', 'No. of prints × rate, mounting per print'], ['SITE', 'Per site', 'Own printing + mounting amount on each site']].map(([v, l, d]) => (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {[['PRINT', 'Per print', 'No. of prints × rate, mounting per print'], ['TYPE', 'By media type', 'One rate for Unipole, one for Gantry …'], ['SITE', 'Per site', 'Own printing + mounting amount on each site']].map(([v, l, d]) => (
                   <button type="button" key={v} onClick={() => setChargeMode(v)}
                     className={`rounded-lg border p-3 text-left transition ${form.chargeMode === v ? 'border-brand bg-brand/5' : 'border-slate-200'}`}>
                     <div className="font-medium text-sm">{l}</div>
@@ -580,6 +651,39 @@ export default function NewBooking() {
                   Total: ₹{lines.reduce((s, l) => s + (Number(l.printCharge) || 0), 0).toLocaleString('en-IN')} printing
                   + ₹{lines.reduce((s, l) => s + (Number(l.mountCharge) || 0), 0).toLocaleString('en-IN')} mounting.
                 </p>
+              )}
+              {form.chargeMode === 'TYPE' && (
+                <div className="mt-3 space-y-2">
+                  {typeRows.length === 0 ? <p className="text-[11px] text-slate-500">Add sites above — their media types appear here.</p> : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="text-[11px] uppercase text-slate-400">
+                          <tr><th className="text-left py-1 pr-2">Media</th><th className="text-right py-1 px-2">Sites</th><th className="text-left py-1 px-2">Printing ₹ / site</th><th className="text-left py-1 px-2">Mounting ₹ / site</th><th className="text-right py-1 pl-2">Total</th></tr>
+                        </thead>
+                        <tbody>
+                          {typeRows.map((r) => {
+                            const rate = typeRateOf(r.type);
+                            const total = r.count * (rate.print + rate.mount * (Math.max(0, Number(form.mountings) || 0)));
+                            return (
+                              <tr key={r.type} className="border-t border-slate-100">
+                                <td className="py-1.5 pr-2 font-medium text-slate-700">{r.type.charAt(0) + r.type.slice(1).toLowerCase()}</td>
+                                <td className="py-1.5 px-2 text-right">{r.count}</td>
+                                <td className="py-1.5 px-2"><input type="number" min="0" className="input py-1 text-xs w-28" value={r.print ?? ''} placeholder={String(r.defPrint)} onChange={(e) => setTypeRate(r.type, 'print', e.target.value)} /></td>
+                                <td className="py-1.5 px-2"><input type="number" min="0" className="input py-1 text-xs w-28" value={r.mount ?? ''} placeholder={String(r.defMount)} onChange={(e) => setTypeRate(r.type, 'mount', e.target.value)} /></td>
+                                <td className="py-1.5 pl-2 text-right font-medium">₹{total.toLocaleString('en-IN')}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                    <span>No. of mountings</span>
+                    <input type="number" min="0" className="input py-1 text-xs w-20" value={form.mountings} onChange={(e) => set('mountings', e.target.value)} />
+                    <span className="text-slate-400">1 = once at start · 2 = one remount · 0 = no mounting. Printing &amp; mounting go on the first bill. Blank rates use Inventory.</span>
+                  </div>
+                </div>
               )}
             </div>
             <div className="grid sm:grid-cols-2 gap-4">
@@ -610,7 +714,7 @@ export default function NewBooking() {
                   );
                 })()}
               </div>
-              {form.chargeMode !== 'SITE' && (<>
+              {form.chargeMode === 'PRINT' && (<>
                 <div>
                   <label className="label">No. of Prints</label>
                   <input type="number" min="0" className="input" value={form.noOfPrints} onChange={(e) => set('noOfPrints', e.target.value)} />
@@ -624,23 +728,20 @@ export default function NewBooking() {
                   <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
                 </div>
               </>)}
-              <div>
-                <label className="label">Partner cost (total you pay)</label>
-                <input type="number" min="0" className="input" value={form.printCost} onChange={(e) => set('printCost', e.target.value)} placeholder="What you pay the printer" />
-              </div>
+              <PartnerCostField value={form.printCost} onChange={(v) => set('printCost', v)} auto={partnerAuto} />
             </div>
             {/* Internal printing P&L preview — customer never sees this. */}
             {(() => {
-              const charge = form.chargeMode === 'SITE'
-                ? lines.reduce((s, l) => s + (Number(l.printCharge) || 0), 0)
+              const charge = perSiteMode
+                ? lines.reduce((s, l) => s + (chargeOf(l).printCharge || 0), 0)
                 : (Number(form.noOfPrints) || 0) * (Number(form.printRate) || 0);
-              const cost = Number(form.printCost) || 0;
+              const cost = Number(form.printCost) || partnerAuto.cost;
               if (charge <= 0 && cost <= 0) return null;
               const margin = charge - cost;
               return (
                 <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs flex flex-wrap gap-x-4 gap-y-1">
                   <span className="text-slate-500">Printing charged: <b className="text-slate-700">₹{charge.toLocaleString('en-IN')}</b></span>
-                  <span className="text-slate-500">Partner cost: <b className="text-slate-700">₹{cost.toLocaleString('en-IN')}</b></span>
+                  <span className="text-slate-500">Partner cost{Number(form.printCost) > 0 ? '' : ' (auto)'}: <b className="text-slate-700">₹{cost.toLocaleString('en-IN')}</b></span>
                   <span className={margin >= 0 ? 'text-emerald-600' : 'text-red-600'}>Margin: <b>₹{margin.toLocaleString('en-IN')}</b></span>
                 </div>
               );
@@ -789,7 +890,7 @@ export default function NewBooking() {
             ) : (
               <dl className="space-y-2 text-sm">
                 <Line k={`Rental (${lines.length} site${lines.length !== 1 ? 's' : ''})`} v={<Money value={quote.rentalSubtotal} />} />
-                {quote.printingTotal > 0 && <Line k={form.chargeMode === 'SITE' ? 'Printing (per site)' : `Printing (${form.noOfPrints})`} v={<Money value={quote.printingTotal} />} />}
+                {quote.printingTotal > 0 && <Line k={form.chargeMode === 'SITE' ? 'Printing (per site)' : form.chargeMode === 'TYPE' ? 'Printing (by media type)' : `Printing (${form.noOfPrints})`} v={<Money value={quote.printingTotal} />} />}
                 {quote.mountingTotal > 0 && <Line k="Mounting" v={<Money value={quote.mountingTotal} />} />}
                 {quote.addOnTotal > 0 && <Line k="Add-ons" v={<Money value={quote.addOnTotal} />} />}
                 {quote.discountAmount > 0 && <Line k={`Discount (${form.discountPct}%)`} v={<span className="text-red-600">−<Money value={quote.discountAmount} /></span>} />}
@@ -1051,7 +1152,7 @@ export function AddSitePicker({ sites, onPickMultiple }) {
   }, [open]);
 
   const needle = q.trim().toLowerCase();
-  const matches = sites.filter((s) => !needle || `${s.code} ${s.location} ${s.zone}`.toLowerCase().includes(needle));
+  const matches = sites.filter((s) => !needle || `${s.code} ${s.location} ${s.billName || ''} ${s.zone} ${s.type}`.toLowerCase().includes(needle));
   const shown = matches.slice(0, 60);
 
   const toggle = (id) => {
@@ -1084,7 +1185,7 @@ export function AddSitePicker({ sites, onPickMultiple }) {
                 <div className="font-bold text-slate-800">Add sites</div>
                 <div className="text-xs text-slate-500">{matches.length} available · {picked.size} selected</div>
               </div>
-              <input autoFocus className="input py-1.5 text-sm w-64" placeholder="Search code, location or zone…"
+              <input autoFocus className="input py-1.5 text-sm w-64" placeholder="Search code, location, zone or type…"
                 value={q} onChange={(e) => setQ(e.target.value)} />
               <button type="button" className="text-slate-400 hover:text-slate-700" onClick={() => setOpen(false)}><X size={20} /></button>
             </div>
@@ -1099,7 +1200,8 @@ export function AddSitePicker({ sites, onPickMultiple }) {
                       <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${DOT[s.status] || 'bg-slate-400'}`} />
                       <span className="min-w-0">
                         <span className="block font-semibold text-sm text-slate-800">{s.code} <span className="font-normal text-slate-400 text-xs">· {s.zone}</span></span>
-                        <span className="block text-xs text-slate-500 break-words">{s.location}</span>
+                        <span className="block text-xs text-slate-500 break-words">{s.billName || s.location}</span>
+                        {s.monthlyRate > 0 && <span className="block text-[11px] text-slate-400">{s.type} · ₹{Number(s.monthlyRate).toLocaleString('en-IN')}/month</span>}
                       </span>
                     </label>
                   ))}

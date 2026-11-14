@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { Save } from 'lucide-react';
 import api from '../api';
+import { autoPartnerCost, PartnerCostField } from '../components/PartnerCost';
 import { useAuth, can } from '../auth';
 import { Money, Spinner } from '../components/ui';
 import { AddSitePicker, DURATIONS, presetEnd, billedDays, siteFreeForRange } from './NewBooking';
@@ -84,6 +85,14 @@ export default function EditCampaign() {
   }, [id, navigate]);
 
   const siteById = useMemo(() => Object.fromEntries(sites.map((s) => [s.id, s])), [sites]);
+  // Partner cost auto-worked from the partner's material ₹/sqft × the sites' area.
+  const partnerAuto = autoPartnerCost({
+    partner: partners.find((p) => String(p.id) === String(form?.printingPartnerId)),
+    materialName: form?.printMaterial,
+    sites: lines.map((l) => siteById[l.siteId]).filter(Boolean),
+    // Per print → the prints entered; per site / by media type → every site.
+    prints: form?.chargeMode === 'PRINT' ? form?.noOfPrints : lines.filter((l) => siteById[l.siteId]).length,
+  });
 
   // Dates to seed newly-added lines with: reuse the first existing line, else today+30.
   const addStart = lines[0]?.startDate || dayjs().format('YYYY-MM-DD');
@@ -359,10 +368,7 @@ export default function EditCampaign() {
                   <div className="text-[11px] text-slate-400 mt-1">Per print × no. of prints = mounting total.</div>
                 </div>
               </>)}
-              <div>
-                <label className="label">Partner cost (total you pay)</label>
-                <input type="number" min="0" className="input" value={form.printCost} onChange={(e) => set('printCost', e.target.value)} placeholder="What you pay the printer" />
-              </div>
+              <PartnerCostField value={form.printCost} onChange={(v) => set('printCost', v)} auto={partnerAuto} />
             </div>
             <div>
               <label className="label">Remarks</label>
@@ -372,13 +378,13 @@ export default function EditCampaign() {
               const charge = form.chargeMode === 'SITE'
                 ? lines.reduce((s, l) => s + (Number(l.printCharge) || 0), 0)
                 : (Number(form.noOfPrints) || 0) * (Number(form.printRate) || 0);
-              const cost = Number(form.printCost) || 0;
+              const cost = Number(form.printCost) || partnerAuto.cost;
               if (charge <= 0 && cost <= 0) return null;
               const margin = charge - cost;
               return (
                 <div className="mt-3 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs flex flex-wrap gap-x-4 gap-y-1">
                   <span className="text-slate-500">Printing charged: <b className="text-slate-700">₹{charge.toLocaleString('en-IN')}</b></span>
-                  <span className="text-slate-500">Partner cost: <b className="text-slate-700">₹{cost.toLocaleString('en-IN')}</b></span>
+                  <span className="text-slate-500">Partner cost{Number(form.printCost) > 0 ? '' : ' (auto)'}: <b className="text-slate-700">₹{cost.toLocaleString('en-IN')}</b></span>
                   <span className={margin >= 0 ? 'text-emerald-600' : 'text-red-600'}>Margin: <b>₹{margin.toLocaleString('en-IN')}</b></span>
                 </div>
               );
