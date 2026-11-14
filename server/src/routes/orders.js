@@ -11,6 +11,7 @@ const { advanceCampaignLifecycle } = require('../utils/lifecycle');
 const { nextOrderNo, nextBookingNo } = require('../utils/counters');
 const { logActivity } = require('../utils/activity');
 const { writeLineNotes } = require('../utils/pdf');
+const { docxToPdf } = require('../utils/docxToPdf');
 const { buildQuotationDocx } = require('../utils/quotationDocx');
 const { billingPlan } = require('../utils/billingPlan');
 const { previewWaitlistOverride, applyWaitlistOverride } = require('../utils/waitlist');
@@ -1078,11 +1079,23 @@ router.get('/:id/quotation.docx', requireRole('SALES', 'MANAGER', 'FINANCE'), as
   res.end(buffer);
 });
 
-// Quotation PDF for the client
+// Quotation PDF for the client — the Word letter converted to PDF so both
+// downloads look the same. Falls back to the older drawn layout if LibreOffice
+// isn't available on this machine.
 router.get('/:id/quotation.pdf', requireRole('SALES', 'MANAGER', 'FINANCE'), async (req, res) => {
   const order = await prisma.order.findUnique({ where: { id: Number(req.params.id) }, include: orderInclude });
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (salesForbidden(req, order)) return res.status(404).json({ error: 'Order not found' });
+  try {
+    const mediaLabels = Object.fromEntries((await prisma.mediaType.findMany()).map((m) => [m.code, m.label]));
+    const { buffer } = await buildQuotationDocx(order, { mediaLabels });
+    const pdf = await docxToPdf(buffer);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Quotation-${order.orderNo}.pdf"`);
+    return res.end(pdf);
+  } catch (e) {
+    console.error('[quotation pdf] falling back to drawn layout:', e.message);
+  }
 
   const doc = new PDFDocument({ margin: 45, size: 'A4' });
   res.setHeader('Content-Type', 'application/pdf');

@@ -50,6 +50,21 @@ export default function QuotationForm() {
     }));
   }
 
+  // Business Setup → rates & quotation defaults for this business.
+  const settings = activeCompany?.settings || {};
+  useEffect(() => {
+    if (editing) return;
+    const pt = settings.quotation?.paymentTerms || settings.booking?.paymentTerms;
+    if (pt) setForm((f) => ({ ...f, paymentTerms: pt }));
+  }, [activeCompany?.id]); // eslint-disable-line
+  // P&M per site: Business Setup's printing + mounting for the media type, else Inventory.
+  const pmOf = (s) => {
+    const r = settings.mediaRates?.[s.type];
+    const print = r?.print > 0 ? r.print : (s.printingCost || 0);
+    const mount = r?.mount > 0 ? r.mount : (s.mountingCost || 0);
+    return Math.round(print + mount);
+  };
+
   const siteById = useMemo(() => Object.fromEntries(sites.map((s) => [s.id, s])), [sites]);
   const offered = sites.filter((s) => !lines.some((l) => l.siteId === s.id));
   function addSites(ids) {
@@ -57,7 +72,7 @@ export default function QuotationForm() {
       const s = siteById[Number(sid)];
       return {
         siteId: s.id, code: s.code, type: s.type, name: s.billName || s.location, months: 1,
-        rate: Math.round(s.monthlyRate || 0), pm: Math.round((s.printingCost || 0) + (s.mountingCost || 0)),
+        rate: Math.round(s.monthlyRate || 0), pm: pmOf(s),
       };
     })]);
   }
@@ -68,6 +83,8 @@ export default function QuotationForm() {
   const pm = lines.reduce((s, l) => s + (Number(l.pm) || 0), 0);
   const gst = activeCompany?.gstHidden ? 0 : Math.round((rent + pm) * 0.18);
 
+  const fileBase = (no) => `Quotation-${no.replace(/\//g, '-')}`;
+  // fmt: 'docx' | 'pdf' | null (save only)
   async function save(andDownload) {
     setErr('');
     if (!form.clientName.trim()) return setErr('Addressee name is required (e.g. "Mr. Rajeev Ji").');
@@ -77,7 +94,7 @@ export default function QuotationForm() {
     try {
       const body = { ...form, companyId: q?.companyId || activeCompany?.id, lines };
       const { data } = editing ? await api.put(`/quotations/${id}`, body) : await api.post('/quotations', body);
-      if (andDownload) await downloadFile(`/quotations/${data.id}/docx`, `Quotation-${data.quoteNo.replace(/\//g, '-')}.docx`);
+      if (andDownload) await downloadFile(`/quotations/${data.id}/${andDownload}`, `${fileBase(data.quoteNo)}.${andDownload}`);
       navigate(`/quotations/${data.id}`, { replace: true });
       setQ(data);
     } catch (e) { setErr(e.response?.data?.error || 'Could not save the quotation'); }
@@ -98,7 +115,8 @@ export default function QuotationForm() {
         <div className="flex-1" />
         {editing && (
           <>
-            <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/quotations/${id}/docx`, `Quotation-${q.quoteNo.replace(/\//g, '-')}.docx`)}><Download size={16} /> Word letter</button>
+            <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/quotations/${id}/docx`, `${fileBase(q.quoteNo)}.docx`)}><Download size={16} /> Word</button>
+            <button className="btn-ghost text-sm flex items-center gap-1.5" onClick={() => downloadFile(`/quotations/${id}/pdf`, `${fileBase(q.quoteNo)}.pdf`)}><Download size={16} /> PDF</button>
             {!locked && <button className="btn-accent text-sm flex items-center gap-1.5" onClick={() => navigate(`/new-booking?fromQuote=${id}`)}><ArrowRightLeft size={16} /> Convert to booking</button>}
           </>
         )}
@@ -183,7 +201,10 @@ export default function QuotationForm() {
             <p className="text-[11px] text-slate-400">The letter shows each site's monthly rate{gst ? ' + GST' : ''}; printing & mounting go in its Terms.</p>
             {!locked && (
               <>
-                <button className="btn-primary w-full flex items-center justify-center gap-1.5" disabled={busy} onClick={() => save(true)}><Download size={16} /> {busy ? 'Saving…' : 'Save & download Word'}</button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button className="btn-primary w-full flex items-center justify-center gap-1.5" disabled={busy} onClick={() => save('docx')}><Download size={16} /> {busy ? 'Saving…' : 'Save & Word'}</button>
+                  <button className="btn-primary w-full flex items-center justify-center gap-1.5" disabled={busy} onClick={() => save('pdf')}><Download size={16} /> {busy ? 'Saving…' : 'Save & PDF'}</button>
+                </div>
                 <button className="btn-ghost w-full" disabled={busy} onClick={() => save(false)}><Plus size={16} className="inline" /> Save only</button>
               </>
             )}

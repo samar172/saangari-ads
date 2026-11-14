@@ -17,6 +17,7 @@ const ACTION_LABEL = {
   CANCEL_INVOICE: 'Cancel invoice',
   OVERRIDE_WAITLIST: 'Override waitlisted sites',
   UNLOCK_INVOICE: 'Reopen invoice for editing',
+  PRINT_CORRECTION: 'Printing correction (Recon)',
   OTHER: 'Other',
 };
 
@@ -186,7 +187,8 @@ export default function ApprovalDetail() {
             </dl>
           </Section>
 
-          {req.payload && !payment && (
+          {req.action === 'PRINT_CORRECTION' && <PrintCorrectionCard changes={req.payload?.changes || []} />}
+          {req.payload && !payment && req.action !== 'PRINT_CORRECTION' && (
             <Section title="Details">
               <PayloadView payload={req.payload} />
             </Section>
@@ -229,9 +231,14 @@ function CampaignContext({ o }) {
     <>
       <Section title={<span className="flex items-center gap-2">{o.orderNo} <Badge status={o.status} /></span>}
         right={(
-          <button className="btn-ghost text-xs flex items-center gap-1.5" onClick={() => downloadFile(`/orders/${o.id}/quotation.docx`, `Quotation-${o.orderNo}.docx`)}>
-            <FileText size={14} /> Quotation
-          </button>
+          <span className="flex gap-1">
+            <button className="btn-ghost text-xs flex items-center gap-1.5" onClick={() => downloadFile(`/orders/${o.id}/quotation.docx`, `Quotation-${o.orderNo}.docx`)}>
+              <FileText size={14} /> Quotation (Word)
+            </button>
+            <button className="btn-ghost text-xs flex items-center gap-1.5" onClick={() => downloadFile(`/orders/${o.id}/quotation.pdf`, `Quotation-${o.orderNo}.pdf`)}>
+              <FileText size={14} /> PDF
+            </button>
+          </span>
         )}>
         <div className="grid sm:grid-cols-2 gap-x-8 gap-y-2 text-sm">
           <Row k="Business">{o.company?.name || '—'}</Row>
@@ -462,4 +469,30 @@ function Note({ label, children }) {
 
 function Row({ k, children }) {
   return <div className="flex justify-between gap-4 border-b border-slate-100 pb-2"><dt className="text-slate-500">{k}</dt><dd className="font-medium text-slate-800 text-right min-w-0">{children}</dd></div>;
+}
+
+// Recon → printing correction: each campaign's partner / material / partner cost, before → after.
+function PrintCorrectionCard({ changes }) {
+  const r = (n) => `₹${Math.round(n || 0).toLocaleString('en-IN')}`;
+  const diff = (a, b) => (a === b ? <span className="text-slate-500">{a ?? '—'}</span> : <span><span className="line-through text-slate-400">{a ?? 'none'}</span> → <b>{b ?? 'none'}</b></span>);
+  const before = changes.reduce((s, c) => s + (c.before?.cost || 0), 0);
+  const after = changes.reduce((s, c) => s + (c.after?.cost || 0), 0);
+  return (
+    <Section title={`Printing correction · ${changes.length} campaign${changes.length === 1 ? '' : 's'}`}>
+      <div className="text-sm mb-2">Partner cost {r(before)} → <b>{r(after)}</b></div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs min-w-[360px]">
+          <thead className="text-[10px] uppercase text-slate-400"><tr><th className="text-left py-1">Campaign</th><th className="text-left py-1">Partner</th><th className="text-left py-1">Material</th><th className="text-right py-1">Cost</th></tr></thead>
+          <tbody>{changes.map((c) => (
+            <tr key={c.orderId} className="border-t border-slate-100 align-top">
+              <td className="py-1.5 font-medium">{c.orderNo}{c.before?.ok !== c.after?.ok && <div className="text-[10px] text-slate-500">{c.after?.ok ? 'mark checked' : 'unmark'}</div>}</td>
+              <td className="py-1.5">{diff(c.before?.partner, c.after?.partner)}</td>
+              <td className="py-1.5">{diff(c.before?.material, c.after?.material)}</td>
+              <td className="py-1.5 text-right">{r(c.before?.cost)} → <b>{r(c.after?.cost)}</b>{c.before?.printCost !== c.after?.printCost && <div className="text-[10px] text-slate-500">typed {r(c.after?.printCost)}</div>}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </Section>
+  );
 }

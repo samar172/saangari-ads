@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import api from '../api';
 import { useCompany } from '../CompanyContext';
 import { Spinner } from '../components/ui';
+import RatesSetup, { withSettingDefaults } from '../components/RatesSetup';
 
 const EMPTY = {
   code: '', name: '', legalName: '', gstin: '', pan: '',
@@ -11,6 +12,7 @@ const EMPTY = {
   gstMandatory: false, gstHidden: false,
   brandColor: '', termsAndConditions: '',
   bankAccounts: [],
+  settings: withSettingDefaults(null),
 };
 
 // Full-page create/edit for a business entity (replaces the Companies modal).
@@ -55,6 +57,7 @@ export default function CompanyForm() {
         // becomes the first entry.
         bankAccounts: Array.isArray(c.bankAccounts) && c.bankAccounts.length ? c.bankAccounts
           : (c.bankAccountNo ? [{ id: 'legacy', label: c.bankName || '', bankName: c.bankName || '', accountNo: c.bankAccountNo, branchIfsc: c.bankBranchIfsc || '' }] : []),
+        settings: withSettingDefaults(c.settings),
       });
     }).finally(() => setLoading(false));
   }, [id, editing]);
@@ -194,6 +197,11 @@ export default function CompanyForm() {
             <div className="mt-3 h-8 rounded-lg flex items-center px-3 text-white text-xs font-semibold" style={{ backgroundColor: form.brandColor || '#0f172a' }}>
               {form.name || 'Business'} · sidebar preview
             </div>
+          </div>
+
+          <div>
+            <div className="text-sm font-semibold text-slate-800 mb-2">Rates &amp; defaults</div>
+            <RatesSetup value={form.settings} onChange={(v) => set('settings', v)} gstLocked={form.gstMandatory || form.gstHidden} />
           </div>
 
           <div>

@@ -2,6 +2,7 @@ const router = require('express').Router();
 const prisma = require('../db');
 const { requirePermission } = require('../middleware/auth');
 const { nextQuoteNo } = require('../utils/counters');
+const { docxToPdf } = require('../utils/docxToPdf');
 const { buildQuotationDocx } = require('../utils/quotationDocx');
 const { logActivity } = require('../utils/activity');
 
@@ -106,9 +107,9 @@ router.post('/:id/status', requirePermission('campaigns', 'edit'), async (req, r
 
 // The Word letter. Lines become quotation rows priced per month for their
 // months; printing & mounting per site feeds the Terms.
-router.get('/:id/docx', requirePermission('campaigns', 'view'), async (req, res) => {
-  const q = await prisma.quotation.findUnique({ where: { id: Number(req.params.id) }, include: { company: true } });
-  if (!q) return res.status(404).json({ error: 'Quotation not found' });
+async function letterFor(id) {
+  const q = await prisma.quotation.findUnique({ where: { id }, include: { company: true } });
+  if (!q) return null;
   const sites = await prisma.site.findMany({ where: { id: { in: q.lines.map((l) => l.siteId).filter(Boolean) } }, select: { id: true, type: true } });
   const typeOf = Object.fromEntries(sites.map((s) => [s.id, s.type]));
   const order = {
@@ -128,9 +129,29 @@ router.get('/:id/docx', requirePermission('campaigns', 'view'), async (req, res)
   const mediaLabels = Object.fromEntries((await prisma.mediaType.findMany()).map((m) => [m.code, m.label]));
   const { buffer } = await buildQuotationDocx(order, { mediaLabels, ref: q.quoteNo });
   const safe = `${q.quoteNo}-${q.clientCompany || q.clientName}`.replace(/[^\w.-]+/g, '_');
+  return { buffer, safe };
+}
+
+router.get('/:id/docx', requirePermission('campaigns', 'view'), async (req, res) => {
+  const l = await letterFor(Number(req.params.id));
+  if (!l) return res.status(404).json({ error: 'Quotation not found' });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-  res.setHeader('Content-Disposition', `attachment; filename="Quotation-${safe}.docx"`);
-  res.end(buffer);
+  res.setHeader('Content-Disposition', `attachment; filename="Quotation-${l.safe}.docx"`);
+  res.end(l.buffer);
+});
+
+// The same letter as a PDF (converted from the Word file, so it looks identical).
+router.get('/:id/pdf', requirePermission('campaigns', 'view'), async (req, res) => {
+  const l = await letterFor(Number(req.params.id));
+  if (!l) return res.status(404).json({ error: 'Quotation not found' });
+  let pdf;
+  try { pdf = await docxToPdf(l.buffer); } catch (e) {
+    console.error('[quotation pdf]', e.message);
+    return res.status(503).json({ error: 'PDF conversion is unavailable right now — download the Word file instead.' });
+  }
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="Quotation-${l.safe}.pdf"`);
+  res.end(pdf);
 });
 
 module.exports = router;

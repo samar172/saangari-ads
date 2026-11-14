@@ -16,6 +16,8 @@ router.get('/', async (req, res) => {
   res.json(companies);
 });
 
+const { sanitizeSettings } = require('../utils/companySettings');
+
 function cleanCompanyData(body) {
   const data = {};
   const strFields = ['name', 'legalName', 'gstin', 'pan', 'address', 'phone', 'email', 'termsAndConditions', 'brandColor', 'bankName', 'bankAccountNo', 'bankBranchIfsc'];
@@ -40,6 +42,9 @@ function cleanCompanyData(body) {
       }))
       .filter((a) => a.bankName && a.accountNo);
   }
+  // Rates & defaults (printing/mounting per media type, saved charges, booking
+  // and quotation defaults) — cleaned to a fixed shape.
+  if (body.settings && typeof body.settings === 'object') data.settings = sanitizeSettings(body.settings);
   return data;
 }
 

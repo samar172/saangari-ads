@@ -24,7 +24,7 @@ const NAV = [
       { to: '/reports/sites', label: 'Site-wise', show: (u) => can(u, 'viewReports') },
       { to: '/booking-analysis', label: 'Booking Analysis', show: (u) => can(u, 'viewBookingAnalysis') },
     ] },
-  { to: '/accounts', label: 'Accounts', icon: BookOpen, show: (u) => can(u, 'viewAccounts') },
+  { to: '/accounts', label: 'Accounts', icon: BookOpen, show: (u) => can(u, 'viewAccounts'), badge: 'recon' },
   { to: '/approvals', label: 'Approvals', icon: ShieldCheck, show: (u) => u.role === 'MANAGER' || u.role === 'SUPER_ADMIN', badge: 'approvals' },
   { to: '/settings/companies', label: 'Business Setup', icon: Building2, show: (u) => can(u, 'manageSettings') },
   { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, show: (u) => can(u, 'viewWhatsapp') },
@@ -94,6 +94,16 @@ export default function Layout({ children }) {
     const t = setInterval(poll, 60000);
     return () => { alive = false; clearInterval(t); };
   }, [location.pathname]);
+  // Printing Reconciliation issues that need fixing — badge on Accounts.
+  const [reconCount, setReconCount] = useState(0);
+  useEffect(() => {
+    if (!user || !can(user, 'viewAccounts')) return undefined;
+    let alive = true;
+    const poll = () => api.get('/recon/printing/count').then((r) => { if (alive) setReconCount(r.data.needsFix || 0); }).catch(() => {});
+    poll();
+    const t = setInterval(poll, 300000);
+    return () => { alive = false; clearInterval(t); };
+  }, [location.pathname, user]);
   // On phones the sidebar is an off-canvas drawer; on lg+ it is always docked
   // and this flag is ignored.
   const [navOpen, setNavOpen] = useState(false);
@@ -182,7 +192,10 @@ export default function Layout({ children }) {
                 {n.badge === 'approvals' && pendingApprovals > 0 && (
                   <span className="rounded-full bg-brand-accent text-brand text-[10px] font-bold px-1.5 py-0.5 min-w-[18px] text-center">{pendingApprovals}</span>
                 )}
-                {n.badge && n.badge !== 'approvals' && dueCount > 0 && (
+                {n.badge === 'recon' && reconCount > 0 && (
+                  <span className="rounded-full bg-amber-400 text-slate-900 text-[10px] font-bold px-1.5 py-0.5 min-w-[18px] text-center" title="Printing reconciliation issues">{reconCount}</span>
+                )}
+                {n.badge && n.badge !== 'approvals' && n.badge !== 'recon' && dueCount > 0 && (
                   <span className="rounded-full bg-brand-accent text-brand text-[10px] font-bold px-1.5 py-0.5 min-w-[18px] text-center">{dueCount}</span>
                 )}
               </NavLink>

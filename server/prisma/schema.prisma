@@ -111,6 +111,7 @@ enum ApprovalAction {
   CANCEL_INVOICE
   OVERRIDE_WAITLIST
   UNLOCK_INVOICE
+  PRINT_CORRECTION
   OTHER
 }
 
@@ -185,6 +186,11 @@ model Company {
   // Header image printed at the top of this business's bills (uploaded in
   // Business Setup). Empty → GST bills use the Saangari letterhead banner.
   billHeaderUrl      String?
+  // Business Setup → rates & defaults (see server/src/utils/companySettings.js):
+  // { mediaRates: { UNIPOLE: { print, mount, remount } }, charges: [{ id, label,
+  //   amount, basis }], booking: {…defaults}, quotation: { validityDays,
+  //   signatory, signatoryTitle, phone } }
+  settings           Json?
   active             Boolean  @default(true)
   createdAt          DateTime @default(now())
 
@@ -401,6 +407,10 @@ model Order {
   // Internal only — never part of the customer's taxable amount. Printing margin
   // = printingTotal (charged) − printCost (paid). Feeds the partner payable ledger.
   printCost         Float            @default(0)
+  // Printing Reconciliation: someone checked this campaign's printing and marked
+  // the info-only flags (prints ≠ sites, 0 prints) as correct.
+  printReconOkAt    DateTime?
+  printReconNote    String?
 
   // Mounting (30-day mounting cycle)
   mountingCost Float @default(0)

@@ -209,32 +209,91 @@ export default function NewBooking() {
 
   const siteById = useMemo(() => Object.fromEntries(sites.map((s) => [s.id, s])), [sites]);
   // Partner cost auto-worked from the partner's material ₹/sqft × the sites' area.
+  // Business Setup → Rates & defaults for the active business.
+  const settings = activeCompany?.settings || {};
+  const setupRates = useMemo(() => activeCompany?.settings?.mediaRates || {}, [activeCompany]);
+  const savedCharges = Array.isArray(settings.charges) ? settings.charges : [];
+  // Apply the business's New Booking defaults once per business (a quotation
+  // being converted fills its own values afterwards).
+  const defaultsFor = useRef(null);
+  useEffect(() => {
+    if (!activeCompany || defaultsFor.current === activeCompany.id) return;
+    defaultsFor.current = activeCompany.id;
+    const b = activeCompany.settings?.booking;
+    if (!b) return;
+    setForm((f) => ({
+      ...f,
+      chargeMode: b.chargeMode || f.chargeMode,
+      mountings: b.mountings ?? f.mountings,
+      printingPartnerId: b.printingPartnerId ? String(b.printingPartnerId) : f.printingPartnerId,
+      printMaterial: b.printingPartnerId ? (b.printMaterial || '') : f.printMaterial,
+      paymentTerms: b.paymentTerms || f.paymentTerms,
+      billingCycle: b.billingCycle ?? f.billingCycle,
+      monitoring: b.monitoring ?? f.monitoring,
+      taxCategory: b.taxCategory || f.taxCategory,
+    }));
+  }, [activeCompany]);
+
   // 'TYPE' mode rows: each media type in the booking with its site count and
-  // the rate used (typed, else the most common Inventory rate for those sites).
+  // the rate used: typed here, else Business Setup's rate for the type, else
+  // the most common Inventory rate for those sites.
   const typeRows = useMemo(() => {
     const by = {};
     for (const l of lines) { const s = siteById[l.siteId]; if (!s) continue; (by[s.type] ||= []).push(s); }
     const common = (arr, k) => { const c = {}; for (const x of arr) c[x[k] || 0] = (c[x[k] || 0] || 0) + 1; return Number(Object.entries(c).sort((a, b) => b[1] - a[1])[0]?.[0] || 0); };
     return Object.entries(by).map(([type, arr]) => {
       const t = form.typeRates?.[type] || {};
-      return { type, count: arr.length, defPrint: common(arr, 'printingCost'), defMount: common(arr, 'mountingCost'), print: t.print, mount: t.mount };
+      const st = setupRates[type] || {};
+      const defMount = st.mount > 0 ? st.mount : common(arr, 'mountingCost');
+      return {
+        type, count: arr.length,
+        defPrint: st.print > 0 ? st.print : common(arr, 'printingCost'),
+        defMount, defRemount: st.remount > 0 ? st.remount : defMount,
+        print: t.print, mount: t.mount, remount: t.remount,
+      };
     });
-  }, [lines, siteById, form.typeRates]);
+  }, [lines, siteById, form.typeRates, setupRates]);
   const typeRateOf = (type) => {
     const r = typeRows.find((x) => x.type === type);
-    if (!r) return { print: 0, mount: 0 };
-    return { print: r.print !== undefined && r.print !== '' ? Number(r.print) || 0 : r.defPrint, mount: r.mount !== undefined && r.mount !== '' ? Number(r.mount) || 0 : r.defMount };
+    if (!r) return { print: 0, mount: 0, remount: 0 };
+    const pick = (v, d) => (v !== undefined && v !== '' ? Number(v) || 0 : d);
+    return { print: pick(r.print, r.defPrint), mount: pick(r.mount, r.defMount), remount: pick(r.remount, r.defRemount) };
+  };
+  // Mounting on one site: first mounting + remount × (mountings − 1); 0 = none.
+  const mountTotalOf = (r) => {
+    const n = Math.max(0, Number(form.mountings) || 0);
+    return n === 0 ? 0 : r.mount + r.remount * (n - 1);
   };
   const perSiteMode = form.chargeMode === 'SITE' || form.chargeMode === 'TYPE';
   // Printing / mounting charged on one site line under the current mode.
   const chargeOf = (l) => {
     if (form.chargeMode === 'TYPE') {
       const r = typeRateOf(siteById[l.siteId]?.type);
-      return { printCharge: r.print, mountCharge: r.mount * (Math.max(0, Number(form.mountings) || 0)) };
+      return { printCharge: r.print, mountCharge: mountTotalOf(r) };
     }
     if (form.chargeMode === 'SITE') return { printCharge: Number(l.printCharge) || 0, mountCharge: Number(l.mountCharge) || 0 };
     return { printCharge: undefined, mountCharge: undefined };
   };
+  // "Per print" fills itself in: prints = sites, rate = the material's rate (else
+  // the Business Setup / Inventory printing rate, averaged over the sites) and
+  // mounting per print likewise. A field stops following once someone types in it.
+  const [touched, setTouched] = useState({});
+  const touch = (k) => setTouched((t) => (t[k] ? t : { ...t, [k]: true }));
+  useEffect(() => {
+    if (form.chargeMode !== 'PRINT') return;
+    const live = lines.map((l) => siteById[l.siteId]).filter(Boolean);
+    if (!live.length) return;
+    const avg = (f) => Math.round(live.reduce((s, x) => s + f(x), 0) / live.length);
+    const st = (x) => setupRates[x.type] || {};
+    const partner = partners.find((p) => String(p.id) === String(form.printingPartnerId));
+    const mat = (partner?.materials || []).find((m) => m.name === form.printMaterial);
+    const next = {};
+    if (!touched.noOfPrints) next.noOfPrints = live.length;
+    if (!touched.printRate) next.printRate = mat?.rate > 0 ? mat.rate : avg((x) => (st(x).print > 0 ? st(x).print : x.printingCost || 0));
+    if (!touched.mountingCost) next.mountingCost = avg((x) => (st(x).mount > 0 ? st(x).mount : x.mountingCost || 0));
+    if (Object.keys(next).some((k) => String(next[k]) !== String(form[k]))) setForm((f) => ({ ...f, ...next }));
+  }, [form.chargeMode, form.printingPartnerId, form.printMaterial, lines, siteById, partners, touched, setupRates]); // eslint-disable-line
+
   const setTypeRate = (type, k, v) => setForm((f) => ({ ...f, typeRates: { ...f.typeRates, [type]: { ...(f.typeRates?.[type] || {}), [k]: v } } }));
   const partnerAuto = autoPartnerCost({
     partner: partners.find((p) => String(p.id) === String(form?.printingPartnerId)),
@@ -294,6 +353,22 @@ export default function NewBooking() {
         mountCharge: l.mountCharge ?? (s?.mountingCost ? String(s.mountingCost) : ''),
       };
     }));
+  }
+
+  // A saved charge from Business Setup → one "Other charges" line, sized by its
+  // basis: one-time, × sites, or × campaign months (longest site, 30-day months).
+  function addSavedCharge(c) {
+    const amt = Number(c.amount) || 0;
+    let label = c.label, amount = amt;
+    if (c.basis === 'SITE') {
+      const n = lines.length || 1;
+      amount = amt * n; label = `${c.label} (${n} site${n === 1 ? '' : 's'} × ₹${amt.toLocaleString('en-IN')})`;
+    } else if (c.basis === 'MONTH') {
+      const days = Math.max(1, ...lines.map((l) => (l.startDate && l.endDate ? dayjs(l.endDate).diff(dayjs(l.startDate), 'day') + 1 : 30)));
+      const m = Math.max(1, Math.ceil(days / 30));
+      amount = amt * m; label = `${c.label} (${m} month${m === 1 ? '' : 's'} × ₹${amt.toLocaleString('en-IN')})`;
+    }
+    setAddOns((a) => [...a, { label, amount: String(amount) }]);
   }
 
   const updateAddOn = (i, k, v) => setAddOns((a) => a.map((x, idx) => (idx === i ? { ...x, [k]: v } : x)));
@@ -658,18 +733,19 @@ export default function NewBooking() {
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead className="text-[11px] uppercase text-slate-400">
-                          <tr><th className="text-left py-1 pr-2">Media</th><th className="text-right py-1 px-2">Sites</th><th className="text-left py-1 px-2">Printing ₹ / site</th><th className="text-left py-1 px-2">Mounting ₹ / site</th><th className="text-right py-1 pl-2">Total</th></tr>
+                          <tr><th className="text-left py-1 pr-2">Media</th><th className="text-right py-1 px-2">Sites</th><th className="text-left py-1 px-2">Printing ₹ / site</th><th className="text-left py-1 px-2">Mounting ₹ / site</th>{Number(form.mountings) > 1 && <th className="text-left py-1 px-2">Remount ₹ / site</th>}<th className="text-right py-1 pl-2">Total</th></tr>
                         </thead>
                         <tbody>
                           {typeRows.map((r) => {
                             const rate = typeRateOf(r.type);
-                            const total = r.count * (rate.print + rate.mount * (Math.max(0, Number(form.mountings) || 0)));
+                            const total = r.count * (rate.print + mountTotalOf(rate));
                             return (
                               <tr key={r.type} className="border-t border-slate-100">
                                 <td className="py-1.5 pr-2 font-medium text-slate-700">{r.type.charAt(0) + r.type.slice(1).toLowerCase()}</td>
                                 <td className="py-1.5 px-2 text-right">{r.count}</td>
                                 <td className="py-1.5 px-2"><input type="number" min="0" className="input py-1 text-xs w-28" value={r.print ?? ''} placeholder={String(r.defPrint)} onChange={(e) => setTypeRate(r.type, 'print', e.target.value)} /></td>
                                 <td className="py-1.5 px-2"><input type="number" min="0" className="input py-1 text-xs w-28" value={r.mount ?? ''} placeholder={String(r.defMount)} onChange={(e) => setTypeRate(r.type, 'mount', e.target.value)} /></td>
+                                {Number(form.mountings) > 1 && <td className="py-1.5 px-2"><input type="number" min="0" className="input py-1 text-xs w-28" value={r.remount ?? ''} placeholder={String(r.defRemount)} onChange={(e) => setTypeRate(r.type, 'remount', e.target.value)} /></td>}
                                 <td className="py-1.5 pl-2 text-right font-medium">₹{total.toLocaleString('en-IN')}</td>
                               </tr>
                             );
@@ -681,7 +757,7 @@ export default function NewBooking() {
                   <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
                     <span>No. of mountings</span>
                     <input type="number" min="0" className="input py-1 text-xs w-20" value={form.mountings} onChange={(e) => set('mountings', e.target.value)} />
-                    <span className="text-slate-400">1 = once at start · 2 = one remount · 0 = no mounting. Printing &amp; mounting go on the first bill. Blank rates use Inventory.</span>
+                    <span className="text-slate-400">1 = once at start · 2 = one remount · 0 = no mounting. Printing &amp; mounting go on the first bill. Blank rates use Business Setup, else Inventory.</span>
                   </div>
                 </div>
               )}
@@ -717,15 +793,15 @@ export default function NewBooking() {
               {form.chargeMode === 'PRINT' && (<>
                 <div>
                   <label className="label">No. of Prints</label>
-                  <input type="number" min="0" className="input" value={form.noOfPrints} onChange={(e) => set('noOfPrints', e.target.value)} />
+                  <input type="number" min="0" className="input" value={form.noOfPrints} onChange={(e) => { set('noOfPrints', e.target.value); touch('noOfPrints'); }} />
                 </div>
                 <div>
                   <label className="label">Rate per Print</label>
-                  <input type="number" min="0" className="input" value={form.printRate} onChange={(e) => set('printRate', e.target.value)} />
+                  <input type="number" min="0" className="input" value={form.printRate} onChange={(e) => { set('printRate', e.target.value); touch('printRate'); }} />
                 </div>
                 <div>
                   <label className="label">Mounting Cost (per print)</label>
-                  <input type="number" className="input" value={form.mountingCost} onChange={(e) => set('mountingCost', e.target.value)} />
+                  <input type="number" className="input" value={form.mountingCost} onChange={(e) => { set('mountingCost', e.target.value); touch('mountingCost'); }} />
                 </div>
               </>)}
               <PartnerCostField value={form.printCost} onChange={(v) => set('printCost', v)} auto={partnerAuto} />
@@ -758,6 +834,17 @@ export default function NewBooking() {
               <div className="text-sm font-semibold text-slate-700">Other charges</div>
               <button type="button" className="text-xs text-brand-light font-medium" onClick={() => setAddOns((a) => [...a, { label: '', amount: '' }])}>+ Other</button>
             </div>
+            {savedCharges.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {savedCharges.map((c) => (
+                  <button type="button" key={c.id} className="text-xs rounded-full border border-slate-200 px-2.5 py-1 hover:border-brand hover:bg-brand/5"
+                    title={c.basis === 'SITE' ? 'Amount × no. of sites' : c.basis === 'MONTH' ? 'Amount × campaign months' : 'One-time amount'}
+                    onClick={() => addSavedCharge(c)}>
+                    + {c.label} <span className="text-slate-400">₹{Number(c.amount || 0).toLocaleString('en-IN')}{c.basis === 'SITE' ? '/site' : c.basis === 'MONTH' ? '/month' : ''}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             {addOns.length === 0 ? <div className="text-xs text-slate-400">Add any extra line — free text + amount — and it's added to the bill. e.g. illumination, permits, transport.</div> : (
               <div className="space-y-2">
                 {addOns.map((a, i) => (

@@ -72,6 +72,7 @@ export default function Quotations() {
                   <td className="px-4 py-3"><span className={`badge ${STATUS_STYLE[x.status]}`}>{x.status.toLowerCase()}</span></td>
                   <td className="px-4 py-3 text-right whitespace-nowrap space-x-2" onClick={(e) => e.stopPropagation()}>
                     <button className="text-brand-light underline text-xs" onClick={() => downloadFile(`/quotations/${x.id}/docx`, `Quotation-${x.quoteNo.replace(/\//g, '-')}.docx`)}><Download size={12} className="inline" /> Word</button>
+                    <button className="text-brand-light underline text-xs" onClick={() => downloadFile(`/quotations/${x.id}/pdf`, `Quotation-${x.quoteNo.replace(/\//g, '-')}.pdf`)}><Download size={12} className="inline" /> PDF</button>
                     {x.status === 'OPEN' && <button className="text-emerald-700 underline text-xs" onClick={() => navigate(`/new-booking?fromQuote=${x.id}`)}><ArrowRightLeft size={12} className="inline" /> Convert</button>}
                     {x.status === 'OPEN' && <button className="text-slate-500 underline text-xs" onClick={() => setStatusOf(x, 'LOST')}>Mark lost</button>}
                     {x.status === 'LOST' && <button className="text-slate-500 underline text-xs" onClick={() => setStatusOf(x, 'OPEN')}>Reopen</button>}

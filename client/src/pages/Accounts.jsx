@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import dayjs from 'dayjs';
-import { BookOpen, Users, NotebookPen, Plus } from 'lucide-react';
+import { BookOpen, Users, NotebookPen, Plus, ScanSearch } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import PrintingRecon from '../components/PrintingRecon';
 import api from '../api';
 import { useCompany } from '../CompanyContext';
 import { useAuth, can } from '../auth';
@@ -38,6 +40,7 @@ const TABS = [
   ['statement', 'Party statement', BookOpen],
   ['daybook', 'Day book', NotebookPen],
   ['financials', 'Financials', BookOpen],
+  ['recon', 'Reconciliation', ScanSearch],
 ];
 
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -47,7 +50,8 @@ export default function Accounts() {
   const { user } = useAuth();
   const [localCid, setLocalCid] = useState(activeCompany?.id || 'ALL');
   const [rangeKey, setRangeKey] = useState('FY_2026');
-  const [tab, setTab] = useState('receivables');
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState(params.get('tab') || 'receivables');
   const [clients, setClients] = useState([]);
   const [partyId, setPartyId] = useState('');
   const [postOpen, setPostOpen] = useState(false);
@@ -79,7 +83,7 @@ export default function Accounts() {
           <p className="text-sm text-slate-500">{localCid === 'ALL' ? 'Combined across all companies' : `${companies.find((c) => c.id === Number(localCid))?.name || ''} — party ledgers & receivables`}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {tab !== 'receivables' && (
+          {tab !== 'receivables' && tab !== 'recon' && (
             <select className="input w-auto py-1.5" value={rangeKey} onChange={(e) => setRangeKey(e.target.value)} title="Date range">
               {Object.entries(RANGES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
             </select>
@@ -110,6 +114,7 @@ export default function Accounts() {
       )}
       {tab === 'daybook' && <DayBook cid={cid} from={from} to={to} refreshKey={refreshKey} />}
       {tab === 'financials' && <Financials cid={cid} from={from} to={to} refreshKey={refreshKey} />}
+      {tab === 'recon' && <PrintingRecon cid={cid} />}
 
       {postOpen && (
         <PostEntryModal clients={clients} defaultCompanyId={cid} onClose={() => setPostOpen(false)} onSaved={() => { setPostOpen(false); refresh(); }} />

@@ -11,7 +11,7 @@ const { financialYear } = require('./counters');
 // XML below mirrors their latest letter (BKN/2026-27/PR/152) run for run.
 const TEMPLATE = path.join(__dirname, '../assets/quotation-template.docx');
 
-const LETTER = {
+const BASE_LETTER = {
   signatory: 'Anant Pareek',
   signatoryTitle: 'Business Head',
   legalName: 'Saangari Ads Private Limited',
@@ -140,6 +140,14 @@ function printMountRates(order) {
 // `ref` overrides the S No. (saved quotations carry their own number).
 function buildBody(order, { mediaLabels = {}, ref: refIn } = {}) {
   const gst = order.taxCategory === 'GST';
+  // Business Setup → Quotation defaults override the standard signatory block.
+  const qs = order.company?.settings?.quotation || {};
+  const LETTER = {
+    signatory: qs.signatory || BASE_LETTER.signatory,
+    signatoryTitle: qs.signatoryTitle || BASE_LETTER.signatoryTitle,
+    legalName: BASE_LETTER.legalName, // the letterhead is always the Pvt Ltd
+    phone: qs.phone || BASE_LETTER.phone,
+  };
   const fy = financialYear(new Date(order.bookingDate || order.createdAt || Date.now()));
   const ref = refIn || `BKN/${fy}/PR/${Number(String(order.orderNo).replace(/\D/g, '')) || order.id}`;
   const out = [];
@@ -188,6 +196,7 @@ function buildBody(order, { mediaLabels = {}, ref: refIn } = {}) {
     out.push(bullet(run('Design changes will be subject to additional cost, which will be borne by your company.')));
   }
   out.push(bullet(run(`Payment terms: - ${order.paymentTerms === 'POSTPAID' ? 'Monthly basis.' : 'Advance basis.'}`)));
+  if (qs.validityDays > 0) out.push(bullet(run(`This quotation is valid for ${qs.validityDays} days from the date above.`)));
   // The business's own standing terms (Businesses → Terms & Conditions), one bullet per line.
   for (const t of String(order.company?.termsAndConditions || '').split(/\r?\n/).map((s) => s.replace(/^\s*(?:[-•*]|\d+[.)])\s*/, '').trim()).filter(Boolean)) {
     out.push(bullet(run(t)));
