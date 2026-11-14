@@ -4,7 +4,7 @@ import { Download, Edit3, Send, FileSpreadsheet, Lock, History, Ban } from 'luci
 import api, { downloadFile } from '../api';
 import { useAuth, can } from '../auth';
 import { Badge, Money, Spinner, Modal } from '../components/ui';
-import { lockInfo, LockBadge, CancelInvoiceForm } from '../components/InvoiceLock';
+import { lockInfo, LockBadge, CancelInvoiceForm, RequestEditForm } from '../components/InvoiceLock';
 
 const fmtDT = (v) => new Date(v).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 const fmtD = (v) => new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -16,6 +16,7 @@ export default function InvoiceDetail() {
   const [invoice, setInvoice] = useState(null);
   const [sendOpen, setSendOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [editReqOpen, setEditReqOpen] = useState(false);
   const [note, setNote] = useState('');
   const isReviewer = user.role === 'MANAGER' || user.role === 'SUPER_ADMIN';
 
@@ -74,7 +75,23 @@ export default function InvoiceDetail() {
       {!cancelled && !lk.editable && (
         <div className="mb-4 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-sm text-slate-600 flex items-start gap-2">
           <Lock size={15} className="mt-0.5 shrink-0" />
-          <span>This invoice is locked{invoice.editableUntil ? ` (the 24-hour edit window ended ${fmtDT(invoice.editableUntil)})` : ''}. To correct it, cancel it with a reason and generate a fresh invoice.</span>
+          <span className="flex-1">
+            This invoice is locked{invoice.editableUntil ? ` (the 24-hour edit window ended ${fmtDT(invoice.editableUntil)})` : ''}.
+            {invoice.status === 'PAID'
+              ? ' It is paid — to correct it, cancel it with a reason and generate a fresh invoice.'
+              : ' To change it, request an edit (reopens it for 24 hours once approved), or cancel it and generate a fresh invoice.'}
+          </span>
+          {invoice.status !== 'PAID' && can(user, 'generateInvoice') && (
+            invoice.pendingUnlock
+              ? <span className="badge bg-amber-100 text-amber-800 shrink-0">Edit request awaiting approval{invoice.pendingUnlock.requestedBy?.name ? ` · ${invoice.pendingUnlock.requestedBy.name}` : ''}</span>
+              : <button className="btn-ghost text-xs shrink-0" onClick={() => setEditReqOpen((v) => !v)}>{isReviewer ? 'Reopen for editing' : 'Request edit'}</button>
+          )}
+        </div>
+      )}
+      {editReqOpen && (
+        <div className="mb-4 max-w-xl">
+          <RequestEditForm invoice={invoice} isReviewer={isReviewer} onClose={() => setEditReqOpen(false)}
+            onDone={(r) => { setEditReqOpen(false); setNote(r === 'reopened' ? 'Invoice reopened — editable for the next 24 hours.' : 'Edit request sent for Manager/Admin approval.'); load(); }} />
         </div>
       )}
       {cancelOpen && (

@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../api';
 import { ArrowLeft } from 'lucide-react';
 
-const EMPTY_NEW = { code: '', type: '', location: '', zone: '', city: '', light: 'NL', width: '', height: '', sqft: '', monthlyRate: '', dayRate: '', printingCost: '', mountingCost: '', latitude: '', longitude: '', status: 'AVAILABLE' };
+const EMPTY_NEW = { code: '', type: '', location: '', billName: '', zone: '', city: '', light: 'NL', width: '', height: '', sqft: '', monthlyRate: '', dayRate: '', printingCost: '', mountingCost: '', latitude: '', longitude: '', status: 'AVAILABLE' };
 
 // Create a new site — a route page at /inventory/new (was the AddSiteModal).
 export default function SiteForm() {
@@ -53,6 +53,9 @@ export default function SiteForm() {
             </select>
           </Field>
           <Field label="Location" span><input className="input" value={form.location} onChange={(e) => set('location', e.target.value)} /></Field>
+          <Field label="Bill name (short name printed on bills & quotations)" span>
+            <input className="input" value={form.billName || ''} onChange={(e) => set('billName', e.target.value)} placeholder="e.g. Jaipur Bypass Circle — blank = Location" />
+          </Field>
           <Field label="Zone"><input className="input" value={form.zone} onChange={(e) => set('zone', e.target.value)} /></Field>
           <Field label="City"><input className="input" value={form.city} onChange={(e) => set('city', e.target.value)} /></Field>
           <Field label="Width (ft)"><input type="number" className="input" value={form.width} onChange={(e) => set('width', e.target.value)} /></Field>

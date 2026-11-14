@@ -10,7 +10,7 @@ const EMPTY = {
   address: '', phone: '', email: '',
   gstMandatory: false, gstHidden: false,
   brandColor: '', termsAndConditions: '',
-  bankName: '', bankAccountNo: '', bankBranchIfsc: '',
+  bankAccounts: [],
 };
 
 // Full-page create/edit for a business entity (replaces the Companies modal).
@@ -24,18 +24,37 @@ export default function CompanyForm() {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  // Bill header image (uploaded straight away, separate from the form save).
+  const [header, setHeader] = useState({ url: null, busy: false, err: '' });
+
+  async function uploadHeader(file) {
+    if (!file) return;
+    setHeader((h) => ({ ...h, busy: true, err: '' }));
+    const fd = new FormData(); fd.append('image', file);
+    try { const { data } = await api.post(`/companies/${id}/bill-header`, fd); setHeader({ url: data.billHeaderUrl, busy: false, err: '' }); }
+    catch (e) { setHeader((h) => ({ ...h, busy: false, err: e.response?.data?.error || 'Upload failed' })); }
+  }
+  async function removeHeader() {
+    setHeader((h) => ({ ...h, busy: true, err: '' }));
+    try { await api.delete(`/companies/${id}/bill-header`); setHeader({ url: null, busy: false, err: '' }); }
+    catch (e) { setHeader((h) => ({ ...h, busy: false, err: e.response?.data?.error || 'Could not remove' })); }
+  }
 
   useEffect(() => {
     if (!editing) return;
     api.get('/companies').then((r) => {
       const c = r.data.find((x) => String(x.id) === String(id));
+      if (c) setHeader({ url: c.billHeaderUrl || null, busy: false, err: '' });
       if (c) setForm({
         code: c.code || '', name: c.name || '', legalName: c.legalName || '',
         gstin: c.gstin || '', pan: c.pan || '', address: c.address || '',
         phone: c.phone || '', email: c.email || '',
         gstMandatory: !!c.gstMandatory, gstHidden: !!c.gstHidden,
         brandColor: c.brandColor || '', termsAndConditions: c.termsAndConditions || '',
-        bankName: c.bankName || '', bankAccountNo: c.bankAccountNo || '', bankBranchIfsc: c.bankBranchIfsc || '',
+        // Several accounts can be printed on bills; an older single account
+        // becomes the first entry.
+        bankAccounts: Array.isArray(c.bankAccounts) && c.bankAccounts.length ? c.bankAccounts
+          : (c.bankAccountNo ? [{ id: 'legacy', label: c.bankName || '', bankName: c.bankName || '', accountNo: c.bankAccountNo, branchIfsc: c.bankBranchIfsc || '' }] : []),
       });
     }).finally(() => setLoading(false));
   }, [id, editing]);
@@ -90,13 +109,48 @@ export default function CompanyForm() {
             </Field>
           </div>
 
+          {editing && (
+            <div className="card p-4 bg-slate-50 border-slate-200">
+              <div className="font-semibold text-slate-800 text-sm mb-1">Bill Header</div>
+              <div className="text-xs text-slate-500 mb-3">
+                Printed at the top of this business's bills (Excel and PDF). PNG or JPG, wide like a letterhead banner.
+                {!header.url && (form.gstMandatory ? ' Until you upload one, GST bills use the Saangari letterhead.' : ' Until you upload one, bills keep a blank band at the top.')}
+              </div>
+              {header.url
+                ? <img src={header.url} alt="Bill header" className="w-full max-h-32 object-contain rounded border border-slate-200 bg-white" />
+                : <div className="rounded border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-400">{form.gstMandatory ? 'Using the default Saangari letterhead' : 'No header'}</div>}
+              <div className="flex flex-wrap gap-2 mt-3">
+                <label className={`btn-ghost text-xs cursor-pointer ${header.busy ? 'opacity-50 pointer-events-none' : ''}`}>
+                  {header.busy ? 'Working…' : header.url ? 'Replace header' : 'Upload header'}
+                  <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={(e) => { uploadHeader(e.target.files?.[0]); e.target.value = ''; }} />
+                </label>
+                {header.url && <button type="button" className="btn-ghost text-xs text-red-600" disabled={header.busy} onClick={removeHeader}>Remove</button>}
+              </div>
+              {header.err && <div className="text-xs text-red-600 mt-2">{header.err}</div>}
+            </div>
+          )}
+
           <div className="card p-4 bg-slate-50 border-slate-200">
-            <div className="font-semibold text-slate-800 text-sm mb-1">Bank Details</div>
-            <div className="text-xs text-slate-500 mb-3">Printed on the Excel bill under "Company's Bank Details".</div>
-            <div className="grid sm:grid-cols-3 gap-4">
-              <Field label="Bank Name"><input className="input" value={form.bankName} onChange={(e) => set('bankName', e.target.value)} placeholder="HDFC Bank" /></Field>
-              <Field label="A/C No."><input className="input" value={form.bankAccountNo} onChange={(e) => set('bankAccountNo', e.target.value)} /></Field>
-              <Field label="Branch & IFSC"><input className="input" value={form.bankBranchIfsc} onChange={(e) => set('bankBranchIfsc', e.target.value)} placeholder="HDFC0009247 (Samta Nagar)" /></Field>
+            <div className="flex items-center justify-between mb-1">
+              <div className="font-semibold text-slate-800 text-sm">Bank Accounts</div>
+              <button type="button" className="text-xs text-brand-light font-medium"
+                onClick={() => set('bankAccounts', [...form.bankAccounts, { id: '', label: '', bankName: '', accountNo: '', branchIfsc: '' }])}>+ Add account</button>
+            </div>
+            <div className="text-xs text-slate-500 mb-3">Printed on GST bills under "Company's Bank Details". When there is more than one, you pick the account on each bill.</div>
+            {form.bankAccounts.length === 0 && <div className="text-xs text-slate-400">No bank account yet.</div>}
+            <div className="space-y-3">
+              {form.bankAccounts.map((a, i) => {
+                const upd = (k, v) => set('bankAccounts', form.bankAccounts.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
+                return (
+                  <div key={i} className="grid sm:grid-cols-[1fr_1fr_1.3fr_auto] gap-2 items-end">
+                    <Field label="Bank Name"><input className="input" value={a.bankName} onChange={(e) => upd('bankName', e.target.value)} placeholder="ICICI Bank" /></Field>
+                    <Field label="A/C No."><input className="input" value={a.accountNo} onChange={(e) => upd('accountNo', e.target.value)} /></Field>
+                    <Field label="Branch & IFSC"><input className="input" value={a.branchIfsc} onChange={(e) => upd('branchIfsc', e.target.value)} placeholder="ICIC0006701 (Rau Bichwal)" /></Field>
+                    <button type="button" className="text-slate-400 hover:text-red-600 px-2 pb-2" title="Remove"
+                      onClick={() => set('bankAccounts', form.bankAccounts.filter((_, j) => j !== i))}>&times;</button>
+                  </div>
+                );
+              })}
             </div>
           </div>
 

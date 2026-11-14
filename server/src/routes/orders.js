@@ -14,7 +14,7 @@ const { writeLineNotes } = require('../utils/pdf');
 const { buildQuotationDocx } = require('../utils/quotationDocx');
 const { billingPlan } = require('../utils/billingPlan');
 const { previewWaitlistOverride, applyWaitlistOverride } = require('../utils/waitlist');
-const { planInclude } = require('../utils/invoicing');
+const { planInclude, bankAccountsOf, defaultBankFor } = require('../utils/invoicing');
 
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
 const ACTIVE = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
@@ -1059,7 +1059,10 @@ router.get('/:id/billing-plan', requirePermission('invoices', 'view'), async (re
   const order = await prisma.order.findUnique({ where: { id: Number(req.params.id) }, include: planInclude });
   if (!order) return res.status(404).json({ error: 'Order not found' });
   // ?start=&end= also previews (and validates) a custom-dates bill.
-  res.json(billingPlan(order, req.query.start && req.query.end ? { start: req.query.start, end: req.query.end } : undefined));
+  const plan = billingPlan(order, req.query.start && req.query.end ? { start: req.query.start, end: req.query.end } : undefined);
+  // Bank accounts the bill can show, and the default (last used for this client).
+  const def = await defaultBankFor(order);
+  res.json({ ...plan, bankAccounts: bankAccountsOf(order.company), defaultBankId: def?.id ?? null });
 });
 
 // Quotation letter as an editable Word file on the Saangari letterhead — the

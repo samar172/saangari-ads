@@ -181,9 +181,12 @@ function draftForRange(order, start, end, others, label, { roundingOnly = false 
     }
     rows.push({
       kind: 'SITE', bookingId: line.id,
-      location: line.site?.location || line.site?.code || '', code: line.site?.code || '',
+      location: line.site?.billName || line.site?.location || line.site?.code || '', code: line.site?.code || '',
       from: x.from.format('YYYY-MM-DD'), till: x.till.format('YYYY-MM-DD'),
       duration: durationLabel(x.days), qty: 1, price: x.amount,
+      // The rate the slice is priced at — the bill prints it as Price on a
+      // part-period row (monthly rate; day rate for loose lines).
+      rate: line.type === 'LOOSE' ? Math.round(line.dayRate) : (line.days ? Math.round((line.subtotal * 30) / line.days) : x.amount),
     });
   }
   // One-off charges (printing, mounting, add-ons, a flat discount) belong to

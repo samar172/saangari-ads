@@ -16,6 +16,7 @@ const ACTION_LABEL = {
   GENERATE_INVOICE: 'Generate invoice',
   CANCEL_INVOICE: 'Cancel invoice',
   OVERRIDE_WAITLIST: 'Override waitlisted sites',
+  UNLOCK_INVOICE: 'Reopen invoice for editing',
   OTHER: 'Other',
 };
 

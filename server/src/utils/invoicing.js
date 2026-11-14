@@ -39,6 +39,28 @@ function lockState(invoice, now = new Date()) {
   return { editable: true, editableUntil: invoice.editableUntil };
 }
 
+// The business's bank accounts a bill can show ([{ id, label, bankName,
+// accountNo, branchIfsc }]); the older single-account fields count as one.
+function bankAccountsOf(company) {
+  const list = Array.isArray(company?.bankAccounts) ? company.bankAccounts.filter((a) => a && a.accountNo) : [];
+  if (!list.length && company?.bankAccountNo) {
+    list.push({ id: 'legacy', label: company.bankName, bankName: company.bankName, accountNo: company.bankAccountNo, branchIfsc: company.bankBranchIfsc });
+  }
+  return list;
+}
+
+// Default account for a new bill: the one last used for this client, else the
+// business's first account.
+async function defaultBankFor(order) {
+  const accounts = bankAccountsOf(order.company);
+  if (!accounts.length) return null;
+  const last = await prisma.invoice.findFirst({
+    where: { clientId: order.clientId, companyId: order.companyId, bankAccountNo: { not: null } },
+    orderBy: { id: 'desc' }, select: { bankAccountNo: true },
+  });
+  return accounts.find((a) => a.accountNo === last?.bankAccountNo) || accounts[0];
+}
+
 const planInclude = { client: true, company: true, addOns: true, invoices: true, items: { include: { photos: true, site: true } } };
 
 // Roll the campaign's "next bill due" to its next unbilled period — or the
@@ -57,7 +79,7 @@ async function rollNextBillingDate(orderId) {
 // Shared by Finance's direct POST and the approved GENERATE_INVOICE request.
 // Throws errors tagged with `.status` (and `.canForce` for the soft
 // proof-of-display gate).
-async function createInvoiceForOrder({ orderId, force = false, dueDate, user, periodIndex, start, end }) {
+async function createInvoiceForOrder({ orderId, force = false, dueDate, user, periodIndex, start, end, bankAccountId, poNumber, poDate }) {
   const order = await prisma.order.findUnique({ where: { id: Number(orderId) }, include: planInclude });
   if (!order) { const e = new Error('Order not found'); e.status = 404; throw e; }
   const fail = (msg, status) => { const e = new Error(msg); e.status = status; throw e; };
@@ -91,6 +113,9 @@ async function createInvoiceForOrder({ orderId, force = false, dueDate, user, pe
   const taxCategory = order.taxCategory;
   const interState = order.interState;
   const split = gstSplit(taxCategory, interState, draft.taxable);
+  // Bank printed on the bill (GST bills): the one picked, else the default.
+  const accounts = bankAccountsOf(order.company);
+  const bank = (bankAccountId && accounts.find((a) => String(a.id) === String(bankAccountId))) || await defaultBankFor(order);
   const invoiceNo = await nextInvoiceNo(taxCategory);
 
   const invoice = await prisma.invoice.create({
@@ -104,6 +129,9 @@ async function createInvoiceForOrder({ orderId, force = false, dueDate, user, pe
       periodStart: draft.periodStart, periodEnd: draft.periodEnd, periodLabel: draft.label,
       lines: draft.rows,
       editableUntil: dayjs().add(EDIT_WINDOW_HOURS, 'hour').toDate(),
+      bankName: bank?.bankName || null, bankAccountNo: bank?.accountNo || null, bankBranchIfsc: bank?.branchIfsc || null,
+      poNumber: poNumber ? String(poNumber).trim() : null,
+      poDate: poDate ? new Date(poDate) : null,
     },
   });
 
@@ -126,6 +154,27 @@ async function redraftInvoice(invoiceId) {
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   const order = await prisma.order.findUnique({ where: { id: invoice.orderId }, include: planInclude });
   return redraftFor(order, invoice);
+}
+
+// Reopen a locked invoice for another 24-hour edit window (after approval,
+// or directly by a Manager/Admin). Paid and cancelled bills can't be reopened —
+// those are corrected by cancel & re-issue. Logged with who/why.
+async function unlockInvoice({ invoiceId, reason, user, requestedBy }) {
+  const why = String(reason || '').trim();
+  if (!why) { const e = new Error('A reason is required to reopen an invoice.'); e.status = 400; throw e; }
+  const invoice = await prisma.invoice.findUnique({ where: { id: Number(invoiceId) }, include: { order: { select: { orderNo: true } } } });
+  if (!invoice) { const e = new Error('Invoice not found'); e.status = 404; throw e; }
+  if (invoice.status === 'CANCELLED') { const e = new Error(`${invoice.invoiceNo} is cancelled — generate a fresh invoice instead.`); e.status = 409; throw e; }
+  if (invoice.status === 'PAID') { const e = new Error(`${invoice.invoiceNo} is paid — cancel and re-issue it to correct it.`); e.status = 409; throw e; }
+  if (lockState(invoice).editable) { const e = new Error(`${invoice.invoiceNo} is already editable.`); e.status = 409; throw e; }
+  const editableUntil = dayjs().add(EDIT_WINDOW_HOURS, 'hour').toDate();
+  const updated = await prisma.invoice.update({ where: { id: invoice.id }, data: { editableUntil } });
+  logActivity({
+    type: 'INVOICE_UNLOCK', user, orderId: invoice.orderId, orderNo: invoice.order?.orderNo, invoiceId: invoice.id,
+    summary: `Invoice reopened for ${EDIT_WINDOW_HOURS}h · ${invoice.invoiceNo}`,
+    detail: `${requestedBy ? `Requested by ${requestedBy} · ` : ''}${why}`,
+  });
+  return updated;
 }
 
 // Cancel a wrong bill. Never deletes: the invoice stays on record (number kept)
@@ -162,6 +211,6 @@ async function cancelInvoice({ invoiceId, reason, user }) {
 }
 
 module.exports = {
-  createInvoiceForOrder, redraftInvoice, cancelInvoice, lockState, rollNextBillingDate,
+  createInvoiceForOrder, redraftInvoice, cancelInvoice, unlockInvoice, lockState, bankAccountsOf, defaultBankFor, rollNextBillingDate,
   lastWorkingDayOfMonth, gstSplit, EDIT_WINDOW_HOURS, planInclude,
 };

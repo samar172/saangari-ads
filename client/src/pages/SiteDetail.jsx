@@ -27,7 +27,7 @@ export default function SiteDetail() {
   function startEdit() {
     setForm({
       type: full.type ?? '',
-      location: full.location ?? '', zone: full.zone ?? '', city: full.city ?? '', light: full.light ?? '',
+      location: full.location ?? '', billName: full.billName ?? '', zone: full.zone ?? '', city: full.city ?? '', light: full.light ?? '',
       width: full.width ?? '', height: full.height ?? '', sqft: full.sqft ?? '', monthlyRate: full.monthlyRate ?? '',
       dayRate: full.dayRate ?? '',
       printingCost: full.printingCost ?? '', mountingCost: full.mountingCost ?? '',
@@ -106,6 +106,9 @@ export default function SiteDetail() {
                 </select>
               </Field>
               <Field label="Location" span><input className="input" value={form.location} onChange={(e) => set('location', e.target.value)} /></Field>
+              <Field label="Bill name (short name printed on bills & quotations)" span>
+                <input className="input" value={form.billName || ''} onChange={(e) => set('billName', e.target.value)} placeholder="e.g. Jaipur Bypass Circle — blank = Location" />
+              </Field>
               <Field label="Zone"><input className="input" value={form.zone} onChange={(e) => set('zone', e.target.value)} /></Field>
               <Field label="City"><input className="input" value={form.city} onChange={(e) => set('city', e.target.value)} /></Field>
               <Field label="Width (ft)"><input type="number" className="input" value={form.width} onChange={(e) => set('width', e.target.value)} /></Field>

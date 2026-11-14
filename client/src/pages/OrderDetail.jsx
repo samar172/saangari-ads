@@ -8,6 +8,7 @@ import { Badge, Money, Spinner } from '../components/ui';
 import { tdsAmountOf } from '../lib/tds';
 import { lockInfo, LockBadge, CancelInvoiceForm } from '../components/InvoiceLock';
 import BillPeriodPicker from '../components/BillPeriodPicker';
+import BillExtras from '../components/BillExtras';
 
 const PHASES = ['START', 'MID', 'END'];
 const KINDS = [['GPS', <><MapPin size={14} className="inline mr-1" /> GPS</>], ['NORMAL', <><ImageIcon size={14} className="inline mr-1" /> Normal</>], ['NEWSPAPER', <><Newspaper size={14} className="inline mr-1" /> Newspaper</>]];
@@ -940,6 +941,7 @@ function InvoicesPanel({ o, user, onChanged }) {
   const [warn, setWarn] = useState(''); // soft photo-gate → offer "invoice anyway"
   const [cancelling, setCancelling] = useState(null); // invoice being cancelled
   const [pick, setPick] = useState(null); // { periodIndex } | { start, end } from the picker
+  const [extras, setExtras] = useState({}); // { bankAccountId, poNumber, poDate }
 
   useEffect(() => {
     if (!can(user, 'viewInvoices')) return;
@@ -962,7 +964,7 @@ function InvoicesPanel({ o, user, onChanged }) {
     setBusy(true); setErr(''); if (force) setWarn('');
     try {
       await api.post('/invoices', {
-        orderId: o.id, force: !!force, periodIndex: pick?.periodIndex, start: pick?.start, end: pick?.end,
+        orderId: o.id, force: !!force, periodIndex: pick?.periodIndex, start: pick?.start, end: pick?.end, ...extras,
         dueDate: dueDate || undefined,
       });
       setDueDate('');
@@ -982,7 +984,7 @@ function InvoicesPanel({ o, user, onChanged }) {
       await api.post('/approvals', {
         action: 'GENERATE_INVOICE', entityType: 'order', entityId: o.id,
         label: `${o.orderNo} · ${o.client.company || o.client.name} · generate invoice${pick?.draft?.label ? ` (${pick.draft.label})` : ''}`,
-        payload: { dueDate: dueDate || undefined, periodIndex: pick?.periodIndex, start: pick?.start, end: pick?.end },
+        payload: { dueDate: dueDate || undefined, periodIndex: pick?.periodIndex, start: pick?.start, end: pick?.end, ...extras },
       });
       onChanged();
     } catch (e) { setErr(e.response?.data?.error || 'Could not request invoice'); }
@@ -1072,6 +1074,9 @@ function InvoicesPanel({ o, user, onChanged }) {
                           {lk.editable && canGenerate && (
                             <button className="text-slate-600 underline text-xs" onClick={() => navigate(`/invoices/${i.id}/edit`)}>Edit</button>
                           )}
+                          {!lk.editable && canGenerate && !['PAID', 'CANCELLED'].includes(i.status) && (
+                            <button className="text-sky-700 underline text-xs" onClick={() => navigate(`/invoices/${i.id}`)}>{isReviewer ? 'Reopen' : 'Request edit'}</button>
+                          )}
                           {canGenerate && !['PAID', 'CANCELLED'].includes(i.status) && (
                             <button className="text-emerald-600 underline text-xs" onClick={() => markPaid(i.id)}>Mark paid</button>
                           )}
@@ -1116,6 +1121,7 @@ function InvoicesPanel({ o, user, onChanged }) {
             <div className="flex items-center gap-2 text-base font-semibold text-slate-800 mb-3"><Receipt size={18} /> Generate invoice for {o.orderNo}</div>
             <div className="sm:max-w-lg mb-3">
               <BillPeriodPicker orderId={o.id} taxCategory={o.taxCategory} plan={plan} onChange={setPick} />
+              <div className="mt-3"><BillExtras plan={plan} taxCategory={o.taxCategory} value={extras} onChange={setExtras} /></div>
             </div>
             <div className="sm:max-w-xs">
               <label className="label">Due date</label>
@@ -1148,6 +1154,7 @@ function InvoicesPanel({ o, user, onChanged }) {
             <div className="flex items-center gap-2 text-base font-semibold text-slate-800 mb-3"><Receipt size={18} /> Request invoice for {o.orderNo}</div>
             <div className="sm:max-w-lg mb-3">
               <BillPeriodPicker orderId={o.id} taxCategory={o.taxCategory} plan={plan} onChange={setPick} />
+              <div className="mt-3"><BillExtras plan={plan} taxCategory={o.taxCategory} value={extras} onChange={setExtras} /></div>
             </div>
             <div className="sm:max-w-xs">
               <label className="label">Due date (optional)</label>

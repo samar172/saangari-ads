@@ -3,12 +3,12 @@ const prisma = require('../db');
 const { requireRole, requirePermission } = require('../middleware/auth');
 const { settleInCash } = require('../utils/settle');
 const { applyPaymentEdit } = require('../utils/payments');
-const { createInvoiceForOrder, cancelInvoice } = require('../utils/invoicing');
+const { createInvoiceForOrder, cancelInvoice, unlockInvoice } = require('../utils/invoicing');
 const { applyWaitlistOverride } = require('../utils/waitlist');
 const { advanceCampaignLifecycle } = require('../utils/lifecycle');
 const { logActivity } = require('../utils/activity');
 
-const ACTIONS = ['DELETE_ORDER', 'CANCEL_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'EDIT_PAYMENT', 'CONFIRM_ORDER', 'GENERATE_INVOICE', 'CANCEL_INVOICE', 'OVERRIDE_WAITLIST', 'OTHER'];
+const ACTIONS = ['DELETE_ORDER', 'CANCEL_ORDER', 'DELETE_INVOICE', 'SETTLE_CASH', 'DISABLE_USER', 'EDIT_PAYMENT', 'CONFIRM_ORDER', 'GENERATE_INVOICE', 'CANCEL_INVOICE', 'OVERRIDE_WAITLIST', 'UNLOCK_INVOICE', 'OTHER'];
 const ACTIVE = ['TENTATIVE', 'CONFIRMED', 'LIVE'];
 
 // Release a site back to AVAILABLE unless another live booking still holds it.
@@ -201,13 +201,23 @@ async function execute(request, approver) {
       // Raise the invoice a Sales user requested. force:true — the reviewer has
       // decided; the proof-of-display gate was their call to make.
       const payload = request.payload || {};
-      await createInvoiceForOrder({ orderId: id, force: true, dueDate: payload.dueDate, periodIndex: payload.periodIndex, start: payload.start, end: payload.end, user: approver });
+      await createInvoiceForOrder({
+        orderId: id, force: true, dueDate: payload.dueDate, periodIndex: payload.periodIndex, start: payload.start, end: payload.end,
+        bankAccountId: payload.bankAccountId, poNumber: payload.poNumber, poDate: payload.poDate, user: approver,
+      });
       return;
     }
     case 'OVERRIDE_WAITLIST': {
       // Turn the requested waitlisted lines into normal loose bookings and
       // re-price the campaign. The approver is recorded as the one who did it.
       await applyWaitlistOverride({ orderId: id, lineIds: request.payload?.lineIds, reason: request.reason, user: approver });
+      return;
+    }
+    case 'UNLOCK_INVOICE': {
+      // Reopen the invoice for another 24h edit window; the approver is
+      // recorded as the one who reopened it, the requester in the log detail.
+      const requester = await prisma.user.findUnique({ where: { id: request.requestedById }, select: { name: true } });
+      await unlockInvoice({ invoiceId: id, reason: request.reason, user: approver, requestedBy: requester?.name });
       return;
     }
     case 'CANCEL_INVOICE': {
@@ -262,7 +272,7 @@ router.post('/:id/approve', requirePermission('approvals', 'edit'), async (req, 
 
   // Record the approved action in the activity feed (a cancellation, a payment
   // edit, a cash settlement, …). orderId only when the request was about an order.
-  const ACTIVITY_TYPE = { CANCEL_ORDER: 'CANCEL', EDIT_PAYMENT: 'PAYMENT_EDIT', DELETE_ORDER: 'CANCEL', CONFIRM_ORDER: 'BOOKING', GENERATE_INVOICE: 'INVOICE', CANCEL_INVOICE: 'INVOICE_CANCEL', OVERRIDE_WAITLIST: 'CAMPAIGN_EDIT' };
+  const ACTIVITY_TYPE = { CANCEL_ORDER: 'CANCEL', EDIT_PAYMENT: 'PAYMENT_EDIT', DELETE_ORDER: 'CANCEL', CONFIRM_ORDER: 'BOOKING', GENERATE_INVOICE: 'INVOICE', CANCEL_INVOICE: 'INVOICE_CANCEL', OVERRIDE_WAITLIST: 'CAMPAIGN_EDIT', UNLOCK_INVOICE: 'INVOICE_UNLOCK' };
   logActivity({
     type: ACTIVITY_TYPE[request.action] || 'CAMPAIGN_EDIT', user: req.user,
     orderId: request.entityType === 'order' ? request.entityId : undefined,

@@ -110,6 +110,7 @@ enum ApprovalAction {
   GENERATE_INVOICE
   CANCEL_INVOICE
   OVERRIDE_WAITLIST
+  UNLOCK_INVOICE
   OTHER
 }
 
@@ -177,6 +178,12 @@ model Company {
   bankName           String?
   bankAccountNo      String?
   bankBranchIfsc     String? // e.g. "HDFC0009247 (Samta Nagar)"
+  // All bank accounts a bill can show; one is picked per bill.
+  // [{ id, label, bankName, accountNo, branchIfsc }]
+  bankAccounts       Json?
+  // Header image printed at the top of this business's bills (uploaded in
+  // Business Setup). Empty → GST bills use the Saangari letterhead banner.
+  billHeaderUrl      String?
   active             Boolean  @default(true)
   createdAt          DateTime @default(now())
 
@@ -256,6 +263,9 @@ model Site {
   zone         String
   city         String
   location     String
+  // Short name printed on bills & quotations ("Jaipur Bypass Circle"); falls
+  // back to `location` when empty.
+  billName     String?
   light        String     @default("NL")
   width        Float      @default(0)
   height       Float      @default(0)
@@ -597,6 +607,14 @@ model Invoice {
   cancelReason    String?
   cancelledById   Int?
   cancelledByName String?
+  // Bank account printed on this bill (picked when generating) — a snapshot,
+  // so a reprint never changes if the business's accounts are edited later.
+  bankName        String?
+  bankAccountNo   String?
+  bankBranchIfsc  String?
+  // Client's purchase order, printed under PAN when given.
+  poNumber        String?
+  poDate          DateTime?
 
   ledgerEntries LedgerEntry[]
 }

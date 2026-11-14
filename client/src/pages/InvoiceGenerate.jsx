@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import api from '../api';
 import BillPeriodPicker from '../components/BillPeriodPicker';
+import BillExtras from '../components/BillExtras';
 
 // Full-page "Generate Invoice" flow (was a modal on the Invoices list). Pick a
 // confirmed/live order not yet invoiced, set a due date, and raise the bill.
@@ -17,6 +18,7 @@ export default function InvoiceGenerate() {
   const [busy, setBusy] = useState(false);
   const [plan, setPlan] = useState(null);
   const [pick, setPick] = useState(null); // { periodIndex } | { start, end } from the picker
+  const [extras, setExtras] = useState({}); // { bankAccountId, poNumber, poDate }
 
   useEffect(() => {
     // Confirmed/live orders. Any of them may still have unbilled days (a cycle
@@ -25,7 +27,7 @@ export default function InvoiceGenerate() {
   }, []);
 
   useEffect(() => {
-    setPlan(null);
+    setPlan(null); setExtras({});
     if (orderId) api.get(`/orders/${orderId}/billing-plan`).then((r) => setPlan(r.data)).catch(() => setPlan(null));
   }, [orderId]);
 
@@ -39,6 +41,7 @@ export default function InvoiceGenerate() {
         force: !!force,
         periodIndex: pick?.periodIndex,
         start: pick?.start, end: pick?.end,
+        ...extras,
         dueDate: dueDate || undefined,
       });
       navigate(data?.id ? `/invoices/${data.id}` : '/invoices');
@@ -70,6 +73,7 @@ export default function InvoiceGenerate() {
         {plan && (
           <div className="mt-3">
             <BillPeriodPicker orderId={orderId} taxCategory={selectedOrder?.taxCategory} plan={plan} onChange={setPick} />
+            <div className="mt-3"><BillExtras plan={plan} taxCategory={selectedOrder?.taxCategory} value={extras} onChange={setExtras} /></div>
           </div>
         )}
 

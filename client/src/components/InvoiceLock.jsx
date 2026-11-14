@@ -23,6 +23,44 @@ export function LockBadge({ invoice }) {
     : <span className="badge bg-slate-100 text-slate-600 inline-flex items-center gap-1"><Lock size={11} /> {l.text}</span>;
 }
 
+// Reopen a locked invoice for another 24 hours of edits. Manager / Super Admin
+// reopen straight away; Finance files an UNLOCK_INVOICE request for approval.
+export function RequestEditForm({ invoice, isReviewer, onDone, onClose }) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function submit() {
+    if (!reason.trim()) return setErr('Please give a reason.');
+    setBusy(true); setErr('');
+    try {
+      const { data } = await api.post(`/invoices/${invoice.id}/unlock`, { reason: reason.trim() });
+      onDone?.(data.done ? 'reopened' : 'requested');
+    } catch (e) {
+      setErr(e.response?.data?.error || 'Could not reopen the invoice');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-sky-200 bg-sky-50/70 p-3 space-y-2">
+      <div className="text-sm font-semibold text-sky-900">{isReviewer ? `Reopen ${invoice.invoiceNo} for editing` : `Request to edit ${invoice.invoiceNo}`}</div>
+      <p className="text-xs text-sky-900/80">
+        {isReviewer ? 'The invoice becomes editable for another 24 hours, then locks again.' : 'A Manager/Admin must approve. Once approved, the invoice is editable for 24 hours, then locks again.'}
+        {' '}This is recorded in the invoice's history.
+      </p>
+      <textarea className="input h-16 text-sm" placeholder="Reason (e.g. wrong mounting charge, client asked for a different due date)" value={reason} onChange={(e) => setReason(e.target.value)} />
+      {err && <div className="text-xs text-red-700">{err}</div>}
+      <div className="flex gap-2 justify-end">
+        <button type="button" className="btn-ghost text-xs" onClick={onClose}>Close</button>
+        <button type="button" className="btn-primary text-xs" disabled={busy} onClick={submit}>
+          {busy ? 'Working…' : isReviewer ? 'Reopen for 24h' : 'Send request'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // Cancel a wrong bill. Manager / Super Admin cancel straight away; anyone else
 // files a CANCEL_INVOICE request for a Manager/Admin to approve. A reason is
 // always required — it is printed on the cancelled bill and kept in the log.

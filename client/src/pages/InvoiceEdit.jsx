@@ -4,6 +4,11 @@ import { Check, X } from 'lucide-react';
 import api from '../api';
 import { Spinner } from '../components/ui';
 
+// Bank accounts a bill can show (an older single account counts as one).
+const bankOptions = (company) => (Array.isArray(company?.bankAccounts) && company.bankAccounts.length
+  ? company.bankAccounts
+  : (company?.bankAccountNo ? [{ id: 'legacy', bankName: company.bankName, accountNo: company.bankAccountNo, branchIfsc: company.bankBranchIfsc }] : []));
+
 // Full-page invoice edit (was EditPricingModal). Edits pricing (discount,
 // printing, mounting, add-ons), issue + due dates. Recomputes order totals and
 // the client's ledger on save.
@@ -27,6 +32,9 @@ export default function InvoiceEdit() {
         discountRemarks: o.discountRemarks || '',
         dueDate: inv.dueDate ? inv.dueDate.slice(0, 10) : '',
         issuedAt: inv.issuedAt ? inv.issuedAt.slice(0, 10) : '',
+        poNumber: inv.poNumber || '',
+        poDate: inv.poDate ? inv.poDate.slice(0, 10) : '',
+        bankAccountId: (bankOptions(inv.company).find((a) => a.accountNo === inv.bankAccountNo) || {}).id ?? '',
       });
       setAddOns(o.addOns?.map((a) => ({ label: a.label, amount: a.amount, id: Math.random() })) || []);
     }).catch(() => navigate('/invoices'));
@@ -36,7 +44,8 @@ export default function InvoiceEdit() {
     e.preventDefault();
     setBusy(true); setErr('');
     try {
-      await api.patch(`/invoices/${id}/commercials`, { ...form, addOns: addOns.filter((a) => a.label.trim()) });
+      const { bankAccountId, ...rest } = form;
+      await api.patch(`/invoices/${id}/commercials`, { ...rest, ...(bankAccountId ? { bankAccountId } : {}), addOns: addOns.filter((a) => a.label.trim()) });
       navigate(`/invoices/${id}`);
     } catch (e2) {
       setErr(e2.response?.data?.error || 'Failed to update pricing');
@@ -50,7 +59,7 @@ export default function InvoiceEdit() {
         <button className="btn-ghost mb-5" onClick={() => navigate(`/invoices/${id}`)}>← Back</button>
         <div className="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-700 max-w-2xl">
           <b>{invoice.invoiceNo} is locked</b> ({invoice.lock.reason}). Invoices can be edited only within 24 hours of being generated.
-          To correct it, cancel it with a reason from the invoice page and generate a fresh invoice.
+          From the invoice page you can request an edit (it reopens for 24 hours once a Manager/Admin approves), or cancel it and generate a fresh invoice.
         </div>
       </div>
     );
@@ -91,6 +100,23 @@ export default function InvoiceEdit() {
             <label className="label">Due Date</label>
             <input type="date" className="input" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} />
           </div>
+          {invoice.taxCategory === 'GST' && (<>
+            <div className="md:col-span-2">
+              <label className="label">Bank account on the bill</label>
+              <select className="input" value={form.bankAccountId} onChange={(e) => setForm({ ...form, bankAccountId: e.target.value })}>
+                <option value="">{invoice.bankAccountNo ? `${invoice.bankName} · A/C ${invoice.bankAccountNo} (as issued)` : 'None'}</option>
+                {bankOptions(invoice.company).map((a) => <option key={a.id} value={a.id}>{a.bankName} · A/C {a.accountNo}{a.branchIfsc ? ` · ${a.branchIfsc}` : ''}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Client PO No.</label>
+              <input className="input" value={form.poNumber} onChange={(e) => setForm({ ...form, poNumber: e.target.value })} />
+            </div>
+            <div>
+              <label className="label">PO Date</label>
+              <input type="date" className="input" value={form.poDate} onChange={(e) => setForm({ ...form, poDate: e.target.value })} />
+            </div>
+          </>)}
         </div>
 
         <div>

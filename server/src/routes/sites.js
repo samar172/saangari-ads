@@ -11,7 +11,7 @@ const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
 // Whitelist + type-coerce editable site fields (prevents bad writes / string->Float errors)
 const NUM = ['srNo', 'qty'];
 const FLOAT = ['width', 'height', 'sqft', 'printingCost', 'mountingCost', 'monthlyRate', 'dayRate', 'latitude', 'longitude'];
-const STR = ['zone', 'city', 'location', 'light', 'type', 'status', 'code', 'imageUrl'];
+const STR = ['zone', 'city', 'location', 'billName', 'light', 'type', 'status', 'code', 'imageUrl'];
 const BOOL = ['gstOnRate', 'active'];
 const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/cloudinary');
 function cleanSiteData(body = {}) {

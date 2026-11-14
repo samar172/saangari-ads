@@ -103,7 +103,7 @@ function rateTable(order, gst) {
   const suffix = gst ? '+ GST' : '';
   const body = rows.map(({ it, q }, i) => {
     const price = `${money(q.amount)}${suffix}${!shared && q.perMonth ? ' / month' : ''}`;
-    const loc = it.site?.location || it.site?.code || '';
+    const loc = it.site?.billName || it.site?.location || it.site?.code || '';
     const calibri = '<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/><w:color w:val="000000"/>';
     const cells = shared
       ? [cell(cols[0], String(i + 1)), cell(cols[1], loc, calibri), cell(cols[2], price)]
