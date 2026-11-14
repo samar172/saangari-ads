@@ -13,6 +13,7 @@ const { logActivity } = require('../utils/activity');
 const { writeLineNotes } = require('../utils/pdf');
 const { buildQuotationDocx } = require('../utils/quotationDocx');
 const { billingPlan } = require('../utils/billingPlan');
+const { previewWaitlistOverride, applyWaitlistOverride } = require('../utils/waitlist');
 const { planInclude } = require('../utils/invoicing');
 
 const INR = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN');
@@ -177,7 +178,7 @@ router.get('/', async (req, res) => {
   // Flag orders that have an open Sales-raised approval (confirm/invoice) so the
   // list can show a "Pending approval" badge without a per-row query.
   const pending = await prisma.approvalRequest.findMany({
-    where: { status: 'PENDING', action: { in: ['CONFIRM_ORDER', 'GENERATE_INVOICE'] }, entityType: 'order' },
+    where: { status: 'PENDING', action: { in: ['CONFIRM_ORDER', 'GENERATE_INVOICE', 'OVERRIDE_WAITLIST'] }, entityType: 'order' },
     select: { entityId: true, action: true },
   });
   const pendingByOrder = {};
@@ -198,7 +199,7 @@ router.get('/:id', async (req, res) => {
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (salesForbidden(req, order)) return res.status(404).json({ error: 'Order not found' });
   const pending = await prisma.approvalRequest.findMany({
-    where: { status: 'PENDING', action: { in: ['CONFIRM_ORDER', 'GENERATE_INVOICE'] }, entityType: 'order', entityId: id },
+    where: { status: 'PENDING', action: { in: ['CONFIRM_ORDER', 'GENERATE_INVOICE', 'OVERRIDE_WAITLIST'] }, entityType: 'order', entityId: id },
     select: { action: true },
   });
   res.json({ ...withDerived(order), pendingApprovals: pending.map((p) => p.action) });
@@ -1010,6 +1011,45 @@ router.post('/:id/items/:lineId/stop', requirePermission('campaigns', 'edit'), a
 
   const full = await prisma.order.findUnique({ where: { id: orderId }, include: orderInclude });
   res.json(withDerived(full));
+});
+
+// Waitlisted loose lines → normal loose bookings (charged), with approval.
+// Preview: which lines, and the campaign total before → after.
+router.get('/:id/waitlist-override', requirePermission('campaigns', 'view'), async (req, res) => {
+  try {
+    const ids = String(req.query.lineIds || '').split(',').filter(Boolean);
+    const p = await previewWaitlistOverride(Number(req.params.id), ids);
+    res.json({
+      lines: p.lines.map((l) => ({ id: l.id, bookingNo: l.bookingNo, site: l.site.code, location: l.site.location, startDate: l.startDate, endDate: l.endDate, subtotal: l.subtotal })),
+      before: p.before, after: p.after,
+    });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// Manager / Super Admin override directly; anyone else files an
+// OVERRIDE_WAITLIST approval that a Manager/Admin signs off.
+router.post('/:id/waitlist-override', requirePermission('campaigns', 'edit'), async (req, res) => {
+  const id = Number(req.params.id);
+  const { lineIds = [], reason } = req.body || {};
+  try {
+    const p = await previewWaitlistOverride(id, lineIds);
+    if (req.user.role === 'MANAGER' || req.user.role === 'SUPER_ADMIN') {
+      const r = await applyWaitlistOverride({ orderId: id, lineIds, reason, user: req.user });
+      return res.json({ done: true, lines: r.lines, grandTotal: r.order.grandTotal });
+    }
+    const existing = await prisma.approvalRequest.findFirst({ where: { status: 'PENDING', action: 'OVERRIDE_WAITLIST', entityType: 'order', entityId: id } });
+    if (existing) return res.status(409).json({ error: 'An override request for this campaign is already awaiting approval.' });
+    await prisma.approvalRequest.create({
+      data: {
+        action: 'OVERRIDE_WAITLIST', entityType: 'order', entityId: id,
+        label: `${p.order.orderNo} · override ${p.lines.length} waitlisted site${p.lines.length > 1 ? 's' : ''} (${p.lines.map((l) => l.site.code).join(', ')})`,
+        reason: reason || null,
+        payload: { lineIds: p.lines.map((l) => l.id), totalBefore: p.before.grandTotal, totalAfter: p.after.grandTotal },
+        requestedById: req.user.id,
+      },
+    });
+    res.status(202).json({ pending: true });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message || 'Could not override the waitlist' }); }
 });
 
 // The campaign's billing plan: its suggested bill periods (one for a one-time

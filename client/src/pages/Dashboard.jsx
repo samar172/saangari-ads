@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import {
@@ -9,6 +9,7 @@ import api from '../api';
 import { useAuth, can } from '../auth';
 import { useCompany } from '../CompanyContext';
 import { Money, Spinner, StatTile } from '../components/ui';
+import CardDetailDialog from '../components/CardDetailDialog';
 
 // Financial-year start (1 Apr) — mirrors Reports.jsx.
 const fyStart = () => (dayjs().month() >= 3 ? dayjs().month(3) : dayjs().subtract(1, 'year').month(3)).date(1);
@@ -37,20 +38,26 @@ export default function Dashboard() {
   const [overview, setOverview] = useState(null);
   const [notif, setNotif] = useState({ items: [], counts: {} });
   const [pendingApprovals, setPendingApprovals] = useState(null);
+  // Which stat card's detail dialog is open (booked | collected | … | null).
+  const [detail, setDetail] = useState(null);
 
   const from = fyStart().format('YYYY-MM-DD');
   const to = dayjs().format('YYYY-MM-DD');
   const isReviewer = user?.role === 'MANAGER' || user?.role === 'SUPER_ADMIN';
 
   useEffect(() => {
+    // The first render fires before the active company loads; drop that
+    // (all-business) reply if it lands after the company-scoped one.
+    let stale = false;
     api.get('/reports/overview', { params: { companyId: cid, from, to } })
-      .then((r) => setOverview(r.data)).catch(() => setOverview(null));
+      .then((r) => { if (!stale) setOverview(r.data); }).catch(() => { if (!stale) setOverview(null); });
     api.get('/notifications').then((r) => setNotif(r.data)).catch(() => setNotif({ items: [], counts: {} }));
     if (isReviewer) {
       api.get('/approvals', { params: { status: 'PENDING' } })
         .then((r) => setPendingApprovals(Array.isArray(r.data) ? r.data.length : 0))
         .catch(() => setPendingApprovals(null));
     }
+    return () => { stale = true; };
   }, [cid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const items = notif.items || [];
@@ -70,6 +77,7 @@ export default function Dashboard() {
   ].filter((a) => a.show);
 
   const hi = (user?.name || '').split(' ')[0];
+  const closeDetail = useCallback(() => setDetail(null), []);
 
   return (
     <div>
@@ -94,18 +102,20 @@ export default function Dashboard() {
       {!overview ? <Spinner /> : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
           <StatTile label="Booked Value" value={<Money value={overview.bookedValue} />} accent="text-emerald-600"
-            onClick={() => navigate('/orders')}
+            onClick={() => setDetail('booked')}
             sub={<span className="flex items-center gap-1.5">FY, incl. GST <Delta curr={overview.bookedValue} prev={overview.prev?.bookedValue} /></span>} />
           <StatTile label="Collected" value={<Money value={overview.paidRevenue} />} accent="text-emerald-600"
-            onClick={() => navigate('/payments')}
+            onClick={() => setDetail('collected')}
             sub={<Delta curr={overview.paidRevenue} prev={overview.prev?.paidRevenue} />} />
-          <StatTile label="Outstanding" value={<Money value={overview.outstanding} />} accent="text-red-600" onClick={() => navigate('/orders?pay=OUTSTANDING')} sub="campaigns owing" />
-          <StatTile label="Occupancy" value={`${overview.occupancy}%`} accent="text-brand" onClick={() => navigate('/')} sub={`${overview.siteStatus?.BOOKED || 0}/${overview.siteCount} booked`} />
-          <StatTile label="Quotation Pipeline" value={<Money value={overview.quotationValue || 0} />} accent="text-amber-600" onClick={() => navigate('/quotations')} sub={`${overview.quotationCount || 0} open`} />
-          <StatTile label="Orders" value={overview.totalOrders} onClick={() => navigate('/orders')}
+          <StatTile label="Outstanding" value={<Money value={overview.outstanding} />} accent="text-red-600" onClick={() => setDetail('outstanding')} sub="campaigns owing" />
+          <StatTile label="Occupancy" value={`${overview.occupancy}%`} accent="text-brand" onClick={() => setDetail('occupancy')} sub={`${overview.siteStatus?.BOOKED || 0}/${overview.siteCount} booked`} />
+          <StatTile label="Quotation Pipeline" value={<Money value={overview.quotationValue || 0} />} accent="text-amber-600" onClick={() => setDetail('quotations')} sub={`${overview.quotationCount || 0} open`} />
+          <StatTile label="Orders" value={overview.totalOrders} onClick={() => setDetail('orders')}
             sub={<span className="flex items-center gap-1.5">FY <Delta curr={overview.totalOrders} prev={overview.prev?.totalOrders} /></span>} />
         </div>
       )}
+
+      <CardDetailDialog card={detail} onClose={closeDetail} params={{ companyId: cid, from, to }} />
 
       <div className="grid lg:grid-cols-2 gap-6">
         {/* Needs attention */}

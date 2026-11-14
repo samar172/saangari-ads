@@ -102,6 +102,7 @@ export default function OrderDetail() {
           An invoice has been requested and is awaiting Manager/Admin approval.
         </div>
       )}
+      <WaitlistBanner o={o} isReviewer={isReviewer} onChanged={load} />
 
       <div className="card">
         <OrderTabs o={o} user={user} busy={busy} changeStatus={changeStatus} onChanged={load} tab={tab} setTab={setTab} />
@@ -112,6 +113,85 @@ export default function OrderDetail() {
       )}
       {request && (
         <RequestApprovalModal order={o} request={request} onClose={() => setRequest(null)} onDone={() => { setRequest(null); load(); }} />
+      )}
+    </div>
+  );
+}
+
+// Waitlisted loose lines (their site was held on those dates). If a site did
+// run, it can be overridden into a normal loose booking — charged and billed
+// like any other line. Manager/Admin override directly; others request it.
+function WaitlistBanner({ o, isReviewer, onChanged }) {
+  const waitlisted = (o.items || []).filter((i) => i.status === 'WAITLIST');
+  const [open, setOpen] = useState(false);
+  const [picked, setPicked] = useState([]);
+  const [reason, setReason] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [note, setNote] = useState('');
+
+  useEffect(() => { setPicked(waitlisted.map((i) => i.id)); }, [o.id, waitlisted.length]); // eslint-disable-line
+  useEffect(() => {
+    if (!open || !picked.length) { setPreview(null); return; }
+    api.get(`/orders/${o.id}/waitlist-override`, { params: { lineIds: picked.join(',') } })
+      .then((r) => setPreview(r.data)).catch((e) => setErr(e.response?.data?.error || 'Could not price the override'));
+  }, [open, picked.join(), o.id]); // eslint-disable-line
+
+  if (!waitlisted.length || o.status === 'CANCELLED') return null;
+  const rent = waitlisted.reduce((s, i) => s + (i.subtotal || 0), 0);
+  const pending = o.pendingApprovals?.includes('OVERRIDE_WAITLIST');
+  const fmtD = (d) => new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+
+  async function submit() {
+    if (!picked.length) return setErr('Pick at least one site.');
+    if (!reason.trim()) return setErr('Please say why — e.g. "site ran, rotated with the regular campaign".');
+    setBusy(true); setErr('');
+    try {
+      const { data } = await api.post(`/orders/${o.id}/waitlist-override`, { lineIds: picked, reason: reason.trim() });
+      setOpen(false); setReason('');
+      setNote(data.done ? `Overridden — ${data.lines} site(s) are now loose bookings.` : 'Sent for Manager/Admin approval.');
+      onChanged();
+    } catch (e) { setErr(e.response?.data?.error || 'Could not override'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="mb-4 rounded-lg bg-violet-50 border border-violet-200 px-4 py-3 text-sm text-violet-900">
+      <div className="flex flex-wrap items-center gap-2">
+        <span>
+          <b>{waitlisted.length} site{waitlisted.length > 1 ? 's are' : ' is'} waitlisted</b> — their site was held by another booking on these dates.
+          {' '}₹{Math.round(rent).toLocaleString('en-IN')} of rent is attached to {waitlisted.length > 1 ? 'them' : 'it'}.
+        </span>
+        <div className="flex-1" />
+        {pending ? <span className="badge bg-amber-100 text-amber-800">Override awaiting approval</span>
+          : !open && <button className="btn-ghost text-xs" onClick={() => { setOpen(true); setNote(''); }}>{isReviewer ? 'Override as loose booking' : 'Request override'}</button>}
+      </div>
+      {note && <div className="mt-2 text-emerald-700">{note}</div>}
+      {open && (
+        <div className="mt-3 rounded-lg bg-white border border-violet-200 p-3 space-y-3">
+          <p className="text-xs text-slate-600">If these sites actually displayed the ad, override them: each becomes a normal loose booking (charged and billed), takes its status from its dates, and the campaign total is recalculated.{!isReviewer && ' A Manager/Admin must approve it.'}</p>
+          <div className="space-y-1">
+            {waitlisted.map((i) => (
+              <label key={i.id} className="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={picked.includes(i.id)} onChange={(e) => setPicked((p) => (e.target.checked ? [...p, i.id] : p.filter((x) => x !== i.id)))} />
+                <span className="font-medium">{i.bookingNo}</span> · {i.site?.code} {i.site?.location ? `· ${i.site.location}` : ''} · {fmtD(i.startDate)}–{fmtD(i.endDate)} · <Money value={i.subtotal} />
+              </label>
+            ))}
+          </div>
+          {preview && (
+            <div className="text-sm text-slate-700">
+              Campaign total: <Money value={preview.before.grandTotal} /> → <b><Money value={preview.after.grandTotal} /></b>
+              {Math.round(preview.before.grandTotal) === Math.round(preview.after.grandTotal) && <span className="text-emerald-700"> (unchanged — already included)</span>}
+            </div>
+          )}
+          <textarea className="input h-16 text-sm" placeholder="Reason (e.g. site ran — rotated with the regular campaign)" value={reason} onChange={(e) => setReason(e.target.value)} />
+          {err && <div className="text-xs text-red-700">{err}</div>}
+          <div className="flex justify-end gap-2">
+            <button className="btn-ghost text-xs" onClick={() => { setOpen(false); setErr(''); }}>Cancel</button>
+            <button className="btn-primary text-xs" disabled={busy || !picked.length} onClick={submit}>{busy ? 'Working…' : isReviewer ? 'Override now' : 'Send for approval'}</button>
+          </div>
+        </div>
       )}
     </div>
   );

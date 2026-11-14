@@ -15,6 +15,7 @@ const ACTION_LABEL = {
   CONFIRM_ORDER: 'Confirm booking',
   GENERATE_INVOICE: 'Generate invoice',
   CANCEL_INVOICE: 'Cancel invoice',
+  OVERRIDE_WAITLIST: 'Override waitlisted sites',
   OTHER: 'Other',
 };
 
