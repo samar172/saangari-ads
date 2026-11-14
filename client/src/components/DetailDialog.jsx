@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X } from 'lucide-react';
+import { X, ArrowLeft } from 'lucide-react';
 
 // The ~90% detail dialog: 90vw × 90vh centred from `md` up, a full-screen sheet
 // on a phone. Sticky header (title, headline figure, what it includes) and an
@@ -9,7 +9,8 @@ import { X } from 'lucide-react';
 // grid-cols-1 + min-w-0 keep wide tables scrolling inside their card, not the page.
 export const DETAIL_GRID = 'grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 [&>*]:min-w-0';
 
-export default function DetailDialog({ open, onClose, title, headline, explain, footer, children }) {
+// `onBack` + `backLabel` add a "← Back to …" link above the title (drill-down stacks).
+export default function DetailDialog({ open, onClose, title, headline, explain, footer, onBack, backLabel, children }) {
   useEffect(() => {
     if (!open) return undefined;
     const h = (e) => e.key === 'Escape' && onClose();
@@ -31,6 +32,11 @@ export default function DetailDialog({ open, onClose, title, headline, explain, 
       >
         <div className="flex items-start gap-3 border-b border-slate-200 px-4 py-3 md:px-6 md:py-4">
           <div className="min-w-0 flex-1">
+            {onBack && (
+              <button onClick={onBack} data-drill-back className="mb-1 inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline">
+                <ArrowLeft size={13} /> Back to {backLabel}
+              </button>
+            )}
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</div>
             {headline != null && <div className="mt-0.5 text-2xl font-bold text-slate-800 md:text-3xl">{headline}</div>}
             {explain && <div className="mt-1 text-xs text-slate-500 md:text-sm">{explain}</div>}

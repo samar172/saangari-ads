@@ -36,8 +36,8 @@ function SiteBody({ d, card }) {
     bridge = (
       <>
         <Bridge money={false} steps={[
-          { label: 'Sites with at least one booking', value: s.bookedSites, accent: 'text-emerald-700' },
-          { label: 'Sites with no booking in the period', value: s.siteCount - s.bookedSites, op: '+' },
+          { label: 'Sites with at least one booking', value: s.bookedSites, accent: 'text-emerald-700', col: 'isBooked' },
+          { label: 'Sites with no booking in the period', value: s.siteCount - s.bookedSites, op: '+', col: 'idle' },
           { label: 'Sites shown (active, matching the filters)', value: s.siteCount, op: '=', total: true, final: true },
         ]} />
         <Note tone="slate">“Booked” here means booked at any time for a campaign booked in the period — not the site's status today (that's the Occupancy card on Reports).</Note>
@@ -47,9 +47,9 @@ function SiteBody({ d, card }) {
     bridge = (
       <>
         <Bridge steps={[
-          { label: `Site rent on ${fmtNum(d.bookingCount)} booking lines`, value: s.rawRevenue },
+          { label: `Site rent on ${fmtNum(d.bookingCount)} booking lines`, value: s.rawRevenue, col: 'subtotal' },
           { label: 'Rounding (each site rounded to the rupee)', value: Math.round((s.totalRevenue - s.rawRevenue) * 100) / 100, op: '±' },
-          { label: 'Revenue (ex-GST)', value: s.totalRevenue, op: '=', total: true, final: true },
+          { label: 'Revenue (ex-GST)', value: s.totalRevenue, op: '=', total: true, final: true, col: 'revenue' },
         ]} />
         <Note tone="slate">Rent only — printing, mounting, extras, discount and GST sit on the campaign, not the site. Lines on cancelled campaigns or cancelled lines are excluded; a campaign counts in the period by its booking date.</Note>
       </>
@@ -64,7 +64,7 @@ function SiteBody({ d, card }) {
   } else if (card === 'siteDays') {
     bridge = (
       <Bridge money={false} steps={[
-        { label: `Days on ${fmtNum(d.bookingCount)} booking lines`, value: s.totalDays, total: true, final: true },
+        { label: `Days on ${fmtNum(d.bookingCount)} booking lines`, value: s.totalDays, total: true, final: true, col: 'days' },
         { label: 'Site-months (days ÷ 30)', text: fmtNum(Math.round((s.totalDays / 30) * 100) / 100) },
         { label: 'Average days per booking', text: d.bookingCount ? fmtNum(Math.round((s.totalDays / d.bookingCount) * 10) / 10) : '—' },
       ]} />
@@ -72,8 +72,8 @@ function SiteBody({ d, card }) {
   } else {
     bridge = (
       <Bridge steps={[
-        { label: 'Revenue (ex-GST)', value: s.totalRevenue },
-        { label: 'Booked sites', text: `÷ ${fmtNum(s.bookedSites)}` },
+        { label: 'Revenue (ex-GST)', value: s.totalRevenue, card: 'siteRevenue', col: 'revenue' },
+        { label: 'Booked sites', text: `÷ ${fmtNum(s.bookedSites)}`, col: 'isBooked' },
         { label: 'Average per booked site', value: s.avg, op: '=', total: true, final: true },
       ]} />
     );
@@ -101,7 +101,8 @@ function SiteBody({ d, card }) {
           columns={[
             { key: 'code', label: 'Site', render: (r) => siteLink(r.id, r.code) },
             { key: 'location', label: 'Location' }, { key: 'zone', label: 'Zone' }, { key: 'type', label: 'Type' },
-            { key: 'booked', label: 'In period', render: (r) => <span className={`badge ${r.bookings ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'}`}>{r.booked}</span> },
+            { key: 'isBooked', label: 'In period', num: true, sum: card === 'sitesCount' || card === 'siteAvg', render: (r) => <span className={`badge ${r.bookings ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'}`}>{r.booked}</span> },
+            ...(card === 'sitesCount' ? [{ key: 'idle', label: 'Idle', num: true, sum: true, render: (r) => (r.idle ? 'idle' : '') }] : []),
             { key: 'status', label: 'Now', render: (r) => <Badge status={r.status} /> },
             { key: 'bookings', label: 'Bookings', num: true, sum: true },
             { key: 'days', label: 'Days', num: true, sum: true },

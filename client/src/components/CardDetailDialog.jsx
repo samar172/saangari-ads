@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ExternalLink } from 'lucide-react';
 import api from '../api';
 import DetailDialog, { DETAIL_GRID } from './DetailDialog';
 import { Badge, Money, Spinner } from './ui';
-import { Section, Breakdown, DataTable, Figure, orderLink, fmtDate } from './detailKit';
+import { Section, Breakdown, Bridge, DataTable, Figure, Note, DrillContext, orderLink, fmtDate } from './detailKit';
 import { REPORT_CARDS } from './reportCardBodies';
 import { SITE_CARDS } from './siteCardBodies';
 import { BA_CARDS } from './bookingAnalysisCardBodies';
@@ -17,27 +17,22 @@ import { BA_CARDS } from './bookingAnalysisCardBodies';
 // ── Booked value ──────────────────────────────────────────────────────────────
 function BookedBody({ d }) {
   const b = d.bridge;
+  // Each line opens its own card (same filters) or focuses the campaign table.
   const steps = [
-    ['Site rent', b.rent, ''],
-    ['Printing', b.printing, '+'],
-    ['Mounting', b.mounting, '+'],
-    ['Extras (add-ons)', b.extras, '+'],
-    ['Discount', b.discount, '−'],
-    ...(b.adjustment ? [['Other adjustments', b.adjustment, '±']] : []),
+    { label: 'Site rent', value: b.rent, card: 'rental', col: 'rent' },
+    { label: 'Printing', value: b.printing, op: '+', card: 'printing', col: 'printing' },
+    { label: 'Mounting', value: b.mounting, op: '+', card: 'mounting', col: 'mounting' },
+    { label: 'Extras (add-ons)', value: b.extras, op: '+', col: 'extras' },
+    { label: 'Discount', value: b.discount, op: '−', card: 'discounts', col: 'discount' },
+    b.adjustment ? { label: 'Other adjustments', value: b.adjustment, op: '±', col: 'adjustment' } : null,
+    { label: 'Taxable (ex-GST)', value: b.taxable, op: '=', total: true, card: 'bookedExGst', col: 'taxable' },
+    { label: 'GST', value: b.gst, op: '+', card: 'gst', col: 'gst' },
+    { label: 'Booked value', value: b.total, op: '=', total: true, final: true, accent: 'text-emerald-700' },
   ];
   return (
     <div className={DETAIL_GRID}>
       <Section title="How the number is built" note={`${d.count} campaigns booked in the period, quotations and cancelled excluded.`}>
-        <table className="w-full text-sm">
-          <tbody>
-            {steps.map(([label, v, op]) => (
-              <tr key={label}><td className="py-1 text-slate-600"><span className="inline-block w-4 text-slate-400">{op}</span>{label}</td><td className="py-1 text-right tabular-nums"><Money value={v} /></td></tr>
-            ))}
-            <tr className="border-t border-slate-200 font-semibold"><td className="py-1.5"><span className="inline-block w-4 text-slate-400">=</span>Taxable (ex-GST)</td><td className="py-1.5 text-right tabular-nums"><Money value={b.taxable} /></td></tr>
-            <tr><td className="py-1 text-slate-600"><span className="inline-block w-4 text-slate-400">+</span>GST</td><td className="py-1 text-right tabular-nums"><Money value={b.gst} /></td></tr>
-            <tr className="border-t-2 border-slate-300 font-bold text-emerald-700"><td className="py-1.5"><span className="inline-block w-4 text-slate-400">=</span>Booked value</td><td className="py-1.5 text-right tabular-nums"><Money value={b.total} /></td></tr>
-          </tbody>
-        </table>
+        <Bridge steps={steps} />
         <div className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
           The Site-wise report shows site rent only (ex-GST): <b><Money value={b.rent} /></b>. Reports that use taxable value show <b><Money value={b.taxable} /></b>.
         </div>
@@ -60,9 +55,12 @@ function BookedBody({ d }) {
           { key: 'bookingDate', label: 'Booked', date: true },
           { key: 'status', label: 'Status', render: (r) => <Badge status={r.status} /> },
           { key: 'rent', label: 'Rent', money: true },
-          { key: 'printMount', label: 'Print + mount', money: true },
+          { key: 'printing', label: 'Printing', money: true },
+          { key: 'mounting', label: 'Mounting', money: true },
           { key: 'extras', label: 'Extras', money: true },
           { key: 'discount', label: 'Discount', money: true },
+          ...(b.adjustment ? [{ key: 'adjustment', label: 'Adj.', money: true }] : []),
+          { key: 'taxable', label: 'Taxable', money: true },
           { key: 'gst', label: 'GST', money: true },
           { key: 'total', label: 'Total', money: true },
         ]} />
@@ -80,6 +78,14 @@ function CollectedBody({ d }) {
         <Figure label="TDS deducted" value={<Money value={d.totals.tds} />} accent="text-amber-600" sub="remitted by client" />
         <Figure label="Net received" value={<Money value={d.totals.net} />} sub="landed in bank" />
       </div>
+      <Section title="How the number is built" note="Payments received in the period (by receipt date). The campaign is credited the gross; TDS is the slice the client remitted to the government.">
+        <Bridge steps={[
+          { label: 'Net received in bank', value: d.totals.net, col: 'net' },
+          { label: 'TDS deducted by clients', value: d.totals.tds, op: '+', card: 'tds', col: 'tds' },
+          { label: 'Collected (credited to campaigns)', value: d.totals.amount, op: '=', total: true, final: true, accent: 'text-emerald-700', col: 'amount' },
+        ]} />
+        {Math.round(d.totals.amount - d.totals.tds - d.totals.net) !== 0 && <Note>Net + TDS differs from the gross by <Money value={Math.round(d.totals.amount - d.totals.tds - d.totals.net)} /> (net entered by hand on some payments).</Note>}
+      </Section>
       <Section title="By mode"><Breakdown rows={d.byMode} countLabel="payments" /></Section>
       <Section title="By month (receipt date)"><Breakdown rows={d.byMonth} month countLabel="payments" /></Section>
       <Section title="By business"><Breakdown rows={d.byCompany} countLabel="payments" /></Section>
@@ -91,6 +97,7 @@ function CollectedBody({ d }) {
           { key: 'mode', label: 'Mode' },
           { key: 'amount', label: 'Amount', money: true },
           { key: 'tds', label: 'TDS', money: true },
+          { key: 'net', label: 'Net', money: true },
           { key: 'reference', label: 'Reference' },
         ]} />
       </Section>
@@ -109,13 +116,11 @@ function OutstandingBody({ d }) {
           sub={`The Campaigns “Outstanding” column. Only ${d.invoicedCount} of ${d.count} campaigns have been invoiced, so most of the due amount is not billed yet.`} />
       </div>
       <Section title="How the number is built">
-        <table className="w-full text-sm">
-          <tbody>
-            <tr><td className="py-1 text-slate-600">Booked value (period)</td><td className="py-1 text-right tabular-nums"><Money value={d.booked} /></td></tr>
-            <tr><td className="py-1 text-slate-600">− Collected (receipt date in period)</td><td className="py-1 text-right tabular-nums"><Money value={d.collected} /></td></tr>
-            <tr className="border-t-2 border-slate-300 font-bold text-red-600"><td className="py-1.5">= Due on campaigns</td><td className="py-1.5 text-right tabular-nums"><Money value={d.headline} /></td></tr>
-          </tbody>
-        </table>
+        <Bridge steps={[
+          { label: 'Booked value (period)', value: d.booked, card: 'booked' },
+          { label: 'Collected (receipt date in period)', value: d.collected, op: '−', card: 'collected' },
+          { label: 'Due on campaigns', value: d.headline, op: '=', total: true, final: true, accent: 'text-red-600' },
+        ]} />
         <div className="mt-3 space-y-1 text-xs text-slate-500">
           <div>Sum of per-campaign balances below: <b className="text-slate-700"><Money value={d.campaignBalance} /></b>{d.overpaidTotal > 0 && <> (less <Money value={d.overpaidTotal} /> overpaid)</>}.</div>
           <div>Invoiced to date on these campaigns: <b className="text-slate-700"><Money value={d.invoiced} /></b>.</div>
@@ -264,33 +269,71 @@ const CARDS = {
 };
 
 export default function CardDetailDialog({ card, onClose, params }) {
-  const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
-  const cfg = CARDS[card];
+  // A stack of card kinds: the tile's card at the bottom, drilled cards above it.
+  const [stack, setStack] = useState([]);
+  const [cache, setCache] = useState({}); // kind → data, so Back is instant
+  const [errors, setErrors] = useState({});
+  const [focus, setFocus] = useState(null);
   const paramKey = JSON.stringify(params || {});
+  const chain = useMemo(() => (card ? [{ kind: card }, ...stack] : []), [card, stack]);
+  const top = chain[chain.length - 1];
+  const kind = top?.kind;
+  const cfg = CARDS[kind];
+  const topParams = useMemo(() => ({ ...params, ...(top?.params || {}) }), [paramKey, top]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cacheKey = `${paramKey}|${kind}|${JSON.stringify(top?.params || {})}`;
+
+  // A new tile (or new filters) starts a fresh stack.
+  useEffect(() => { setStack([]); setFocus(null); }, [card, paramKey]);
+  // Closing drops the cache, so reopening a tile always shows fresh figures.
+  useEffect(() => { if (!card) { setCache({}); setErrors({}); } }, [card]);
 
   useEffect(() => {
-    if (!card || !cfg) return undefined;
+    if (!kind || !cfg || cache[cacheKey]) return undefined;
     let alive = true;
-    setData(null); setError(null);
-    api.get(cfg.endpoint || '/reports/card-detail', { params: { ...params, card } })
-      .then((r) => { if (alive) setData(r.data); })
-      .catch((e) => { if (alive) setError(e.response?.data?.error || 'Could not load the details.'); });
+    api.get(cfg.endpoint || '/reports/card-detail', { params: { ...topParams, card: kind } })
+      .then((r) => { if (alive) setCache((c) => ({ ...c, [cacheKey]: r.data })); })
+      .catch((e) => { if (alive) setErrors((x) => ({ ...x, [cacheKey]: e.response?.data?.error || 'Could not load the details.' })); });
     return () => { alive = false; };
-  }, [card, paramKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cacheKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!cfg) return null;
+  // Each card in the stack starts at the top with no focus.
+  useEffect(() => {
+    setFocus(null);
+    document.querySelector('[role=dialog] .overflow-y-auto')?.scrollTo?.(0, 0);
+  }, [chain.length]);
+  // Bring the first table narrowed by a focused line into view.
+  useEffect(() => {
+    if (!focus) return;
+    requestAnimationFrame(() => document.querySelector('[role=dialog] [data-focus-match]')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }, [focus]);
+
+  const openCard = useCallback((k, p) => setStack((st) => [...st, { kind: k, params: p }]), []);
+  const back = useCallback(() => setStack((st) => st.slice(0, -1)), []);
+  const drill = useMemo(() => ({
+    current: kind,
+    canOpen: (k) => !!CARDS[k] && !chain.some((c) => c.kind === k),
+    openCard, cardTitle: (k) => CARDS[k]?.title || k,
+    focus, setFocus,
+  }), [kind, chain, openCard, focus]);
+
+  if (!CARDS[card] || !cfg) return null;
+  const data = cache[cacheKey];
+  const error = errors[cacheKey];
   const { Body } = cfg;
-  const period = cfg.asOfNow ? 'as of today' : cfg.allTime || (!params.from && !params.to) ? 'all time' : `${fmtDate(params.from)} – ${fmtDate(params.to)}`;
+  const prev = chain.length > 1 ? CARDS[chain[chain.length - 2].kind] : null;
+  const period = cfg.asOfNow ? 'as of today' : cfg.allTime || (!topParams.from && !topParams.to) ? 'all time' : `${fmtDate(topParams.from)} – ${fmtDate(topParams.to)}`;
   return (
-    <DetailDialog
-      open={!!card} onClose={onClose} title={cfg.title}
-      headline={data && data.card === card ? cfg.fmt(data.headline) : null}
-      explain={<>{cfg.explain} <span className="whitespace-nowrap text-slate-400">({period}{cfg.filterNote ? cfg.filterNote(params) : ''})</span></>}
-      footer={cfg.to ? <Link to={typeof cfg.to === 'function' ? cfg.to(data) : cfg.to} className="btn-ghost text-sm">{cfg.toLabel || 'View all'} <ExternalLink size={14} /></Link> : null}
-    >
-      {error ? <div className="py-10 text-center text-sm text-red-600">{error}</div>
-        : !data || data.card !== card ? <Spinner /> : <Body d={data} card={card} params={params} />}
-    </DetailDialog>
+    <DrillContext.Provider value={drill}>
+      <DetailDialog
+        open={!!card} onClose={onClose} title={cfg.title}
+        onBack={prev ? back : null} backLabel={prev?.title}
+        headline={data && data.card === kind ? cfg.fmt(data.headline) : null}
+        explain={<>{cfg.explain} <span className="whitespace-nowrap text-slate-400">({period}{cfg.filterNote ? cfg.filterNote(topParams) : ''})</span></>}
+        footer={cfg.to ? <Link to={typeof cfg.to === 'function' ? cfg.to(data) : cfg.to} className="btn-ghost text-sm">{cfg.toLabel || 'View all'} <ExternalLink size={14} /></Link> : null}
+      >
+        {error ? <div className="py-10 text-center text-sm text-red-600">{error}</div>
+          : !data || data.card !== kind ? <Spinner /> : <Body key={cacheKey} d={data} card={kind} params={topParams} />}
+      </DetailDialog>
+    </DrillContext.Provider>
   );
 }

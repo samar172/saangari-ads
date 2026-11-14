@@ -79,9 +79,12 @@ async function componentCard(card, { confirmedWhere }) {
       bucketAdd(byMaterial, o.printMaterial || '—', o.printMaterial || 'No material', v);
     }
   }
-  const rows = orders.filter((o) => card === 'bookedExGst' || (o[f] || 0) !== 0);
+  // Every campaign is listed (sorted by this component), so any line of the
+  // bridge can be traced in the table; withValue counts those carrying it.
+  const rows = orders;
+  const withValue = card === 'bookedExGst' ? orders.length : orders.filter((o) => (o[f] || 0) !== 0).length;
   return {
-    card, headline, field: f, count: orders.length, rowCount: rows.length, bridge,
+    card, headline, field: f, count: orders.length, rowCount: rows.length, withValue, bridge,
     byCompany: bucketRows(byCompany), byCategory: bucketRows(byCategory), byMonth: bucketRows(byMonth, true),
     topClients: bucketRows(byClient).slice(0, 10), byMedia: bucketRows(byMedia),
     byPartner: bucketRows(byPartner), byMaterial: bucketRows(byMaterial),
@@ -91,6 +94,7 @@ async function componentCard(card, { confirmedWhere }) {
       rent: r2(o.rentalSubtotal), printing: r2(o.printingTotal), mounting: r2(o.mountingCost), extras: r2(o.addOnTotal),
       discount: r2(o.discountAmount), taxable: r2(o.taxableAmount), gst: r2(o.gstAmount), total: r2(o.grandTotal),
       value: r2(o[f]), sites: o.items.length,
+      adjustment: r2((o.taxableAmount || 0) - ((o.rentalSubtotal || 0) + (o.printingTotal || 0) + (o.mountingCost || 0) + (o.addOnTotal || 0) - (o.discountAmount || 0))),
       partner: o.printingPartner?.name || '—', material: o.printMaterial || '—',
       prints: o.chargesPerSite ? o.items.length : o.noOfPrints || 0, printRate: o.printRate || 0,
       basis: o.chargesPerSite ? 'Per site' : 'Per print',
@@ -213,6 +217,7 @@ async function gstCard(card, { companyId, from, confirmedWhere, to }) {
       supply: o.igst ? 'Inter-state' : 'Intra-state',
       taxable: r2(o.taxableAmount), cgst: r2(o.cgst), sgst: r2(o.sgst), igst: r2(o.igst), gst: r2(o.gstAmount),
       cgstSgst: r2(o.cgst + o.sgst), total: r2(o.grandTotal),
+      unsplit: r2(o.gstAmount - (o.cgst + o.sgst + o.igst)),
     })),
   };
 }
@@ -409,6 +414,7 @@ async function siteCardDetail(card, query) {
       id: r.siteId, code: r.code, location: r.location || r.city || '', zone: r.zone || '—', type: r.typeLabel, status: r.status,
       monthlyRate: r.monthlyRate, revenue: r.revenue, bookings: r.bookings, days: r.days,
       siteMonths: Math.round((r.days / 30) * 100) / 100, booked: r.bookings > 0 ? 'Booked' : 'Not booked',
+      isBooked: r.bookings > 0 ? 1 : 0, idle: r.bookings > 0 ? 0 : 1,
       vsAvg: r.bookings > 0 ? r.revenue - avg : null,
     })),
     bookingCount: bookings.length, bookings: bookings.slice(0, 1000),
@@ -444,6 +450,7 @@ async function bookingAnalysisCardDetail(card, query) {
     customer: l.customer, clientId: l.clientId, category: l.category, zone: l.zone, mediaType: l.mediaType,
     billingExGst: l.billingExGst, gst: l.gst, total: l.total, received: l.received, outstanding: l.outstanding,
     paymentStatus: l.paymentStatus, paymentTerms: l.paymentTerms === 'ADVANCE' ? 'Advance' : 'Postpaid', bookingDate: l.bookingDate,
+    advance: l.paymentTerms === 'ADVANCE' ? 1 : 0,
   })).sort((a, b) => b.month.localeCompare(a.month) || b.billingExGst - a.billingExGst);
   const gstLines = lines.filter((l) => l.gst > 0);
   const split = {

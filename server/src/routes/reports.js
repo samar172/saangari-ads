@@ -3,7 +3,7 @@ const prisma = require('../db');
 const { requirePermission } = require('../middleware/auth');
 const { computeBookingAnalysis } = require('../utils/bookingAnalysis');
 const {
-  NON_CANCELLED, dateRange, monthKey, clientName, bucketAdd, bucketRows,
+  NON_CANCELLED, dateRange, monthKey, clientName, r2, bucketAdd, bucketRows,
   computeProfitability, computeReceivables, computeSiteWise,
 } = require('../utils/reportMetrics');
 const { reportCardDetail, siteCardDetail, bookingAnalysisCardDetail } = require('../utils/reportCards');
@@ -307,9 +307,12 @@ router.get('/card-detail', requirePermission('reports', 'view'), async (req, res
       rows: orders.slice(0, DETAIL_CAP).map((o) => ({
         id: o.id, orderNo: o.orderNo, client: clientName(o.client), company: o.company?.name,
         bookingDate: o.bookingDate, status: o.status,
-        rent: Math.round(o.rentalSubtotal || 0), printMount: Math.round((o.printingTotal || 0) + (o.mountingCost || 0)),
-        extras: Math.round(o.addOnTotal || 0), discount: Math.round(o.discountAmount || 0),
-        gst: Math.round(o.gstAmount || 0), total: Math.round(o.grandTotal || 0),
+        rent: r2(o.rentalSubtotal), printMount: r2((o.printingTotal || 0) + (o.mountingCost || 0)),
+        printing: r2(o.printingTotal), mounting: r2(o.mountingCost),
+        extras: r2(o.addOnTotal), discount: r2(o.discountAmount), taxable: r2(o.taxableAmount),
+        // What the components don't explain on this campaign (manual edits, rounding).
+        adjustment: r2((o.taxableAmount || 0) - ((o.rentalSubtotal || 0) + (o.printingTotal || 0) + (o.mountingCost || 0) + (o.addOnTotal || 0) - (o.discountAmount || 0))),
+        gst: r2(o.gstAmount), total: r2(o.grandTotal),
       })),
     });
   }
@@ -343,7 +346,7 @@ router.get('/card-detail', requirePermission('reports', 'view'), async (req, res
       rows: payments.slice(0, DETAIL_CAP).map((p) => ({
         id: p.id, receivedAt: p.receivedAt, orderId: p.order?.id, orderNo: p.order?.orderNo,
         client: clientName(p.client), company: p.company?.name, mode: p.mode,
-        amount: p.amount, tds: p.tdsAmount || 0, reference: p.reference,
+        amount: p.amount, tds: p.tdsAmount || 0, net: p.netReceived || 0, reference: p.reference,
       })),
     });
   }

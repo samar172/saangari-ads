@@ -85,6 +85,7 @@ async function computeProfitability({ companyId, from, to }) {
       rent: r2(o.rentalSubtotal), printing: r2(o.printingTotal), mounting: r2(o.mountingCost), extras: r2(o.addOnTotal),
       discount: r2(o.discountAmount), discountPct: o.discountFlat > 0 ? null : o.discountPct || 0, discountRemarks: o.discountRemarks || '',
       taxable: r2(o.taxableAmount), total: r2(o.grandTotal),
+      adjustment: r2((o.taxableAmount || 0) - ((o.rentalSubtotal || 0) + (o.printingTotal || 0) + (o.mountingCost || 0) + (o.addOnTotal || 0) - (o.discountAmount || 0))),
       partner: o.printingPartner?.name || '—', partnerId: o.printingPartner?.id || null,
       material: o.printMaterial || '—', prints: pc.area.prints, sites: pc.area.sites, avgSqft: pc.area.avgSqft, sqft: pc.area.sqft,
       printRate: o.printRate || 0, perSite: !!o.chargesPerSite,

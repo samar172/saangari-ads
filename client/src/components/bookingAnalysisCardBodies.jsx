@@ -48,7 +48,7 @@ const LINES = {
   baAvgBooking: [[COL.month, COL.site, COL.order, COL.customer, COL.category, COL.days, COL.billing], 'billingExGst'],
   baAvgRate: [[COL.site, COL.order, COL.customer, COL.category, COL.days, COL.sm, COL.billing,
     { key: 'rate', label: 'Rate / site-month', money: true }], 'rate'],
-  baAdvance: [[COL.terms, COL.month, COL.site, COL.order, COL.customer, COL.billing, COL.total, COL.status], 'paymentTerms'],
+  baAdvance: [[COL.terms, { key: 'advance', label: 'Advance', num: true, sum: true, render: (r) => (r.advance ? '✓' : '') }, COL.month, COL.site, COL.order, COL.customer, COL.billing, COL.total, COL.status], 'paymentTerms'],
   baTopCategory: [[COL.category, COL.month, COL.site, COL.order, COL.customer, COL.sm, COL.billing], 'billingExGst'],
   baBestMonth: [[COL.month, COL.site, COL.order, COL.customer, COL.category, COL.billing, COL.total], 'month'],
 };
@@ -135,9 +135,9 @@ function BABody({ d, card }) {
       sections.push(<Section key="t" title={`Customers (${d.customerwise.length})`} className={wide}><CustomerTable rows={d.customerwise} /></Section>);
       break;
     case 'baSiteMonths':
-      how(<Bridge money={false} steps={[{ label: `Days on ${fmtNum(k.bookings)} bookings`, value: sp.days },
+      how(<Bridge money={false} steps={[{ label: `Days on ${fmtNum(k.bookings)} bookings`, value: sp.days, col: 'days' },
         { label: 'Each line: days ÷ 30, rounded to 0.01', text: '÷ 30' },
-        { label: 'Site-months', text: fmtNum(k.siteMonths), total: true, final: true }]} />);
+        { label: 'Site-months', text: fmtNum(k.siteMonths), total: true, final: true, col: 'siteMonths' }]} />);
       sections.push(<Section key="m" title="Site-months by month"><Breakdown rows={monthBars('siteMonths')} month money={false} /></Section>);
       sections.push(<Section key="z" title="By media type"><Breakdown rows={d.byMedia.map((g) => ({ ...g, value: g.siteMonths }))} money={false} /></Section>);
       sections.push(<Section key="s" title={`Per site (${d.siteCount})`} className={wide}>
@@ -151,9 +151,9 @@ function BABody({ d, card }) {
     case 'baTotal':
     case 'baGst':
       how(<Bridge steps={[
-        { label: `Site rent on ${fmtNum(k.bookings)} bookings (ex-GST)`, value: k.billingExGst, accent: card === 'baBilling' ? 'bg-brand/5 text-brand font-semibold' : '' },
-        { label: `GST 18% on ${fmtNum(sp.gstLines)} lines of GST campaigns (${'₹' + Number(sp.gstLinesBilling).toLocaleString('en-IN')})`, value: k.gst, op: '+', accent: card === 'baGst' ? 'bg-brand/5 text-brand font-semibold' : '' },
-        { label: 'Total billing', value: k.totalBilling, op: '=', total: true, final: true },
+        { label: `Site rent on ${fmtNum(k.bookings)} bookings (ex-GST)`, value: k.billingExGst, accent: card === 'baBilling' ? 'bg-brand/5 text-brand font-semibold' : '', card: 'baBilling', col: 'billingExGst' },
+        { label: `GST 18% on ${fmtNum(sp.gstLines)} lines of GST campaigns (${'₹' + Number(sp.gstLinesBilling).toLocaleString('en-IN')})`, value: k.gst, op: '+', accent: card === 'baGst' ? 'bg-brand/5 text-brand font-semibold' : '', card: 'baGst', col: 'gst' },
+        { label: 'Total billing', value: k.totalBilling, op: '=', total: true, final: true, card: 'baTotal', col: 'total' },
       ]} />, 'Billing is the site line’s rent only — printing, mounting and extras on the campaign are not in this analysis. Non-GST campaigns carry no GST.');
       if (card === 'baGst') sections.push(<Section key="g" title="GST vs non-GST lines"><Breakdown rows={[{ key: 'g', label: 'GST campaigns', value: sp.gstLinesBilling, count: sp.gstLines }, { key: 'n', label: 'Non-GST campaigns', value: sp.nonGstBilling, count: sp.nonGstLines }]} countLabel="lines" /></Section>);
       sections.push(<Section key="m" title="By month"><Breakdown rows={monthBars(card === 'baBilling' ? 'billingExGst' : card === 'baGst' ? 'gst' : 'total')} month countLabel="bookings" /></Section>);
@@ -162,18 +162,18 @@ function BABody({ d, card }) {
       break;
     case 'baReceived':
       how(<Bridge steps={[
-        { label: 'Total billing', value: k.totalBilling },
-        { label: 'Outstanding', value: k.outstanding, op: '−' },
-        { label: 'Received', value: k.received, op: '=', total: true, final: true, accent: 'text-emerald-700' },
+        { label: 'Total billing', value: k.totalBilling, card: 'baTotal' },
+        { label: 'Outstanding', value: k.outstanding, op: '−', card: 'baOutstanding' },
+        { label: 'Received', value: k.received, op: '=', total: true, final: true, accent: 'text-emerald-700', col: 'received' },
       ]} />, 'Each campaign’s payments are spread over its site lines by each line’s share of the campaign total (capped at the line total), so printing/mounting receipts aren’t credited to rent.');
       sections.push(<Section key="p" title="By payment status"><Breakdown rows={d.paymentStatus.map((p) => ({ key: p.status, label: p.status, value: p.received, count: p.bookings }))} countLabel="bookings" /></Section>);
       sections.push(<Section key="m" title="Received by month"><Breakdown rows={monthBars('received')} month countLabel="bookings" /></Section>);
       break;
     case 'baOutstanding':
       how(<Bridge steps={[
-        { label: 'Total billing', value: k.totalBilling },
-        { label: 'Received (allocated to lines)', value: k.received, op: '−' },
-        { label: 'Outstanding', value: k.outstanding, op: '=', total: true, final: true, accent: 'text-red-600' },
+        { label: 'Total billing', value: k.totalBilling, card: 'baTotal' },
+        { label: 'Received (allocated to lines)', value: k.received, op: '−', card: 'baReceived' },
+        { label: 'Outstanding', value: k.outstanding, op: '=', total: true, final: true, accent: 'text-red-600', col: 'outstanding' },
       ]} />, 'Per line: total − allocated receipts, never below zero.');
       sections.push(<Section key="m" title="Outstanding by month"><Breakdown rows={monthBars('outstanding').filter((m) => m.value)} month countLabel="bookings" /></Section>);
       sections.push(<Section key="c" title="Outstanding by category"><Breakdown rows={catBars('outstanding').filter((m) => m.value)} countLabel="bookings" /></Section>);
@@ -181,8 +181,8 @@ function BABody({ d, card }) {
       break;
     case 'baCollection':
       how(<Bridge steps={[
-        { label: 'Received', value: k.received },
-        { label: 'Total billing', text: <>÷ <Money value={k.totalBilling} /></> },
+        { label: 'Received', value: k.received, card: 'baReceived' },
+        { label: 'Total billing', text: <>÷ <Money value={k.totalBilling} /></>, card: 'baTotal' },
         { label: 'Collection %', text: fmtPct(k.collectionPct), total: true, final: true },
       ]} />);
       sections.push(<Section key="p" title="By payment status"><Breakdown rows={d.paymentStatus.map((p) => ({ key: p.status, label: p.status, value: p.totalBilling, count: p.bookings }))} countLabel="bookings" /></Section>);
@@ -191,8 +191,8 @@ function BABody({ d, card }) {
       break;
     case 'baAvgBooking':
       how(<Bridge steps={[
-        { label: 'Billing ex-GST', value: k.billingExGst },
-        { label: 'Bookings', text: `÷ ${fmtNum(k.bookings)}` },
+        { label: 'Billing ex-GST', value: k.billingExGst, card: 'baBilling' },
+        { label: 'Bookings', text: `÷ ${fmtNum(k.bookings)}`, card: 'baBookings' },
         { label: 'Average billing per booking', value: k.avgBillingPerBooking, op: '=', total: true, final: true },
       ]} />);
       sections.push(<Section key="c" title="Average by category"><Breakdown rows={d.categorywise.map((c) => ({ key: c.category, label: c.category, value: c.avgBillingPerBooking, count: c.bookings }))} countLabel="bookings" /></Section>);
@@ -200,8 +200,8 @@ function BABody({ d, card }) {
       break;
     case 'baAvgRate':
       how(<Bridge steps={[
-        { label: 'Billing ex-GST', value: k.billingExGst },
-        { label: 'Site-months', text: `÷ ${fmtNum(k.siteMonths)}` },
+        { label: 'Billing ex-GST', value: k.billingExGst, card: 'baBilling' },
+        { label: 'Site-months', text: `÷ ${fmtNum(k.siteMonths)}`, card: 'baSiteMonths' },
         { label: 'Average rate per site-month', value: k.avgRatePerSiteMonth, op: '=', total: true, final: true },
       ]} />, 'A site-month is one site for 30 days.');
       sections.push(<Section key="c" title="Rate by category"><Breakdown rows={d.categorywise.map((c) => ({ key: c.category, label: c.category, value: c.avgRatePerSiteMonth, count: c.bookings }))} countLabel="bookings" /></Section>);
@@ -210,8 +210,8 @@ function BABody({ d, card }) {
       break;
     case 'baAdvance':
       how(<Bridge money={false} steps={[
-        { label: 'Bookings on Advance-terms campaigns', value: sp.advance },
-        { label: 'All bookings', text: `÷ ${fmtNum(k.bookings)}` },
+        { label: 'Bookings on Advance-terms campaigns', value: sp.advance, col: 'advance' },
+        { label: 'All bookings', text: `÷ ${fmtNum(k.bookings)}`, card: 'baBookings' },
         { label: 'Advance bookings %', text: fmtPct(k.advancePct), total: true, final: true },
       ]} />, 'Terms come from the campaign (Advance or Postpaid); every site line on it counts.');
       sections.push(<Section key="t" title="Advance vs Postpaid" className="xl:col-span-2">

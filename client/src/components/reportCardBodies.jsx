@@ -27,38 +27,33 @@ const COMPONENT_LABEL = { bookedExGst: 'Taxable (ex-GST)', rental: 'Site rent', 
 function ComponentBody({ d, card }) {
   const b = d.bridge;
   const hl = (k) => (k === card ? HL : '');
+  // A line opens its own card; on the card it describes it focuses the table.
   const steps = [
-    { label: 'Site rent', value: b.rent, accent: hl('rental') },
-    { label: 'Printing', value: b.printing, op: '+', accent: hl('printing') },
-    { label: 'Mounting', value: b.mounting, op: '+', accent: hl('mounting') },
-    { label: 'Extras (add-ons)', value: b.extras, op: '+' },
-    { label: 'Discount', value: b.discount, op: '−' },
-    b.adjustment ? { label: 'Other adjustments', value: b.adjustment, op: '±' } : null,
-    { label: 'Taxable (ex-GST)', value: b.taxable, op: '=', total: true, accent: hl('bookedExGst') },
-    { label: 'GST', value: b.gst, op: '+' },
-    { label: 'Booked value (incl. GST)', value: b.total, op: '=', total: true, final: true },
+    { label: 'Site rent', value: b.rent, accent: hl('rental'), card: 'rental', col: 'rent' },
+    { label: 'Printing', value: b.printing, op: '+', accent: hl('printing'), card: 'printing', col: 'printing' },
+    { label: 'Mounting', value: b.mounting, op: '+', accent: hl('mounting'), card: 'mounting', col: 'mounting' },
+    { label: 'Extras (add-ons)', value: b.extras, op: '+', col: 'extras' },
+    { label: 'Discount', value: b.discount, op: '−', card: 'discounts', col: 'discount' },
+    b.adjustment ? { label: 'Other adjustments', value: b.adjustment, op: '±', col: 'adjustment' } : null,
+    { label: 'Taxable (ex-GST)', value: b.taxable, op: '=', total: true, accent: hl('bookedExGst'), card: 'bookedExGst', col: 'taxable' },
+    { label: 'GST', value: b.gst, op: '+', card: 'gst', col: 'gst' },
+    { label: 'Booked value (incl. GST)', value: b.total, op: '=', total: true, final: true, card: 'booked', col: 'total' },
   ];
-  const cols = {
-    bookedExGst: [
-      { key: 'rent', label: 'Rent', money: true, sum: true }, { key: 'printing', label: 'Printing', money: true, sum: true },
-      { key: 'mounting', label: 'Mounting', money: true, sum: true }, { key: 'extras', label: 'Extras', money: true, sum: true },
-      { key: 'discount', label: 'Discount', money: true, sum: true }, { key: 'value', label: 'Taxable', money: true, sum: true },
-      { key: 'gst', label: 'GST', money: true, sum: true }, { key: 'total', label: 'Total', money: true, sum: true },
-    ],
-    rental: [
-      { key: 'sites', label: 'Sites', num: true, sum: true }, { key: 'value', label: 'Site rent', money: true, sum: true },
-      { key: 'taxable', label: 'Taxable', money: true }, { key: 'total', label: 'Total incl. GST', money: true },
-    ],
-    printing: [
-      { key: 'partner', label: 'Partner' }, { key: 'material', label: 'Material' }, { key: 'basis', label: 'Charged' },
-      { key: 'prints', label: 'Prints', num: true, sum: true }, { key: 'printRate', label: 'Rate', money: true },
-      { key: 'value', label: 'Printing', money: true, sum: true },
-    ],
-    mounting: [
-      { key: 'sites', label: 'Sites', num: true }, { key: 'basis', label: 'Charged' }, { key: 'prints', label: 'Prints', num: true },
-      { key: 'value', label: 'Mounting', money: true, sum: true }, { key: 'total', label: 'Campaign total', money: true },
-    ],
+  const own = { bookedExGst: 'taxable', rental: 'rent', printing: 'printing', mounting: 'mounting' }[card];
+  const extra = {
+    bookedExGst: [],
+    rental: [{ key: 'sites', label: 'Sites', num: true, sum: true }],
+    printing: [{ key: 'partner', label: 'Partner' }, { key: 'material', label: 'Material' }, { key: 'basis', label: 'Charged' },
+      { key: 'prints', label: 'Prints', num: true, sum: true }, { key: 'printRate', label: 'Rate', money: true }],
+    mounting: [{ key: 'sites', label: 'Sites', num: true }, { key: 'basis', label: 'Charged' }, { key: 'prints', label: 'Prints', num: true }],
   }[card];
+  const m = (key, label) => ({ key, label, money: true, sum: true });
+  const cols = [
+    ...extra,
+    m('rent', 'Rent'), m('printing', 'Printing'), m('mounting', 'Mounting'), m('extras', 'Extras'), m('discount', 'Discount'),
+    ...(b.adjustment ? [m('adjustment', 'Adj.')] : []),
+    m('taxable', 'Taxable'), m('gst', 'GST'), m('total', 'Total'),
+  ];
   return (
     <div className={DETAIL_GRID}>
       <Section title="How the number is built" note={`${d.count} campaigns booked in the period (quotations and cancelled excluded). The highlighted line is this tile.`}>
@@ -73,10 +68,10 @@ function ComponentBody({ d, card }) {
       {card === 'printing' && <Section title="By printing partner"><Breakdown rows={d.byPartner} countLabel="campaigns" /></Section>}
       {card === 'printing' && <Section title="By material"><Breakdown rows={d.byMaterial} countLabel="campaigns" /></Section>}
       <Section title="Top clients"><Breakdown rows={d.topClients} countLabel="campaigns" /></Section>
-      <Section title={`Campaigns${card === 'bookedExGst' ? '' : ` with ${COMPONENT_LABEL[card].toLowerCase()}`} (${d.rowCount})`}
-        note={card !== 'bookedExGst' && d.count > d.rowCount ? `${d.count - d.rowCount} campaigns have no ${COMPONENT_LABEL[card].toLowerCase()} and are left out.` : null}
+      <Section title={`Campaigns (${d.rowCount})`}
+        note={card !== 'bookedExGst' ? `${d.withValue} carry ${COMPONENT_LABEL[card].toLowerCase()}; the rest are listed so every line above can be traced. Click a line to filter.` : 'Click a line above to filter the table to it.'}
         className="md:col-span-2 xl:col-span-3">
-        <DataTable rows={d.rows} total={d.rowCount} defaultSort={{ key: 'value', dir: 'desc' }}
+        <DataTable rows={d.rows} total={d.rowCount} defaultSort={{ key: own, dir: 'desc' }}
           columns={[C.order, C.client, C.booked, C.status, ...cols]} />
       </Section>
     </div>
@@ -105,11 +100,14 @@ function ProfitBody({ d, card }) {
       <>
         <Section title="How the number is built" note={`${s.orders} confirmed / live / completed campaigns booked in the period.`}>
           <Bridge steps={[
-            { label: 'Site rent', value: b.rent }, { label: 'Printing', value: b.printing, op: '+' }, { label: 'Mounting', value: b.mounting, op: '+' },
-            { label: 'Extras (add-ons)', value: b.extras, op: '+' }, { label: 'Discount', value: b.discount, op: '−' },
-            b.adjustment ? { label: 'Other adjustments', value: b.adjustment, op: '±' } : null,
-            { label: 'Revenue (ex-GST)', value: s.revenueExGst, op: '=', total: true, final: true },
-            { label: 'Printing cost (paid to partners)', value: s.printingCost, op: '−' },
+            { label: 'Site rent', value: b.rent, card: 'rental', col: 'rent' },
+            { label: 'Printing', value: b.printing, op: '+', card: 'printCharged', col: 'printing' },
+            { label: 'Mounting', value: b.mounting, op: '+', card: 'mounting', col: 'mounting' },
+            { label: 'Extras (add-ons)', value: b.extras, op: '+', col: 'extras' },
+            { label: 'Discount', value: b.discount, op: '−', card: 'discounts', col: 'discount' },
+            b.adjustment ? { label: 'Other adjustments', value: b.adjustment, op: '±', col: 'adjustment' } : null,
+            { label: 'Revenue (ex-GST)', value: s.revenueExGst, op: '=', total: true, final: true, col: 'taxable' },
+            { label: 'Printing cost (paid to partners)', value: s.printingCost, op: '−', card: 'printCost', col: 'printCost' },
             { label: 'Contribution', value: s.contribution, op: '=', total: true, accent: 'text-emerald-700' },
           ]} />
           <Note tone="slate">The same campaigns as Booked Value's “Excluding GST”, rounded to the rupee. Rental &amp; mounting vendor costs aren't tracked, so contribution is an upper bound, not net profit.</Note>
@@ -160,9 +158,9 @@ function ProfitBody({ d, card }) {
       <>
         <Section title="How the number is built">
           <Bridge steps={[
-            { label: 'Printing charged to clients', value: s.printingCharged },
-            { label: 'Printing cost (paid to partners)', value: s.printingCost, op: '−' },
-            { label: 'Printing margin', value: s.printingMargin, op: '=', total: true, final: true, accent: s.printingMargin >= 0 ? 'text-emerald-700' : 'text-red-600' },
+            { label: 'Printing charged to clients', value: s.printingCharged, card: 'printCharged', col: 'printing' },
+            { label: 'Printing cost (paid to partners)', value: s.printingCost, op: '−', card: 'printCost', col: 'printCost' },
+            { label: 'Printing margin', value: s.printingMargin, op: '=', total: true, final: true, accent: s.printingMargin >= 0 ? 'text-emerald-700' : 'text-red-600', col: 'margin' },
           ]} />
           <div className="mt-2 text-xs text-slate-500">Margin % on charged: {s.printingCharged ? Math.round((s.printingMargin / s.printingCharged) * 100) : 0}%.</div>
           {reconNote}
@@ -191,6 +189,7 @@ function ProfitBody({ d, card }) {
     profitRevenue: [C.client, { key: 'category', label: 'Category' }, C.booked, { key: 'rent', label: 'Rent', money: true, sum: true },
       { key: 'printing', label: 'Printing', money: true, sum: true }, { key: 'mounting', label: 'Mounting', money: true, sum: true },
       { key: 'extras', label: 'Extras', money: true, sum: true }, { key: 'discount', label: 'Discount', money: true, sum: true },
+      ...(b.adjustment ? [{ key: 'adjustment', label: 'Adj.', money: true, sum: true }] : []),
       { key: 'taxable', label: 'Revenue', money: true, sum: true }, { key: 'printCost', label: 'Print cost', money: true, sum: true }],
     printCharged: [C.client, C.booked, ...printCols, { key: 'printRate', label: 'Rate', money: true },
       { key: 'printing', label: 'Charged', money: true, sum: true }, { key: 'printCost', label: 'Cost', money: true, sum: true }, { key: 'margin', label: 'Margin', money: true, sum: true }],
@@ -231,9 +230,9 @@ function ReceivablesBody({ d }) {
       </Figures>
       <Section title="How the number is built">
         <Bridge steps={[
-          { label: 'Invoiced (live invoices)', value: d.totals.invoiced },
-          { label: 'Payments received', value: d.totals.paid, op: '−' },
-          { label: d.bucket ? `Outstanding in ${d.bucketLabel}` : 'Outstanding', value: d.totals.outstanding, op: '=', total: true, final: true, accent: 'text-red-600' },
+          { label: 'Invoiced (live invoices)', value: d.totals.invoiced, col: 'invoiced' },
+          { label: 'Payments received', value: d.totals.paid, op: '−', col: 'paid' },
+          { label: d.bucket ? `Outstanding in ${d.bucketLabel}` : 'Outstanding', value: d.totals.outstanding, op: '=', total: true, final: true, accent: 'text-red-600', col: 'outstanding' },
         ]} />
         <Note tone="slate">
           Per campaign: invoiced (cancelled bills excluded) − all payments, rounded; only campaigns owing more than ₹0. Each is aged by its
@@ -275,12 +274,14 @@ function ReceivablesBody({ d }) {
 function GstBody({ d, card }) {
   const s = d.split, inv = d.invoiced;
   const steps = card === 'gst'
-    ? [{ label: 'CGST', value: s.cgst }, { label: 'SGST', value: s.sgst, op: '+' }, { label: 'IGST', value: s.igst, op: '+' },
-      s.mismatch ? { label: 'Not split (GST amount vs components)', value: s.mismatch, op: '±' } : null,
-      { label: 'GST collected', value: s.gstAmount, op: '=', total: true, final: true }]
+    ? [{ label: 'CGST', value: s.cgst, col: 'cgst' }, { label: 'SGST', value: s.sgst, op: '+', col: 'sgst' },
+      { label: 'IGST', value: s.igst, op: '+', card: 'igst', col: 'igst' },
+      s.mismatch ? { label: 'Not split (GST amount vs components)', value: s.mismatch, op: '±', col: 'unsplit' } : null,
+      { label: 'GST collected', value: s.gstAmount, op: '=', total: true, final: true, col: 'gst' }]
     : card === 'cgstSgst'
-      ? [{ label: 'CGST', value: s.cgst }, { label: 'SGST', value: s.sgst, op: '+' }, { label: 'CGST + SGST (intra-state)', value: d.headline, op: '=', total: true, final: true }]
-      : [{ label: 'IGST on inter-state campaigns', value: s.igst, total: true, final: true }];
+      ? [{ label: 'CGST', value: s.cgst, col: 'cgst' }, { label: 'SGST', value: s.sgst, op: '+', col: 'sgst' },
+        { label: 'CGST + SGST (intra-state)', value: d.headline, op: '=', total: true, final: true, col: 'cgstSgst' }]
+      : [{ label: 'IGST on inter-state campaigns', value: s.igst, total: true, final: true, col: 'igst' }];
   const tax = card === 'gst' ? 'gst' : card === 'igst' ? 'igst' : 'cgstSgst';
   return (
     <div className={DETAIL_GRID}>
@@ -308,7 +309,10 @@ function GstBody({ d, card }) {
           C.order, C.client, { key: 'gstin', label: 'GSTIN' }, C.booked, { key: 'place', label: 'Place of supply' }, { key: 'supply', label: 'Supply' },
           { key: 'taxable', label: 'Taxable', money: true, sum: true },
           { key: 'cgst', label: 'CGST', money: true, sum: true }, { key: 'sgst', label: 'SGST', money: true, sum: true },
-          { key: 'igst', label: 'IGST', money: true, sum: true }, { key: 'gst', label: 'GST', money: true, sum: true },
+          ...(card === 'cgstSgst' ? [{ key: 'cgstSgst', label: 'CGST + SGST', money: true, sum: true }] : []),
+          { key: 'igst', label: 'IGST', money: true, sum: true },
+          ...(s.mismatch ? [{ key: 'unsplit', label: 'Not split', money: true, sum: true }] : []),
+          { key: 'gst', label: 'GST', money: true, sum: true },
           { key: 'total', label: 'Total', money: true, sum: true },
         ]} />
       </Section>
@@ -329,8 +333,8 @@ function TdsBody({ d }) {
       </Figures>
       <Section title="How the number is built" note="Payments received in the period (by receipt date). The campaign is credited the gross; the client keeps the TDS and remits it to the government.">
         <Bridge steps={[
-          { label: 'Gross credited to campaigns', value: t.amount },
-          { label: 'TDS deducted by clients', value: t.tds, op: '−', accent: HL },
+          { label: 'Gross credited to campaigns', value: t.amount, card: 'collected' },
+          { label: 'TDS deducted by clients', value: t.tds, op: '−', accent: HL, col: 'tds' },
           { label: 'Net received in bank', value: t.net, op: '=', total: true, final: true },
         ]} />
         {Math.round(t.amount - t.tds - t.net) !== 0 && <Note>Gross − TDS differs from net received by <Money value={Math.round(t.amount - t.tds - t.net)} /> (net entered by hand on some payments).</Note>}
