@@ -44,7 +44,15 @@ function sanitizeSettings(raw) {
     phone: str(q.phone, 120),
     paymentTerms: ['ADVANCE', 'POSTPAID'].includes(q.paymentTerms) ? q.paymentTerms : null,
   };
-  return { mediaRates, charges, booking, quotation };
+  const v = r.invoice || {};
+  const invoice = {
+    prefix: str(v.prefix, 12).replace(/[^A-Za-z0-9/-]/g, ''),         // blank = GST / NGST by tax category
+    includeFY: v.includeFY === undefined ? true : !!v.includeFY,      // GST/2026-27/0046 vs GST/0046
+    digits: Math.min(8, Math.max(1, Math.round(Number(v.digits)) || 4)),
+    startNo: Math.max(0, Math.round(Number(v.startNo)) || 0),         // next bill number; 0 = keep counting as now
+    startDate: /^\d{4}-\d{2}-\d{2}$/.test(str(v.startDate, 10)) ? str(v.startDate, 10) : '', // series applies from this date
+  };
+  return { mediaRates, charges, booking, quotation, invoice };
 }
 
 module.exports = { sanitizeSettings };

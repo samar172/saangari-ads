@@ -201,7 +201,7 @@ export default function CompanyForm() {
 
           <div>
             <div className="text-sm font-semibold text-slate-800 mb-2">Rates &amp; defaults</div>
-            <RatesSetup value={form.settings} onChange={(v) => set('settings', v)} gstLocked={form.gstMandatory || form.gstHidden} />
+            <RatesSetup value={form.settings} onChange={(v) => set('settings', v)} gstLocked={form.gstMandatory || form.gstHidden} companyId={id} gstHidden={form.gstHidden} />
           </div>
 
           <div>

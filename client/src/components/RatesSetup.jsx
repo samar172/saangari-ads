@@ -13,6 +13,7 @@ export const EMPTY_SETTINGS = {
   charges: [],
   booking: { chargeMode: 'SITE', mountings: 1, printingPartnerId: null, printMaterial: null, paymentTerms: 'ADVANCE', billingCycle: '', monitoring: true, taxCategory: null },
   quotation: { validityDays: 0, signatory: '', signatoryTitle: '', phone: '', paymentTerms: null },
+  invoice: { prefix: '', includeFY: true, digits: 4, startNo: '', startDate: '' },
 };
 
 export function withSettingDefaults(s) {
@@ -22,13 +23,14 @@ export function withSettingDefaults(s) {
     charges: Array.isArray(x.charges) ? x.charges : [],
     booking: { ...EMPTY_SETTINGS.booking, ...(x.booking || {}), ...(x.booking?.chargeMode === 'TYPE' ? { chargeMode: 'SITE' } : {}) },
     quotation: { ...EMPTY_SETTINGS.quotation, ...(x.quotation || {}) },
+    invoice: { ...EMPTY_SETTINGS.invoice, ...(x.invoice || {}), startNo: x.invoice?.startNo || '' },
   };
 }
 
 const BASIS = [['ONCE', 'One-time'], ['SITE', 'Per site'], ['MONTH', 'Per month']];
 const box = 'card p-4 bg-slate-50 border-slate-200';
 
-export default function RatesSetup({ value, onChange, gstLocked }) {
+export default function RatesSetup({ value, onChange, gstLocked, companyId, gstHidden }) {
   const s = withSettingDefaults(value);
   const [types, setTypes] = useState([]);
   const [partners, setPartners] = useState([]);
@@ -42,6 +44,21 @@ export default function RatesSetup({ value, onChange, gstLocked }) {
   const setCharge = (i, k, v) => put('charges', s.charges.map((c, j) => (j === i ? { ...c, [k]: v } : c)));
   const setB = (k, v) => put('booking', { ...s.booking, [k]: v });
   const setQ = (k, v) => put('quotation', { ...s.quotation, [k]: v });
+  const [series, setSeries] = useState(null); // { last, next } from the server
+  useEffect(() => {
+    if (!companyId) return;
+    api.get(`/companies/${companyId}/invoice-series`).then((r) => setSeries(r.data)).catch(() => {});
+  }, [companyId]);
+  const setI = (k, v) => put('invoice', { ...s.invoice, [k]: v });
+  const iv = s.invoice;
+  const sample = (() => {
+    const n = Number(iv.startNo) || 1;
+    const now = iv.startDate ? new Date(`${iv.startDate}T12:00:00`) : new Date();
+    const y = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    const fy = `${y}-${String(y + 1).slice(2)}`;
+    const prefix = iv.prefix || (gstHidden ? 'NGST' : 'GST');
+    return [prefix, iv.includeFY === false ? null : fy, String(n).padStart(Number(iv.digits) || 4, '0')].filter(Boolean).join('/');
+  })();
   const partner = partners.find((p) => String(p.id) === String(s.booking.printingPartnerId));
 
   return (
@@ -147,7 +164,35 @@ export default function RatesSetup({ value, onChange, gstLocked }) {
         </div>
       </div>
 
-      {/* 4. Quotation defaults */}
+      {/* 4. Invoice numbering */}
+      <div className={box}>
+        <div className="font-semibold text-slate-800 text-sm mb-1">Invoice numbering</div>
+        <div className="text-xs text-slate-500 mb-3">
+          Already billing this month? Set the bill number to continue from, and the date it starts. Leave blank to keep the automatic series.
+          {series && <span className="block mt-1 text-slate-600">Last bill in the system: <b>{series.last?.invoiceNo || 'none yet'}</b> · next bill will be <b>{series.next}</b></span>}
+        </div>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <label className="block"><span className="label">Series prefix</span>
+            <input className="input" placeholder={gstHidden ? 'NGST' : 'GST'} maxLength={12} value={iv.prefix} onChange={(e) => setI('prefix', e.target.value)} />
+          </label>
+          <label className="block"><span className="label">Next bill number</span>
+            <input type="number" min="1" className="input" placeholder="e.g. 46" value={iv.startNo} onChange={(e) => setI('startNo', e.target.value)} />
+          </label>
+          <label className="block"><span className="label">Series starts on</span>
+            <input type="date" className="input" value={iv.startDate} onChange={(e) => setI('startDate', e.target.value)} />
+          </label>
+          <label className="block"><span className="label">Number length (digits)</span>
+            <input type="number" min="1" max="8" className="input" value={iv.digits} onChange={(e) => setI('digits', e.target.value)} />
+          </label>
+          <label className="flex items-center gap-2 sm:col-span-2">
+            <input type="checkbox" checked={iv.includeFY !== false} onChange={(e) => setI('includeFY', e.target.checked)} />
+            <span className="text-sm text-slate-700">Include the financial year in the number (e.g. 2026-27)</span>
+          </label>
+        </div>
+        <div className="text-xs text-slate-500 mt-3">Preview: <span className="font-mono font-semibold text-slate-800">{sample}</span> {iv.startNo ? '' : '(counting on automatically)'} — the number restarts at 1 each financial year.</div>
+      </div>
+
+      {/* 5. Quotation defaults */}
       <div className={box}>
         <div className="font-semibold text-slate-800 text-sm mb-1">Quotation letter defaults</div>
         <div className="text-xs text-slate-500 mb-3">Used on the Word / PDF quotation letter. Blank = the standard letter (Anant Pareek, Business Head). Standing terms are in "Terms &amp; Conditions" below.</div>

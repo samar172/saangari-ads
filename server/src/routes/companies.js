@@ -17,6 +17,17 @@ router.get('/', async (req, res) => {
 });
 
 const { sanitizeSettings } = require('../utils/companySettings');
+const { peekInvoiceNo, applyInvoiceStart } = require('../utils/counters');
+
+// Last bill issued by this business and the number the next one will get.
+router.get('/:id/invoice-series', requirePermission('settings', 'view'), async (req, res) => {
+  const id = Number(req.params.id);
+  const c = await prisma.company.findUnique({ where: { id }, select: { gstHidden: true, gstMandatory: true } });
+  if (!c) return res.status(404).json({ error: 'Business not found' });
+  const last = await prisma.invoice.findFirst({ where: { companyId: id }, orderBy: { id: 'desc' }, select: { invoiceNo: true, issuedAt: true } });
+  const cat = c.gstHidden ? 'NON_GST' : 'GST';
+  res.json({ last: last ? { invoiceNo: last.invoiceNo, issuedAt: last.issuedAt } : null, next: await peekInvoiceNo(id, cat) });
+});
 
 function cleanCompanyData(body) {
   const data = {};
@@ -67,6 +78,11 @@ router.post('/', requirePermission('settings', 'add'), async (req, res) => {
 // Update company
 router.patch('/:id', requirePermission('settings', 'edit'), async (req, res) => {
   const data = cleanCompanyData(req.body);
+  if (data.settings) {
+    const before = await prisma.company.findUnique({ where: { id: Number(req.params.id) }, select: { settings: true } });
+    const msg = await applyInvoiceStart(Number(req.params.id), before?.settings, data.settings);
+    if (msg) return res.status(409).json({ error: msg });
+  }
   const company = await prisma.company.update({
     where: { id: Number(req.params.id) },
     data,

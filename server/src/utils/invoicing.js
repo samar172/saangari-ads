@@ -116,7 +116,7 @@ async function createInvoiceForOrder({ orderId, force = false, dueDate, user, pe
   // Bank printed on the bill (GST bills): the one picked, else the default.
   const accounts = bankAccountsOf(order.company);
   const bank = (bankAccountId && accounts.find((a) => String(a.id) === String(bankAccountId))) || await defaultBankFor(order);
-  const invoiceNo = await nextInvoiceNo(taxCategory);
+  const invoiceNo = await nextInvoiceNo(taxCategory, order.companyId);
 
   const invoice = await prisma.invoice.create({
     data: {
@@ -235,7 +235,7 @@ async function createReprintInvoice({ reprintId, user, dueDate }) {
   if (!taxable) { const e = new Error(`${rp.reprintNo} has no charge to bill.`); e.status = 400; throw e; }
   const split = gstSplit(order.taxCategory, order.interState, taxable);
   const bank = await defaultBankFor(order);
-  const invoiceNo = await nextInvoiceNo(order.taxCategory);
+  const invoiceNo = await nextInvoiceNo(order.taxCategory, order.companyId);
   const invoice = await prisma.invoice.create({
     data: {
       invoiceNo, orderId: order.id, clientId: order.clientId, companyId: order.companyId, taxCategory: order.taxCategory,
