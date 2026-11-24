@@ -26,8 +26,8 @@ function computeLine({ monthlyRate, startDate, endDate, dayRateOverride, monthly
   const remainingDays = takeDown.diff(start.add(months, 'month'), 'day');
   const days = Math.max(1, (months * 30) + remainingDays);
 
-  const hasDayOverride = dayRateOverride != null && dayRateOverride !== '';
-  const effMonthly = monthlyRateOverride != null && monthlyRateOverride !== ''
+  const hasDayOverride = dayRateOverride != null && dayRateOverride !== '' && Number(dayRateOverride) > 0;
+  const effMonthly = monthlyRateOverride != null && monthlyRateOverride !== '' && Number(monthlyRateOverride) > 0
     ? Number(monthlyRateOverride) : Number(monthlyRate);
   // Effective day rate: an explicit per-line override wins; otherwise a loose
   // (per-day) line uses the site's own dayRate when set, falling back to

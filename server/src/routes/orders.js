@@ -243,6 +243,10 @@ async function priceFromBody(body) {
   const pricedItems = items.map((i) => {
     const site = byId[Number(i.siteId)];
     if (!site) throw new Error(`Site ${i.siteId} not found`);
+    // Refuse a ₹0 line: a site with no rate silently priced the booking at nothing.
+    const hasRate = Number(i.monthlyRateOverride) > 0 || Number(i.dayRateOverride) > 0
+      || Number(site.monthlyRate) > 0 || (billPerDay && Number(site.dayRate) > 0);
+    if (!hasRate) throw new Error(`${site.code} has no rate set — set its rate in Inventory, or enter a rate on the line.`);
     return {
       siteId: site.id, monthlyRate: site.monthlyRate, dayRate: site.dayRate, billPerDay, startDate: i.startDate, endDate: i.endDate,
       dayRateOverride: i.dayRateOverride, monthlyRateOverride: i.monthlyRateOverride,
@@ -481,7 +485,7 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
   const body = req.body || {};
   const {
     clientId = existing.clientId, categoryId, companyId = existing.companyId,
-    items = [], type = existing.type, bookingDate, description,
+    items = [], type = existing.items?.[0]?.type || 'REGULAR', bookingDate, description,
     printingPartnerId, printMaterial, noOfPrints = 0, printRate = 0, printCost = 0, mountingCost = 0,
     monitoring = false, monitorStart = false, monitorMid = false, monitorEnd = false,
     taxCategory: rawTaxCategory = 'NON_GST', interState = false, placeOfSupply,
@@ -562,7 +566,13 @@ router.put('/:id', requireRole('SUPER_ADMIN'), async (req, res) => {
         const conflict = await findConflict(tx, Number(it.siteId), it.startDate, it.endDate, { excludeOrderId: id });
         if (conflict && type === 'REGULAR')
           throw new BookingConflict(`${priced.sites[Number(it.siteId)]?.code || 'Site'} is already booked for these dates by ${conflict.order.client.name}. Use a Loose booking to waitlist.`);
-        lineStatus.push(conflict && type === 'LOOSE' ? 'WAITLIST' : baseLineStatus);
+        // A loose line that is already a real booking (e.g. a waitlist that was
+        // overridden) and whose site and dates are unchanged keeps its place — an
+        // edit must not push it back onto the waitlist.
+        const prev = existing.items.find((b) => b.id === Number(it.id));
+        const sameSpot = prev && prev.status !== 'WAITLIST' && prev.siteId === Number(it.siteId)
+          && dayjs(prev.startDate).isSame(dayjs(it.startDate), 'day') && dayjs(prev.endDate).isSame(dayjs(it.endDate), 'day');
+        lineStatus.push(conflict && type === 'LOOSE' && !sameSpot ? 'WAITLIST' : baseLineStatus);
       }
 
       // Diff lines by existing booking id. Anything the payload no longer keeps
@@ -1002,12 +1012,15 @@ router.post('/:id/items/:lineId/stop', requirePermission('campaigns', 'edit'), a
   const today = dayjs().startOf('day');
   const start = dayjs(line.startDate).startOf('day');
   const endDate = today.isBefore(start) ? start : today;
-  const priced = computeLine({
-    monthlyRate: line.site.monthlyRate,
-    startDate: line.startDate,
-    endDate: endDate.toDate(),
-    dayRateOverride: line.dayRate,
-  });
+  // Bill what actually ran at the line's own basis: loose lines at their day
+  // rate; regular lines at their own monthly rent (÷30 per day), never the
+  // site's separate loose day rate.
+  const priced = line.type === 'LOOSE'
+    ? computeLine({ monthlyRate: line.site.monthlyRate, startDate: line.startDate, endDate: endDate.toDate(), dayRateOverride: line.dayRate, billPerDay: true })
+    : computeLine({
+        monthlyRate: line.days ? (line.subtotal * 30) / line.days : line.site.monthlyRate,
+        startDate: line.startDate, endDate: endDate.toDate(), billPerDay: false,
+      });
 
   await prisma.$transaction(async (tx) => {
     await tx.booking.update({
